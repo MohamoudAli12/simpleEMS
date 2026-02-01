@@ -1,5 +1,6 @@
 import sys
 import subprocess
+from pathlib import Path
 from collections import namedtuple
 from dataclasses import fields
 from openEMS.openEMS import openEMS
@@ -25,7 +26,34 @@ plt.rcParams["figure.constrained_layout.use"] = True
 
 class DumpType(Enum):
     """
-    Field (and other) dump types.
+    Represents field and other dump types provided by openEMS.
+
+    Attributes
+    ----------
+    efield_time: tuple[int, str]
+        Electric field time-domain dump
+    hfield_time: tuple[int, str]
+        Magnetic field time-domain dump
+    current_time: tuple[int, str]
+        Electric current time-domain dump
+    current_density_time: tuple[int, str]
+        Total current density (rot(H)) time-domain dump
+    efield_frequency: tuple[int, str]
+        Electric field frequency-domain dump
+    hfield_frequency: tuple[int, str]
+        Magnetic field frequency-domain dump
+    current_frequency: tuple[int, str]
+        Electric current frequency-domain dump
+    current_density_frequency: tuple[int, str]
+        Total current density (rot(H)) frequency-domain dump
+    local_sar_frequency: tuple[int, str]
+        Local SAR frequency-domain dump
+    average_sar_frequency_1g: tuple[int, str]
+        1g averaging SAR frequency-domain dump
+    average_sar_frequency_10g: tuple[int, str]
+        10g averaging SAR frequency-domain dump
+    raw_data: tuple[int, str]
+        raw data needed for SAR calculations (electric field FD, cell volume, conductivity and density)
     """
 
     efield_time = (0, "Et")
@@ -42,16 +70,81 @@ class DumpType(Enum):
     raw_data = (29, "raw")
 
 
+def setup_simulation(
+    params,
+    boundary_cond: list[str] = ["MUR", "MUR", "MUR", "MUR", "MUR", "MUR"],
+):
+    """
+    Sets up the openEMS simulation.
+
+    Parameters
+    ----------
+
+    params: object
+        parameter object that holds all simulation parameters.
+    boundary_cond: list[str]
+        boundary condition for the simulation.
+
+    Returns
+    -------
+    CSX:object
+        CSXCAD geometry object.
+    FDTD: object
+        openEMS FDTD object.
+    """
+    CSX = ContinuousStructure()
+    FDTD = openEMS(NrTS=params.timestep, EndCriteria=params.end_criteria)
+    FDTD.SetGaussExcite(params.resonant_freq, params.corner_freq)
+    FDTD.SetBoundaryCond(boundary_cond)
+    FDTD.SetCSX(CSX)
+    return CSX, FDTD
+
+
 class SimUtils:
+    """
+    A collection of common utility functions for simulations.
+    This class is not intended to be instantiated. It provides a
+    namespace for common simulation utilities and function.
+
+    All structure classes i.e. InsetFedPatchAntenna inherit this class.
+
+    """
+
     @staticmethod
-    def show_structure(CSX, output_path):
+    def write_and_show_structure(CSX, output_path: Path) -> None:
+        """
+        This method shows the CSXCAD structure.
+
+        Parameters
+        ----------
+        CSX:object
+            CSXCAD geometry object.
+        output_path: Path
+            The output path where simulation results is stored.
+        """
+        if not output_path.exists():
+            raise ValueError(
+                "output path does not exist. Make sure to provide valid output path."
+            )
         structure_3d = output_path / "structure.xml"
         CSX.Write2XML(structure_3d)
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)
 
     @staticmethod
-    def export_stl(output_path):
+    def export_stl(output_path: Path) -> None:
+        """
+        This method exports the CSXCAD structure to STL objects.
+
+        Parameters
+        ----------
+        output_path: Path
+            The output path of the simulation results.
+        """
         structure_3d = output_path / "structure.xml"
+        if not structure_3d.exists():
+            raise ValueError(
+                "3D Structure does not exist. Make sure to call write_and_show_structure method before exporting STL"
+            )
         stl_path = output_path / "stl"
         stl_path.mkdir(parents=True, exist_ok=True)
         cmd = [
@@ -63,16 +156,70 @@ class SimUtils:
         subprocess.run(cmd, check=True)
 
     @staticmethod
-    def run_simulation(FDTD, output_path):
+    def run_simulation(FDTD, output_path:Path)->None:
+        """
+        This method starts and runs the openEMS simulation.
+
+        Paramaters
+        ----------
+        FDTD: object
+            openEMS FDTD object.
+        output_path: Path
+            The output path of the simulation results.
+        """
         FDTD.Run(output_path)
 
     @staticmethod
     def create_nf2ff(FDTD):
+        """
+        Creates near field to far field (NF2FF) recording box.
+
+        Parameters
+        ----------
+        FDTD: object
+            openEMS FDTD object.
+
+        Returns
+        -------
+        nf2ff : object
+            NF2FF object
+        """
         nf2ff = FDTD.CreateNF2FFBox()
         return nf2ff
 
     @staticmethod
-    def compute_network_params(port, params, output_path):
+    def compute_network_params(port, params, output_path:Path):
+        """
+        Computes several network parameters for plotting and post-processing of simulation results.
+
+        parameters
+        ----------
+        port: object
+            openEMS port object.
+        params: object
+            Parameter object that holds all simulation parameters.
+        output_path:Path
+            The output path of the simulation results.
+
+        Returns
+        -------
+        NetworkParams
+            a named tuple with the following attributes
+                freqs: ndarray
+                    a numpy array of frequencies used for post-processing. this generates a list of frequencies between 
+                    ``resonant_freq - corner_freq`` and ``resonant_freq + corner_freq``.
+                s11: ndarray
+                    a numpy array of calculated complex s11 values over entire frequency range.
+                z11: ndarray
+                    a numpy array of calculated complex z11 over the entire freqs range.
+                vswr: ndarray
+                    
+
+
+
+
+
+        """
         NetworkParams = namedtuple(
             "NetworkParams", ["freqs", "s11", "z11", "vswr", "input_power"]
         )
@@ -545,7 +692,10 @@ class SimUtils:
         dump_path = output_path / "field_dump"
         dump_path.mkdir(parents=True, exist_ok=True)
         dump = CSX.AddDump(
-            str(dump_path / dump_type.value[1]), file_type=0, dump_type=dump_type.value[0], dump_mode=0
+            str(dump_path / dump_type.value[1]),
+            file_type=0,
+            dump_type=dump_type.value[0],
+            dump_mode=0,
         )
         start = [params.simulation_box[0] / 2, params.simulation_box[1] / 2, 0]
         stop = [
@@ -676,15 +826,6 @@ def param_sweep(
             label=label,
         )
     SimUtils.show_plots()
-
-
-def setup_simulation(params, boundary_cond: list[str] = ["MUR"]):
-    CSX = ContinuousStructure()
-    FDTD = openEMS(NrTS=params.timestep, EndCriteria=params.end_criteria)
-    FDTD.SetGaussExcite(params.resonant_freq, params.corner_freq)
-    FDTD.SetBoundaryCond(boundary_cond * 6)
-    FDTD.SetCSX(CSX)
-    return CSX, FDTD
 
 
 def mm_to_m(mm):

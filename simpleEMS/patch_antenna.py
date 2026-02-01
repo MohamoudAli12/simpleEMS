@@ -121,7 +121,7 @@ class InsetFedPatchAntenna(PatchAntenna):
         patch_inset.SetColor("#B87333", 255)
         if self.params.inset_width_mm / 2 < 0.089:
             warnings.warn(
-                f"Inset Width {self.params.inset_width_mm / 2} is too small, check minimum trace width with your PCB manufacturer",
+                f"Inset Width {self.params.inset_width_mm / 2} is too small, check minimum trace spacing with your PCB manufacturer",
                 UserWarning,
             )
         pp = [
@@ -159,6 +159,11 @@ class InsetFedPatchAntenna(PatchAntenna):
     def create_feed(self):
         feed = self.CSX.AddMetal("feed")
         feed.SetColor("#B87333", 255)
+        if self.params.feed_width_mm < 0.1:
+            warnings.warn(
+                f"Trace Width {self.params.feed_width_mm} is too small, check minimum trace width with your PCB manufacturer",
+                UserWarning,
+            )
         feed_start = [
             self.params.feed_width_mm / 2,
             -self.params.patch_length_mm / 2 + self.params.inset_length_mm,

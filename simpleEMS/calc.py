@@ -3,10 +3,10 @@ import numpy as np
 from scipy.integrate import quad
 from typing import NamedTuple
 from .sim_utils import m_to_mm, mm_to_m
-from openEMS.physical_constants import C0
+
 
 def phase_shift_length(
-    phase_shift: float, dielectric: float, frequency: float
+    phase_shift: float, subst_eps_r: float, frequency: float
 ) -> float:
     """
     Compute the length (in mm) for a signal to undergo a given phase
@@ -14,27 +14,79 @@ def phase_shift_length(
     surrounded by a homogenous medium (e.g. a microstrip trace), make
     sure to use the effective dielectric.
 
-    :param phase_shift: Phase shift in degrees.
-    :param dielectric: Dielectric or effective dielectric constant.
-    :param frequency: Signal frequency.
+    Parameters
+    ----------
+
+    phase_shift: float
+        Phase shift in degrees.
+    subst_eps_r: float
+        Dielectric constant or effective dielectric constant.
+    frequency: float
+        frequency of signal in Hz.
+
+    Returns
+    -------
+    length: float
+        phase shift length of microstrip in mm
+
+    Notes
+    -----
+    This function was adapted from pyems calc module
     """
     rad = phase_shift * np.pi / 180
-    vac_lambda = 2 * np.pi * frequency / C0/1e3
-    return rad / (np.sqrt(dielectric) * vac_lambda)
+    vac_lambda = 2 * np.pi * frequency / C0 / 1e3
+    return rad / (np.sqrt(subst_eps_r) * vac_lambda)
+
 
 def microstrip_width_from_impedance(
-    charac_imp, subs_height, copper_thickness, subs_epr, freq_hz, tolerance=0.01
-):
+    charac_imp: float,
+    subs_height: float,
+    copper_thickness: float,
+    subst_eps_r: float,
+    freq_hz: float,
+    tolerance: float = 0.01,
+) -> float:
     """
     Calculates microstrip width for a target impedance including dispersion
     and thickness using Hammerstad-Jensen equations.
+
+    Parameters
+    ----------
+
+    charac_imp: float
+        The required characteristic impedance of the microstrip line
+    subs_height: float
+        The height of the substrate
+    copper_thickness: float
+        The thickness of the copper trace
+    subst_eps_r:float
+        Dielectric constant of the substrate material.
+    freq_hz: float
+        Frequency in Hz
+    tolerance: float
+        Maximum deviation allowed for calculated characteristic impedance
+
+    Returns
+    -------
+    width: float 
+        width of trace for given characteristic impedance
+
+    Notes
+    -----
+
+    for the formulas used, refer to this papers
+    `<https://qucs.github.io/docs/technical/technical.pdf>`_.
+    `<https://ieeexplore.ieee.org/document/1124303>`_.
     """
 
     def get_Z_at_freq(w, h, t, er, f_hz):
         # Constants
         eta0 = 376.730313668
         mue0 = 4 * np.pi * 1e-7
-        h_m = mm_to_m(h)  # height in meters for SI units
+        h_m = mm_to_m(h)
+
+        if t == 0:
+            t = 1e-6
 
         # 1. Thickness Correction
         u = w / h
@@ -82,14 +134,17 @@ def microstrip_width_from_impedance(
         return Z_f
 
     # --- Binary Search for Width ---
-    low, high = 0.0001 * subs_height, 100 * subs_height
+    low, high = 0.001, 100
+    mid_w = 0.0
     for _ in range(100):
         mid_w = (low + high) / 2
-        Z_curr = get_Z_at_freq(mid_w, subs_height, copper_thickness, subs_epr, freq_hz)
+        Z_curr = get_Z_at_freq(
+            mid_w, subs_height, copper_thickness, subst_eps_r, freq_hz
+        )
 
         if abs(Z_curr - charac_imp) < tolerance:
             break
-        if Z_curr > charac_imp:  # Needs to be wider to lower Z
+        if Z_curr > charac_imp:
             low = mid_w
         else:
             high = mid_w
@@ -97,9 +152,26 @@ def microstrip_width_from_impedance(
     return mid_w
 
 
-def conductance_G1(patch_width, frequency):
+def conductance_G1(patch_width: float, frequency: float) -> float:
     """
-    Balanis (3rd ed.) 14-12 radiation conductance of one slot.
+    Computes the conductance of patch antenna.
+
+    Parameters
+    ----------
+
+    patch_width: float
+        width of patch antenna in meters
+    frequency: float
+        frequency in Hz
+
+    Returns
+    -------
+    conductance_G1: float
+        conductance of patch antenna
+
+    Notes
+    -----
+    Refer to Balanis (3rd ed.) 14-12 formula for radiation conductance of one slot.
     """
 
     lambda0 = C0 / frequency
@@ -116,9 +188,37 @@ def conductance_G1(patch_width, frequency):
     return integral / (120 * np.pi**2)
 
 
-def inset_depth(charac_imp, patch_width, patch_length, frequency):
+def inset_depth(
+    charac_imp: float,
+    patch_width: float,
+    patch_length: float,
+    frequency: float,
+)->tuple[float,float]:
     """
-    Compute inset feed depth using Balanis formulation.
+    Compute the inset feed depth of an inset fed patch antenna and probe position of probe fed patch antenna.
+
+    Parameters
+    ----------
+    charac_imp: float
+        characteristic impedance of the antenna.
+    patch_width: float
+        patch antenna width in meters.
+    patch_length: float
+        patch antenna length in meters.
+    frequency: flaot
+        frequency in Hz.
+
+    Returns
+    -------
+    inset_length: float
+        inset length in meters
+    probe_pos: float
+        probe position in meters. note that probe position is in Y direction and X is 0.
+
+    Notes
+    -----
+    Refer to Balanis formula 14-20a
+
     """
 
     G1 = conductance_G1(patch_width, frequency)
@@ -134,20 +234,41 @@ def inset_depth(charac_imp, patch_width, patch_length, frequency):
 
 def patch_dims(
     frequency_hz: float,
-    subs_eps_r: float,
-    subs_height: float,
+    subst_eps_r: float,
+    subst_height: float,
     charac_imp: float,
     copper_thickness: float,
 ):
     """
     Calculate rectangular microstrip patch dimensions.
 
-    Returns:
-        patch_width      : Width of the patch (W)
-        patch_length     : Length of the patch (L)
-        inset_length     : Inset length of the patch in direction of y
-        inset_width      : Inset width of the patch in the direction of x
-        probe_pos        : The feed position of probe fed patch antenna
+    Parameters
+    ----------
+    frequency_hz: float
+        resonant frequency of antenna in Hz.
+    subst_eps_r: float
+        Dielectric constant of the substrate.
+    subst_height: float
+        Thickness of the substrate.
+    charac_imp: float
+        characteristic impedance of the feed line.
+    copper_thickness: float
+         Thickness of the copper trace.
+
+    Returns
+    -------
+    PatchDims
+        a named tuple with the following attributes.
+            patch_width_mm: float
+                Width of the patch antenna in direction of x in mm.
+            patch_length_mm: float
+                Length of the patch antenna in direction of x in mm
+            inset_length_mm: float 
+                Inset length of the patch in direction of y in mm
+            inset_width: float 
+                Inset width of the patch in the direction of x in mm
+            probe_pos: float 
+                The feed position of probe fed patch antenna in direction of y in mm
     """
     PatchDims = NamedTuple(
         "PatchDims",
@@ -160,18 +281,18 @@ def patch_dims(
         ],
     )
 
-    patch_width = C0 / (2 * frequency_hz) * np.sqrt(2 / (subs_eps_r + 1))
+    patch_width = C0 / (2 * frequency_hz) * np.sqrt(2 / (subst_eps_r + 1))
     patch_width_mm = m_to_mm(patch_width)
 
-    eff_eps_r = (subs_eps_r + 1) / 2 + (subs_eps_r - 1) / 2 * (
-        1 / np.sqrt(1 + 12 * subs_height / patch_width)
+    eff_eps_r = (subst_eps_r + 1) / 2 + (subst_eps_r - 1) / 2 * (
+        1 / np.sqrt(1 + 12 * subst_height / patch_width)
     )
 
     delta_length = (
         0.412
-        * subs_height
-        * ((eff_eps_r + 0.3) * (patch_width / subs_height + 0.264))
-        / ((eff_eps_r - 0.258) * (patch_width / subs_height + 0.8))
+        * subst_height
+        * ((eff_eps_r + 0.3) * (patch_width / subst_height + 0.264))
+        / ((eff_eps_r - 0.258) * (patch_width / subst_height + 0.8))
     )
 
     patch_length = (C0 / (2 * frequency_hz * np.sqrt(eff_eps_r))) - 2 * delta_length
@@ -185,7 +306,7 @@ def patch_dims(
     probe_pos_mm = m_to_mm(probe_pos)
 
     inset_width_mm = microstrip_width_from_impedance(
-        charac_imp, m_to_mm(subs_height), copper_thickness, subs_eps_r, frequency_hz
+        charac_imp, m_to_mm(subst_height), copper_thickness, subst_eps_r, frequency_hz
     )
 
     return PatchDims(

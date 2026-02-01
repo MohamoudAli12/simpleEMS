@@ -32,30 +32,31 @@ class SimParams:
         Substrate length in millimeters.
     substrate_cells : int, optional
         Suggested number of mesh cells along the substrate thickness.
-        Default is 4.
+        Default value is ``4``.
 
     unit : float, optional
-        Length unit used in the model. Default is ``1e-3`` (millimeters).
+        unit used in the model. Default value is ``1e-3`` which represents millimeters.
+        this value should not be changed.
     copper_thickness_mm : float, optional
-        Thickness of the copper layer in millimeters. Default is 0.035 mm.
+        Thickness of the copper layer in millimeters. Default is ``0.035``.
 
     fp_precision : int, optional
         Floating-point precision used when generating geometric values.
-        Default is 3.
+        Default is ``3``.
     charac_imp : float, optional
-        Feed/port impedance in ohms. Default is 50.
+        Feed/port impedance in ohms. Default is ``50 ohms``.
     timestep : int, optional
-        FDTD simulation time-step count. Default is 500000.
+        FDTD simulation time-step count. Default is ``1000000``.
     end_criteria : float, optional
         Convergence threshold for the stopping criteria. Default is ``1e-4``.
 
     mesh_resolution_factor : float, optional
         Division factor used to compute the global mesh resolution
-        (``lambda0 / factor``). Default is 20.
+        (``lambda0 / factor``). Default is ``20``.
 
     metal_mesh_resolution_factor : float, optional
         Division factor used to compute the metal primitives mesh resolution
-        (``lambda0 / factor``). Default is 40.
+        (``lambda0 / factor``). Default is ``40``.
 
 
     Attributes
@@ -63,8 +64,7 @@ class SimParams:
     substrate_kappa : float
         Computed dielectric loss term.
     lambda0 : float
-        Effective wavelength inside the dielectric, expressed in the chosen
-        length unit.
+        Free space wavelength.
     simulation_box : ndarray of shape (3,)
         Recommended bounding box for the FDTD domain
         (width, length, height).
@@ -93,8 +93,8 @@ class SimParams:
     copper_thickness_mm: float = 0.035
     fp_precision: int = 3
     charac_imp: float = 50
-    timestep: int = 90000
-    end_criteria: float = 1e-5
+    timestep: int = 1000000
+    end_criteria: float = 1e-4
     mesh_resolution_factor: int = 20
     metal_mesh_resolution_factor: int = 40
 

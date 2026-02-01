@@ -14,6 +14,6 @@ documentation for details.
 .. toctree::
    :maxdepth: 5
    :caption: Contents:
-   
+
    modules
 

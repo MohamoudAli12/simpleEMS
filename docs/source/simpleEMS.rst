@@ -8,7 +8,7 @@ Submodules
    :maxdepth: 4
 
    simpleEMS.patch_antenna
-   simpleEMS.patch_dims
+   simpleEMS.calc
    simpleEMS.sim_params
    simpleEMS.sim_utils
 

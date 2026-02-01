@@ -47,7 +47,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    # patch.show_structure(CSX, output_path)
+    patch.write_and_show_structure(CSX, output_path)
     network_params = None
 
     if sweep:
@@ -65,7 +65,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return s11[idx]
 
     if not (sweep or optimize):
-        patch.run_simulation(FDTD, output_path)
+        # patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(port, params, output_path)
         nf2ff_3d_result = patch.compute_nf2ff_3d(
             nf2ff, params.resonant_freq, output_path
@@ -86,7 +86,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
         patch.save_plots(output_path)
         patch.show_plots()
-        # patch.export_stl(output_path)
+        patch.export_stl(output_path)
         patch.export_touchstone(network_params, params, output_path)
         patch.export_gerber(
             CSX,
