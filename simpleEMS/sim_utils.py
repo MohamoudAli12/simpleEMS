@@ -156,7 +156,7 @@ class SimUtils:
         subprocess.run(cmd, check=True)
 
     @staticmethod
-    def run_simulation(FDTD, output_path:Path)->None:
+    def run_simulation(FDTD, output_path: Path) -> None:
         """
         This method starts and runs the openEMS simulation.
 
@@ -188,37 +188,50 @@ class SimUtils:
         return nf2ff
 
     @staticmethod
-    def compute_network_params(port, params, output_path:Path):
+    def compute_network_params(port, params, output_path: Path):
         """
         Computes several network parameters for plotting and post-processing of simulation results.
 
-        parameters
+        This method calculates various network parameters such as S11, Z11, VSWR, and input power
+        based on the simulation results. It uses the provided port and simulation parameters to
+        extract the necessary data, processes it, and prepares it for further analysis and plotting.
+
+        Parameters
         ----------
-        port: object
-            openEMS port object.
-        params: object
-            Parameter object that holds all simulation parameters.
-        output_path:Path
-            The output path of the simulation results.
+        port : object
+            The openEMS port object representing the simulation port.
+
+        params : object
+            The parameter object that holds all simulation parameters, including frequency range and other settings.
+
+        output_path : Path
+            The path to the directory where the simulation results are saved.
 
         Returns
         -------
         NetworkParams
-            a named tuple with the following attributes
-                freqs: ndarray
-                    a numpy array of frequencies used for post-processing. this generates a list of frequencies between 
-                    ``resonant_freq - corner_freq`` and ``resonant_freq + corner_freq``.
-                s11: ndarray
-                    a numpy array of calculated complex s11 values over entire frequency range.
-                z11: ndarray
-                    a numpy array of calculated complex z11 over the entire freqs range.
-                vswr: ndarray
-                    
+            A named tuple containing the following attributes:
 
+            - freqs : ndarray
+                A numpy array of frequencies used for post-processing. The array is generated
+                from `resonant_freq - corner_freq` to `resonant_freq + corner_freq`.
 
+            - s11 : ndarray
+                A numpy array of calculated complex S11 values across the entire frequency range.
 
+            - z11 : ndarray
+                A numpy array of calculated complex Z11 values across the entire frequency range.
 
+            - vswr : ndarray
+                A numpy array of calculated VSWR values across the entire frequency range.
 
+            - input_power : float
+                The calculated input power at the port.
+
+        Notes
+        -----
+        - The method assumes the simulation results are available at the specified `output_path`.
+        - The frequency range for post-processing is determined by the resonant frequency and the corner frequency.
         """
         NetworkParams = namedtuple(
             "NetworkParams", ["freqs", "s11", "z11", "vswr", "input_power"]
@@ -243,9 +256,39 @@ class SimUtils:
         s11: np.ndarray,
         x_label: str = "Frequency",
         y_label: str = "S11 (dB)",
-        label="",
+        label: str = "",
         title: str = "S11 vs Frequency",
-    ):
+    ) -> None:
+        """
+        Plot the S11 parameter (reflection coefficient) against frequency.
+
+        This method generates a 2D plot of the S11 parameter (in dB) as a function of frequency.
+
+        Parameters
+        ----------
+        freqs : np.ndarray
+            A 1D array of frequencies (in Hz) to plot on the x-axis.
+
+        s11 : np.ndarray
+            A 1D array of the corresponding S11 values (in dB) to plot on the y-axis.
+
+        x_label : str, optional
+            Label for the x-axis. Default is "Frequency".
+
+        y_label : str, optional
+            Label for the y-axis. Default is "S11 (dB)".
+
+        label : str, optional
+            Label for the plot legend. Default is an empty string (no label).
+
+        title : str, optional
+            Title of the plot. Default is "S11 vs Frequency".
+
+        Returns
+        -------
+        None
+            This method does not return any value. It directly displays the plot.
+        """
         s11 = 20.0 * np.log10(np.abs(s11))
         plt.plot(freqs, s11, label=label)
         min_idx = np.nanargmin(s11)
@@ -260,7 +303,7 @@ class SimUtils:
             freqs[tar_idx],
             s11[tar_idx],
             color="red",
-            label=f"target S11 = {s11[tar_idx]:.2f} at {freq_formatter(freqs[tar_idx])} ",
+            label=f"Target S11 = {s11[tar_idx]:.2f} at {freq_formatter(freqs[tar_idx])} ",
         )
         plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
         plt.xlabel(x_label)
@@ -278,6 +321,37 @@ class SimUtils:
         title: str = "VSWR vs Frequency",
         label: str = "VSWR",
     ):
+        """
+        Plot the Voltage Standing Wave Ratio (VSWR) as a function of frequency.
+
+        This method generates a 2D plot of VSWR values over the specified frequency range,
+        which is used to evaluate impedance matching performance.
+
+        Parameters
+        ----------
+        freqs : np.ndarray
+            A 1D array of frequencies (in Hz) to be plotted on the x-axis.
+
+        vswr : np.ndarray
+            A 1D array of VSWR values corresponding to each frequency.
+
+        x_label : str, optional
+            Label for the x-axis. Default is "Frequency".
+
+        y_label : str, optional
+            Label for the y-axis. Default is "VSWR".
+
+        title : str, optional
+            Title of the plot. Default is "VSWR vs Frequency".
+
+        label : str, optional
+            Label used for the plot legend. Default is "VSWR".
+
+        Returns
+        -------
+        None
+            This method does not return any value. It displays the VSWR plot.
+        """
         plt.figure()
         plt.plot(freqs, vswr, label=label)
         min_idx = np.nanargmin(vswr)
@@ -309,8 +383,37 @@ class SimUtils:
         x_label: str = "Frequency",
         y_label: str = "Z11",
         title: str = "Z11 vs Frequency",
-        charac_imp: float = 50.0,
     ):
+        """
+        Plot the input impedance (Z11) as a function of frequency.
+
+        This method generates a 2D plot of the complex input impedance Z11 versus
+        frequency. The real and imaginary components of Z11 are plotted
+        to analyze impedance behavior across the frequency range.
+
+        Parameters
+        ----------
+        freqs : np.ndarray
+            A 1D array of frequencies (in Hz) to be plotted on the x-axis.
+
+        z11 : np.ndarray
+            A 1D array of complex input impedance values corresponding to each
+            frequency.
+
+        x_label : str, optional
+            Label for the x-axis. Default is "Frequency".
+
+        y_label : str, optional
+            Label for the y-axis. Default is "Z11".
+
+        title : str, optional
+            Title of the plot. Default is "Z11 vs Frequency".
+
+        Returns
+        -------
+        None
+            This method does not return any value. It displays the impedance plot.
+        """
         z11_real = np.real(z11)
         z11_imag = np.imag(z11)
         plt.figure()
@@ -333,6 +436,35 @@ class SimUtils:
 
     @staticmethod
     def plot_smith_chart(freqs, s11, label="", charac_imp=50):
+        """
+        Plot S11 data on a Smith chart.
+
+        This method generates a Smith chart representation of the complex reflection
+        coefficient (S11) over a specified frequency range.
+
+        Parameters
+        ----------
+        freqs : np.ndarray
+            A 1D array of frequencies (in Hz) corresponding to the S11 data.
+
+        s11 : np.ndarray
+            A 1D array of complex S11 (reflection coefficient) values.
+
+        label : str, optional
+            Label used for the plot legend. Default is an empty string.
+
+        charac_imp : float, optional
+            Characteristic impedance of the system in ohms. Default is 50 Ω.
+
+        Returns
+        -------
+        None
+            This method does not return any value. It displays the Smith chart.
+
+        Notes
+        -----
+        - pysmithchart is used for plotting the smith chart.
+        """
         plt.figure()
         plt.subplot(
             1,
@@ -360,6 +492,34 @@ class SimUtils:
 
     @staticmethod
     def plot_2d_rad_pattern(nf2ff, freq, output_path):
+        """
+        Plot the 2D efield radiation pattern at a specified frequency.
+
+        This method computes and visualizes a 2D radiation pattern from near-field
+        to far-field (NF2FF) data for a given frequency.
+
+        Parameters
+        ----------
+        nf2ff : object
+            The near-field to far-field (NF2FF) object containing the simulation data.
+
+        freq : float
+            Frequency (in Hz) at which the far-field radiation pattern is evaluated.
+
+        output_path : Path
+            Path to the directory where the simulation result is saved.
+
+        Returns
+        -------
+        None
+            This method does not return any value. It generates the 2D
+            radiation pattern plot.
+        """
+        if not np.isscalar(freq):
+            raise TypeError(
+                "Please specify only one frequency and not array for radiation pattern calculation"
+            )
+
         theta = np.arange(-180.0, 181.0, 2.0)
         print("Calculating 2D Radiation Pattern.........")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
@@ -369,19 +529,19 @@ class SimUtils:
             0,
             read_cached=False,
             outfile="nf2ff_xz.h5",
-            verbose=1,
+            verbose=0,
         )
 
         plt.figure()
         ax = plt.subplot(121, polar=True)
 
-        E_field = np.squeeze(nf2ff_res_phi0.E_norm)
-        E_field_norm = E_field / np.max(E_field)
-        E_field_norm_dB = 20 * np.log10(E_field_norm)
+        efield = np.squeeze(nf2ff_res_phi0.E_norm)
+        efield_norm = efield / np.max(efield)
+        efield_norm_dB = 20 * np.log10(efield_norm)
 
         ax.plot(
             np.deg2rad(theta),
-            E_field_norm_dB,
+            efield_norm_dB,
             linewidth=2,
             label="xz-plane",
         )
@@ -403,13 +563,13 @@ class SimUtils:
 
         ax = plt.subplot(122, polar=True)
 
-        E_field = np.squeeze(nf2ff_res_theta90.E_norm)
-        E_field_norm = E_field / np.max(E_field)
-        E_field_norm_dB = 20 * np.log10(E_field_norm)
+        efield = np.squeeze(nf2ff_res_theta90.E_norm)
+        efield_norm = efield / np.max(efield)
+        efield_norm_dB = 20 * np.log10(efield_norm)
 
         ax.plot(
             np.deg2rad(phi),
-            E_field_norm_dB,
+            efield_norm_dB,
             linewidth=2,
             label="xy-plane",
         )
@@ -425,6 +585,33 @@ class SimUtils:
 
     @staticmethod
     def plot_2d_directivity(nf2ff, freq, output_path):
+        """
+        Plot the 2D directivity at a specified frequency.
+
+        This method computes and visualizes a 2D directivity from near-field
+        to far-field (NF2FF) data for a given frequency.
+
+        Parameters
+        ----------
+        nf2ff : object
+            The near-field to far-field (NF2FF) object containing the simulation data.
+
+        freq : float
+            Frequency (in Hz) at which the far-field radiation pattern is evaluated.
+
+        output_path : Path
+            Path to the directory where the simulation result is saved.
+
+        Returns
+        -------
+        None
+            This method does not return any value. It plots the 2D directivity.
+        """
+        if not np.isscalar(freq):
+            raise TypeError(
+                "Please specify only one frequency and not array for directivity calculation"
+            )
+
         theta = np.arange(-180.0, 181.0, 2.0)
         print("Calculating Farfield Directivity.........")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
@@ -434,7 +621,7 @@ class SimUtils:
             0,
             read_cached=False,
             outfile="nf2ff_xz.h5",
-            verbose=1,
+            verbose=0,
         )
 
         plt.figure()
@@ -522,11 +709,38 @@ class SimUtils:
 
     @staticmethod
     def compute_nf2ff_3d(nf2ff, freq, output_path):
+        """
+        Compute the 3D far-field radiation pattern.
+
+        The resulting far-field data can be used for visualization, directivity analysis, and
+        post-processing of antenna performance.
+
+        Parameters
+        ----------
+        nf2ff : object
+            The near-field to far-field (NF2FF) object containing the simulation data.
+
+        freq : float
+            Frequency (in Hz) at which the 3D far-field radiation pattern is evaluated.
+
+        output_path : Path
+            Path to the directory where the simulation result is saved.
+
+        Returns
+        -------
+        nf2ff_3d_result : object
+            Returns nf2ff 3D result object.
+        """
+        if not np.isscalar(freq):
+            raise TypeError(
+                "Please specify only one frequency and not array for directivity calculation"
+            )
+
         theta = np.arange(0, 181, 2)  # elevation
         phi = np.arange(0, 361, 2)  # azimuth
 
         print("Calculating 3D Pattern.........")
-        nf2ff_3d = nf2ff.CalcNF2FF(
+        nf2ff_3d_result = nf2ff.CalcNF2FF(
             output_path,
             freq,
             theta,
@@ -535,23 +749,29 @@ class SimUtils:
             outfile="nf2ff_3d.h5",
             verbose=0,
         )
-        return nf2ff_3d
+        return nf2ff_3d_result
 
     @staticmethod
-    def plot_3d_directivity(nf2ff_3d, freq, output_path):
+    def plot_3d_directivity(nf2ff_3d_result, freq, output_path):
+
+        if not np.isscalar(freq):
+            raise TypeError(
+                "Please specify only one frequency and not array for directivity calculation"
+            )
+
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
-        e_field = np.squeeze(nf2ff_3d.E_norm)
+        e_field = np.squeeze(nf2ff_3d_result.E_norm)
         e_field /= np.max(e_field)  # normalize
 
-        max_directivity = nf2ff_3d.Dmax[0]
+        max_directivity = nf2ff_3d_result.Dmax[0]
         D = max_directivity * e_field
 
         directivity_dbi = 10 * np.log10(D)
 
-        theta = nf2ff_3d.theta
-        phi = nf2ff_3d.phi
+        theta = nf2ff_3d_result.theta
+        phi = nf2ff_3d_result.phi
 
         THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
 
