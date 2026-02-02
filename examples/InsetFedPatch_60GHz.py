@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import numpy as np
-from simpleEMS import InsetPatchParams, InsetFedPatchAntenna
 from simpleEMS import (
+    InsetPatchParams,
+    InsetFedPatchAntenna,
     setup_simulation,
     optimize_s11,
     param_sweep,

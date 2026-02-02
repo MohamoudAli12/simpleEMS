@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import numpy as np
-from simpleEMS import InsetPatchParams, InsetFedPatchAntenna
 from simpleEMS import (
+    InsetPatchParams,
+    InsetFedPatchAntenna,
     setup_simulation,
     optimize_s11,
     param_sweep,
 )
+
 
 def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_val=[]):
     params = InsetPatchParams(
@@ -33,7 +35,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.inset_width_mm = optimize_val[1]
         params.patch_length_mm = optimize_val[2]
         params.patch_width_mm = optimize_val[3]
-
 
     CSX, FDTD = setup_simulation(params)
 
@@ -93,6 +94,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             output_path,
             options={"ignore": ["ground"]},
         )
+
 
 def main():
     output_path = Path(__file__).with_suffix("")

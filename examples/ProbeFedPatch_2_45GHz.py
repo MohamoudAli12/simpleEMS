@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import numpy as np
-from simpleEMS import setup_simulation
-from simpleEMS import ProbePatchParams, ProbeFedPatchAntenna
 from simpleEMS import (
+    ProbePatchParams,
+    ProbeFedPatchAntenna,
     setup_simulation,
     optimize_s11,
     param_sweep,
