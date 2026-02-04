@@ -14,16 +14,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     params = InsetPatchParams(
         resonant_freq=60e9,  # Hz
         corner_freq=3e9,  # Hz
-        num_points=10000,
         substrate_thickness_mm=0.125,  # mm
         substrate_eps_r=3.00,
         substrate_tand=0.001,
-        copper_thickness_mm=0.035,  # mm
-        end_criteria=1e-4,
-        timestep=600000,
-        mesh_resolution_factor=20,
-        metal_mesh_resolution_factor=50,
-        charac_imp=50,
+        charac_imp=50.0,
     )
 
     if sweep:
@@ -94,7 +88,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.save_plots(output_path)
         patch.show_plots()
         patch.export_stl(output_path)
-        patch.export_touchstone(network_params, params, output_path)
+        patch.export_touchstone(network_params, output_path, params.charac_imp)
         patch.export_gerber(
             CSX,
             output_path,

@@ -708,7 +708,7 @@ class SimUtils:
         ax.legend()
 
     @staticmethod
-    def compute_nf2ff_3d(nf2ff, freq, output_path):
+    def compute_nf2ff_3d(nf2ff, freq: float, output_path: Path) -> object:
         """
         Compute the 3D far-field radiation pattern.
 
@@ -733,7 +733,7 @@ class SimUtils:
         """
         if not np.isscalar(freq):
             raise TypeError(
-                "Please specify only one frequency and not array for directivity calculation"
+                "Please specify only one frequency and not array for 3D far-field calculation"
             )
 
         theta = np.arange(0, 181, 2)  # elevation
@@ -753,6 +753,29 @@ class SimUtils:
 
     @staticmethod
     def plot_3d_directivity(nf2ff_3d_result, freq, output_path):
+        """
+        Plot the 3D directivity pattern of an antenna at a specified frequency.
+
+        This method visualizes the directivity pattern of the antenna in 3D space,
+        based on the far-field results computed from ``compute_nf2ff_3d``.
+
+        Parameters
+        ----------
+        nf2ff_3d_result : object
+            The 3D far-field result object containing the computed radiation data.
+
+        freq : float
+            The frequency (in Hz) at which the 3D directivity pattern is evaluated.
+
+        output_path : Path
+            Path to the directory where the simulation result is saved.
+
+        Returns
+        -------
+        None
+            This method does not return any value. It generates and saves a 3D plot of
+            the directivity pattern.
+        """
 
         if not np.isscalar(freq):
             raise TypeError(
@@ -801,6 +824,30 @@ class SimUtils:
 
     @staticmethod
     def plot_3d_gain(nf2ff_3d, freq, input_power, output_path):
+        """
+        Plot the 3D gain pattern of an antenna at a specified frequency.
+
+        This method visualizes the gain pattern of the antenna in 3D space,
+        based on the far-field results computed from ``compute_nf2ff_3d``.
+
+        Parameters
+        ----------
+        nf2ff_3d_result : object
+            The 3D far-field result object containing the computed radiation data.
+
+        freq : float
+            The frequency (in Hz) at which the 3D directivity pattern is evaluated.
+
+        output_path : Path
+            Path to the directory where the simulation result is saved.
+
+        Returns
+        -------
+        None
+            This method does not return any value. It generates and saves a 3D plot of
+            the gain pattern.
+        """
+
         e_field = np.squeeze(nf2ff_3d.E_norm)
         e_field /= np.max(e_field)  # normalize
 
@@ -841,7 +888,31 @@ class SimUtils:
         plotter.add_text("Antenna 3D Pattern - Gain (dBi) ", position="upper_edge")
 
     @staticmethod
-    def plot_3d_power(nf2ff_3d, freq, output_path):
+    def plot_3d_power(nf2ff_3d, freq: float, output_path: Path) -> None:
+        """
+        Plot the 3D power pattern of an antenna at a specified frequency.
+
+        This method visualizes the power pattern of the antenna in 3D space,
+        based on the far-field results computed from ``compute_nf2ff_3d``.
+
+        Parameters
+        ----------
+        nf2ff_3d_result : object
+            The 3D far-field result object containing the computed radiation data.
+
+        freq : float
+            The frequency (in Hz) at which the 3D directivity pattern is evaluated.
+
+        output_path : Path
+            Path to the directory where the simulation result is saved.
+
+        Returns
+        -------
+        None
+            This method does not return any value. It generates and saves a 3D plot of
+            the power pattern.
+        """
+
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
@@ -879,14 +950,26 @@ class SimUtils:
         plotter.add_text("Antenna 3D Pattern - Power (dB)", position="upper_edge")
 
     @staticmethod
-    def save_plots(output_path, filename_prefix="plot", file_format="png"):
+    def save_plots(output_path: Path, file_format: str = "png") -> None:
         """
         Save all currently open plots with unique filenames to a specified output path.
 
-        Parameters:
-        - output_path (str or Path): The directory where the plots should be saved.
-        - filename_prefix (str): Prefix for the filename.
-        - file_format (str): Format to save the plot (e.g., 'png', 'jpg', 'pdf').
+        Parameters
+        ----------
+
+        output_path : Path
+            Path to the directory where the simulation result is saved.
+
+        file_format: str
+            File format to save the plot (e.g., 'png', 'jpg', 'pdf').
+
+        Notes
+        -----
+        This method must be called after ``show_plots`` while all matplotlib plots are open
+
+        Returns
+        -------
+            None
         """
         plot_path = output_path / "plots"
         plot_path.mkdir(parents=True, exist_ok=True)
@@ -897,7 +980,7 @@ class SimUtils:
             fig = plt.figure(fig_num)
             fig = plt.gcf()  # Get the current figure
             fig.set_size_inches(12, 6)
-            file_path = plot_path / f"{filename_prefix}_{i + 1}.{file_format}"
+            file_path = plot_path / f"plot_{i + 1}.{file_format}"
             fig.savefig(file_path, format=file_format, dpi=300)
             print(f"Plot {i + 1} saved as {file_path}")
 
@@ -905,9 +988,36 @@ class SimUtils:
     def add_field_dump(
         CSX,
         params,
-        output_path,
+        output_path: Path,
         dump_type: DumpType = DumpType.efield_time,
-    ):
+    ) -> None:
+        """
+        Add a field dump to the simulation setup.
+
+        This method configures and attaches a field dump to the openEMS simulation
+        for storing electromagnetic field data (e.g., electric or magnetic fields)
+        during the simulation run.
+
+        Parameters
+        ----------
+        CSX : object
+            The openEMS CSX object representing the simulation geometry and settings.
+
+        params : object
+            Parameter object containing simulation parameters such as frequency,
+            time steps, and dump configuration.
+
+        output_path : Path
+            Path to the directory where the field dump data will be saved.
+
+        dump_type : DumpType, optional
+            Type of field dump to add (e.g., time-domain or frequency-domain electric
+            or magnetic fields). Default is `DumpType.efield_time`.
+
+        Returns
+        -------
+        None
+        """
         # TODO Add appropriate dump mode based on openEMS docs
         dump_path = output_path / "field_dump"
         dump_path.mkdir(parents=True, exist_ok=True)
@@ -926,16 +1036,72 @@ class SimUtils:
         dump.AddBox(start=start, stop=stop)
 
     @staticmethod
-    def export_touchstone(network_params, params, output_path):
+    def export_touchstone(
+        network_params, output_path: Path, charac_imp: float = 50.0, filename="s_param"
+    ):
+        """
+        Export  S-parameters to a Touchstone file.
+
+        This method writes the provided S-parameter data to a Touchstone
+        file.
+
+        Parameters
+        ----------
+        network_params : object
+            Computed network parameter result returned from ``compute_network_params`` method.
+
+        output_path : Path
+            Path to the directory where simulation result is saved.
+
+        charac_imp : float, optional
+            Characteristic impedance used for the Touchstone export. Default is 50.0.
+
+        filename:str, optional
+            Name of the file.
+
+        Returns
+        -------
+        None
+            This method does not return any value.
+
+        """
         touchstone_path = output_path / "touchstone"
         touchstone_path.mkdir(parents=True, exist_ok=True)
         ntwk = Network(
-            frequency=network_params.freqs, s=network_params.s11, z0=params.charac_imp
+            frequency=network_params.freqs, s=network_params.s11, z0=charac_imp
         )
-        ntwk.write_touchstone(filename="s_param", dir=touchstone_path)
+        ntwk.write_touchstone(filename=filename, dir=touchstone_path)
 
     @staticmethod
-    def export_gerber(CSX, output_path, options={"ignore": [None]}):
+    def export_gerber(
+        CSX, output_path: Path, options: dict[str, list] = {"ignore": []}
+    ):
+        """
+        Export CSXCAD geometry to Gerber format.
+
+
+        Parameters
+        ----------
+        CSX : object
+            CSXCAD geometry object.
+
+        output_path : Path
+            Path to the directory where simulation result is stored.
+
+        options : dict[str, list], optional
+            Dictionary of export options.
+
+        Returns
+        -------
+        None
+            This method does not return any value.
+
+        Notes
+        -----
+        The gerber export is currently limited and might not be able to export all geometries.
+        Layers should be exported separately by specifying ignore options. i.e. to export only top metal layer ignore the ground.
+
+        """
         gerber_path = output_path / "gerber"
         gerber_path.mkdir(parents=True, exist_ok=True)
         export_gerber.export_gerber(

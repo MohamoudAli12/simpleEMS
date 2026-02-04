@@ -88,7 +88,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.save_plots(output_path)
         patch.show_plots()
         patch.export_stl(output_path)
-        patch.export_touchstone(network_params, params, output_path)
+        patch.export_touchstone(network_params, output_path)
         patch.export_gerber(
             CSX,
             output_path,
