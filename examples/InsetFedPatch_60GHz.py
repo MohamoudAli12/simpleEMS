@@ -117,7 +117,7 @@ def main():
             # "inset_width_mm": (0.148, 0.158, 3),
         }
         param_sweep(
-            fn_to_sweep=simulate,
+            simulate_fn=simulate,
             sweep_vals=sweep_vals,
             output_path=output_path,
         )

@@ -2,6 +2,7 @@ import sys
 import subprocess
 from pathlib import Path
 from collections import namedtuple
+from collections.abc import Callable
 from dataclasses import fields
 from openEMS.openEMS import openEMS
 from CSXCAD import ContinuousStructure
@@ -12,7 +13,7 @@ from pysmithchart import S_PARAMETER
 from matplotlib.ticker import EngFormatter
 import pyvista as pv
 from pyvistaqt import BackgroundPlotter
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QCoreApplication
 from enum import Enum
 from skrf import Network
 from scipy.optimize import minimize
@@ -1111,15 +1112,44 @@ class SimUtils:
         )
 
     @staticmethod
-    def show_plots():
+    def show_plots() -> None:
+        """
+        Display all generated plots.
+
+        This method triggers the rendering of plots that have been created but not
+        yet displayed.
+
+        Returns
+        -------
+        None
+            This method does not return any value.
+        """
         if not plt.get_fignums():
-            view_3d = QApplication.instance()
+            view_3d = QCoreApplication.instance()
             if view_3d is not None:
                 sys.exit(view_3d.exec())
         plt.show()
 
     @staticmethod
-    def print_and_save_params(params, output_path):
+    def print_and_save_params(params, output_path: Path) -> None:
+        """
+        Print and save the simulation parameters.
+
+        This method prints the simulation paramaters to the terminal and saves them to text file.
+
+        Paramaters
+        ----------
+        params: object
+            parameter object that contains all simulation parmaters.
+        output_path: Path
+            The path to the directory where simulation result is stored.
+
+        Returns
+        -------
+        None
+            This method does not return any value.
+        """
+
         params_path = output_path / "params"
         params_path.mkdir(parents=True, exist_ok=True)
         cls_name = params.__class__.__name__
@@ -1134,7 +1164,34 @@ class SimUtils:
             file.writelines(lines)
 
 
-def optimize_s11(simulate_fn, x0: dict[str, float], output_path, bounds=None):
+def optimize_s11(
+    simulate_fn: Callable, x0: dict[str, float], output_path: Path, bounds=None
+) -> None:
+    """
+    This function optimizes the S11 parameter utilizing Scipy's minimize function.
+    Nelder-Mead algorithm is used to perform the optimization.
+
+    Parameters
+    ----------
+    simulate_fn : callable
+        Simulation function that is invoked during optimization.
+        the simulation function should return the S11 value at the resonant frequency. This return value will be used as a goal for the optimization.
+
+    x0 : dict[str, float]
+        Dictionary of initial parameter values used as the starting point for
+        the optimization.
+
+    output_path : Path
+        Path to the directory where simulation results is stored.
+
+    bounds : optional
+        Bounds on the optimization parameters. bounds are optional and not utilized by Nelder-Mead algorithm.
+
+    Returns
+    -------
+    None
+        This function does not return any value.
+    """
     print("-------------------------------------")
     print("Running Optimization")
     print("-------------------------------------")
@@ -1181,15 +1238,36 @@ def optimize_s11(simulate_fn, x0: dict[str, float], output_path, bounds=None):
 
 
 def param_sweep(
-    fn_to_sweep,  # the simulation function
-    sweep_vals,  # list or array of values to sweep
-    output_path,  # base folder to save outputs
-    sweep=True,
-):
+    simulate_fn: Callable,
+    sweep_vals: dict[str, tuple],
+    output_path: Path,
+    sweep: bool = True,
+) -> None:
     """
-    Sweep a parameter using a simulation function
+    Perform a parameter sweep using a simulation function.
+    The function supports multiple parameter sweeps. The parameter sweep performed is cartesian sweep 
+    which can make the simulation take longer if supplied with multiple parameters.
 
-    simulate_fn(val, output_path) -> returns network_params object
+    Parameters
+    ----------
+    simulate_fn : callable
+        Simulation function to be invoked during the parameter sweep.
+
+    sweep_vals : dict[str, tuple]
+        Dictionary defining the parameter sweep ranges. The sweep_vals should be a dictionary 
+        where the keys represent the parameter name and values are a tuple of (min_value, max_value, num_points)
+        then numpy's linspace is used to generate the sweep values.
+
+    output_path : Path
+        Path to the directory where simulation result is saved.
+
+    sweep : bool, optional
+        Flag indicating whether the parameter sweep is performed. Default is True.
+
+    Returns
+    -------
+    None
+        This function does not return any value.
     """
     print("*************************************")
     print("Running Parameter Sweep")
@@ -1205,7 +1283,7 @@ def param_sweep(
         sweep_path = output_path / "sweep" / key_value
         sweep_path.mkdir(parents=True, exist_ok=True)
 
-        network_params = fn_to_sweep(sweep_path, sweep, values)
+        network_params = simulate_fn(sweep_path, sweep, values)
         SimUtils.plot_s11(
             network_params.freqs,
             network_params.s11,
@@ -1214,19 +1292,93 @@ def param_sweep(
     SimUtils.show_plots()
 
 
-def mm_to_m(mm):
+def mm_to_m(mm: float) -> float:
     """
     Converts millimeters to meters.
-    :param mm: Value in millimeters
-    :return: Value in meters
+
+    Paramaters
+    ----------
+
+    mm: float
+        Value in millimeters
+    Returns
+    -------
+    Value in meters
     """
     return mm / 1000.0
 
 
-def m_to_mm(m):
+def m_to_mm(m: float) -> float:
     """
     Converts meters to millimeters.
-    :param m: Value in meters
-    :return: Value in millimeters
+
+    Paramaters
+    ----------
+
+    mm: float
+        Value in meters
+    Returns
+    -------
+    Value in millimeters
     """
     return m * 1000.0
+
+
+def mil_to_mm(mil: float) -> float:
+    """
+    Converts mils (thousandths of an inch) to millimeters.
+
+    Parameters
+    ----------
+    mil: float
+        Value in mils
+    Returns
+    -------
+    Value in millimeters
+    """
+    return mil * 0.0254
+
+
+def mm_to_mil(mm: float) -> float:
+    """
+    Converts millimeters to mils (thousandths of an inch).
+
+    Parameters
+    ----------
+    mm: float
+        Value in millimeters
+    Returns
+    -------
+    Value in mils
+    """
+    return mm / 0.0254
+
+
+def cm_to_mm(cm: float) -> float:
+    """
+    Converts centimeters to millimeters.
+
+    Parameters
+    ----------
+    cm: float
+        Value in centimeters
+    Returns
+    -------
+    Value in millimeters
+    """
+    return cm * 10.0
+
+
+def mm_to_cm(mm: float) -> float:
+    """
+    Converts millimeters to centimeters.
+
+    Parameters
+    ----------
+    mm: float
+        Value in millimeters
+    Returns
+    -------
+    Value in centimeters
+    """
+    return mm / 10.0

@@ -12,16 +12,11 @@ from simpleEMS import (
 
 def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_val=[]):
     params = ProbePatchParams(
-        unit=1e-3,
-        fp_precision=3,  # floating point precision
         resonant_freq=2.45e9,  # Hz
         corner_freq=0.5e9,  # Hz
         substrate_thickness_mm=1.6,  # mm
         substrate_eps_r=4.4,
         substrate_tand=0.001,
-        copper_thickness_mm=0.035,  # mm
-        end_criteria=1e-4,
-        timestep=100000,
         charac_imp=50,
     )
 
@@ -114,7 +109,7 @@ def main():
             "patch_length_mm": (0.533, 0.750, 3),
         }
         param_sweep(
-            fn_to_sweep=simulate,
+            simulate_fn=simulate,
             sweep_vals=sweep_vals,
             output_path=output_path,
         )

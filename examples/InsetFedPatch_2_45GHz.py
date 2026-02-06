@@ -14,15 +14,9 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     params = InsetPatchParams(
         resonant_freq=2.45e9,
         corner_freq=0.5e9,
-        num_points=1000,
         substrate_thickness_mm=1.6,
         substrate_eps_r=4.4,
         substrate_tand=0.001,
-        copper_thickness_mm=0.035,
-        end_criteria=1e-4,
-        timestep=190000,
-        mesh_resolution_factor=20,
-        metal_mesh_resolution_factor=40,
         charac_imp=50,
     )
 
@@ -117,7 +111,7 @@ def main():
             # "inset_width_mm": (0.148, 0.158, 3),
         }
         param_sweep(
-            fn_to_sweep=simulate,
+            simulate_fn=simulate,
             sweep_vals=sweep_vals,
             output_path=output_path,
         )
