@@ -1,19 +1,27 @@
-.. simpleEMS documentation master file, created by
-   sphinx-quickstart on Thu Jan  1 20:07:11 2026.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
 simpleEMS documentation
 =======================
-
-Add your content using ``reStructuredText`` syntax. See the
-`reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
-documentation for details.
-
+A short, friendly description of what your project does.
 
 .. toctree::
-   :maxdepth: 5
-   :caption: Contents:
+   :maxdepth: 2
+   :caption: User Guide
 
-   modules
+   user/installation
 
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference
+
+   api/simpleEMS
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Developer Guide
+
+   dev/contributing
+
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`

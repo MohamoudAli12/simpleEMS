@@ -4,25 +4,35 @@ from pathlib import Path
 from collections import namedtuple
 from collections.abc import Callable
 from dataclasses import fields
+from enum import Enum
+from itertools import product
+
+# ----------------------------
+import numpy as np
+from scipy.optimize import minimize
+
+# ----------------------------
+import matplotlib.pyplot as plt
+from matplotlib.ticker import EngFormatter
+import mplcursors
+import pyvista as pv
+from pyvistaqt import BackgroundPlotter
+
+# ----------------------------
 from openEMS.openEMS import openEMS
 from CSXCAD import ContinuousStructure
 from CSXCAD import AppCSXCAD_BIN
-import numpy as np
-import matplotlib.pyplot as plt
 from pysmithchart import S_PARAMETER
-from matplotlib.ticker import EngFormatter
-import pyvista as pv
-from pyvistaqt import BackgroundPlotter
-from PyQt6.QtCore import QCoreApplication
-from enum import Enum
 from skrf import Network
-from scipy.optimize import minimize
-from itertools import product
 from simpleEMS import export_gerber
 
+# ----------------------------
+from PyQt6.QtCore import QCoreApplication
+# ----------------------------
 
 freq_formatter = EngFormatter(unit="Hz", places=2)
 plt.rcParams["figure.constrained_layout.use"] = True
+plt.rcParams["savefig.dpi"] = 300
 
 
 class DumpType(Enum):
@@ -161,8 +171,9 @@ class SimUtils:
         """
         This method starts and runs the openEMS simulation.
 
-        Paramaters
+        Parameters
         ----------
+
         FDTD: object
             openEMS FDTD object.
         output_path: Path
@@ -177,6 +188,7 @@ class SimUtils:
 
         Parameters
         ----------
+
         FDTD: object
             openEMS FDTD object.
 
@@ -291,27 +303,29 @@ class SimUtils:
             This method does not return any value. It directly displays the plot.
         """
         s11 = 20.0 * np.log10(np.abs(s11))
-        plt.plot(freqs, s11, label=label)
+
         min_idx = np.nanargmin(s11)
+        lines = plt.plot(freqs, s11, label=label)
         plt.scatter(
             freqs[min_idx],
             s11[min_idx],
-            color="black",
-            label=f"Min S11 = {s11[min_idx]:.2f} at {freq_formatter(freqs[min_idx])}",
-        )
-        tar_idx = len(freqs) // 2
-        plt.scatter(
-            freqs[tar_idx],
-            s11[tar_idx],
             color="red",
-            label=f"Target S11 = {s11[tar_idx]:.2f} at {freq_formatter(freqs[tar_idx])} ",
+            label=f"Min S11 is {s11[min_idx]:.2f} dB found at {freq_formatter(freqs[min_idx])}",
         )
+        cursor = mplcursors.cursor(lines, multiple=True)
+
+        @cursor.connect("add")
+        def on_add(sel):
+            sel.annotation.set_text(
+                f"Freq={freq_formatter(sel.target[0])}\nS11={sel.target[1]:.2f} dB"
+            )
+
         plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.title(title)
         plt.grid(True)
-        plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+        plt.legend()
 
     @staticmethod
     def plot_vswr(
@@ -354,7 +368,7 @@ class SimUtils:
             This method does not return any value. It displays the VSWR plot.
         """
         plt.figure()
-        plt.plot(freqs, vswr, label=label)
+        lines = plt.plot(freqs, vswr, label=label)
         min_idx = np.nanargmin(vswr)
         plt.scatter(
             freqs[min_idx],
@@ -362,20 +376,19 @@ class SimUtils:
             color="red",
             label=f"Min VSWR = {vswr[min_idx]:.2f} found at {freq_formatter(freqs[min_idx])}",
         )
-        tar_idx = len(freqs) // 2
-        plt.scatter(
-            freqs[tar_idx],
-            vswr[tar_idx],
-            color="black",
-            label=f"VSWR is {vswr[tar_idx]:.2f} at target frequency {freq_formatter(freqs[tar_idx])}",
-        )
+        cursor = mplcursors.cursor(lines, multiple=True)
+
+        @cursor.connect("add")
+        def on_add(sel):
+            sel.annotation.set_text(
+                f"Freq={freq_formatter(sel.target[0])}\nVSWR={sel.target[1]:.2f}"
+            )
 
         plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.title(title)
         plt.grid(True)
-        plt.legend()
 
     @staticmethod
     def plot_impedance(
@@ -418,7 +431,7 @@ class SimUtils:
         z11_real = np.real(z11)
         z11_imag = np.imag(z11)
         plt.figure()
-        plt.plot(freqs, z11_real, label=f"Real Z11")
+        lines = plt.plot(freqs, z11_real, label=f"Real Z11")
         plt.plot(freqs, z11_imag, label=f"Imag Z11")
 
         tar_idx = len(freqs) // 2
@@ -428,6 +441,14 @@ class SimUtils:
             color="black",
             label=f"Z11 is {z11_real[tar_idx]:.0f}Ω at target frequency {freq_formatter(freqs[tar_idx])}",
         )
+        cursor = mplcursors.cursor(lines, multiple=True)
+
+        @cursor.connect("add")
+        def on_add(sel):
+            sel.annotation.set_text(
+                f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
+            )
+
         plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
         plt.xlabel(x_label)
         plt.ylabel(y_label)
@@ -480,7 +501,6 @@ class SimUtils:
             axes_impedance=charac_imp,
         )
         plt.plot(s11, datatype=S_PARAMETER, marker="", label=label)
-
         tar_idx = len(freqs) // 2
         plt.plot(
             s11[tar_idx],
@@ -488,6 +508,7 @@ class SimUtils:
             datatype=S_PARAMETER,
             label=f"S11 is {s11[tar_idx]:.2f} at target frequency {freq_formatter(freqs[tar_idx])}",
         )
+
         plt.title("Smith Chart - S11")
         plt.legend(loc="lower right", bbox_to_anchor=(1.5, 1.0))
 
@@ -540,12 +561,21 @@ class SimUtils:
         efield_norm = efield / np.max(efield)
         efield_norm_dB = 20 * np.log10(efield_norm)
 
-        ax.plot(
+        lines = ax.plot(
             np.deg2rad(theta),
             efield_norm_dB,
             linewidth=2,
             label="xz-plane",
         )
+
+        cursor = mplcursors.cursor(lines, multiple=True)
+
+        @cursor.connect("add")
+        def on_add(sel):
+            sel.annotation.set_text(
+                f"theta={np.rad2deg(sel.target[0]):.2f}°\ne_field = {sel.target[1]:.2f} dB"
+            )
+
         ax.grid(True)
         ax.set_xlabel("theta (deg)")
         ax.set_theta_zero_location("N")
@@ -568,12 +598,21 @@ class SimUtils:
         efield_norm = efield / np.max(efield)
         efield_norm_dB = 20 * np.log10(efield_norm)
 
-        ax.plot(
+        lines = ax.plot(
             np.deg2rad(phi),
             efield_norm_dB,
             linewidth=2,
             label="xy-plane",
         )
+
+        cursor = mplcursors.cursor(lines, multiple=True)
+
+        @cursor.connect("add")
+        def on_add(sel):
+            sel.annotation.set_text(
+                f"theta={np.rad2deg(sel.target[0]):.2f}°\n efield= {sel.target[1]:.2f} dB"
+            )
+
         ax.grid(True)
         ax.set_xlabel("phi (deg)")
         plt.suptitle(
@@ -613,7 +652,7 @@ class SimUtils:
                 "Please specify only one frequency and not array for directivity calculation"
             )
 
-        theta = np.arange(-180.0, 181.0, 2.0)
+        theta = np.arange(-180.0, 181.0, 0.1)
         print("Calculating Farfield Directivity.........")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
             output_path,
@@ -631,10 +670,11 @@ class SimUtils:
         e_field = np.squeeze(nf2ff_res_phi0.E_norm)
         e_field_norm = e_field / np.max(e_field)
         e_field_norm_db = 20 * np.log10(e_field_norm)
+
         max_directivity_db = 10.0 * np.log10(nf2ff_res_phi0.Dmax)
         directivity_dbi = e_field_norm_db + max_directivity_db
 
-        ax.plot(
+        lines = ax.plot(
             np.deg2rad(theta),
             directivity_dbi,
             linewidth=2,
@@ -644,9 +684,10 @@ class SimUtils:
         # ---- HPBW calculation ----
         peak_idx = np.argmax(directivity_dbi)
         peak_theta = theta[peak_idx]
+        peak_val = directivity_dbi[peak_idx]
 
         # Half-power level (−3 dB)
-        hpbw_level = -3.0
+        hpbw_level = peak_val - 3.0
         # Find −3 dB crossings
         left_idx = np.where(directivity_dbi[:peak_idx] <= hpbw_level)[0]
         right_idx = np.where(directivity_dbi[peak_idx:] <= hpbw_level)[0]
@@ -680,10 +721,10 @@ class SimUtils:
             linewidth=1,
         )
         # HPBW arc
-        hpbw_arc = np.linspace(left_theta, right_theta, 100)
+        hpbw_arc = np.linspace(left_theta, right_theta, 360)
         ax.plot(
             np.deg2rad(hpbw_arc),
-            directivity_dbi[left_idx[-1]] * np.ones_like(hpbw_arc),
+            hpbw_level * np.ones_like(hpbw_arc),
             "r",
             linewidth=2,
         )
@@ -691,7 +732,7 @@ class SimUtils:
         ax.text(
             1.0,
             0.1,
-            f"HPBW (3dB) = {hpbw}°\nMain Lobe Direction = {peak_theta}°\nMain Lobe Magnitude ={main_lobe_mag}dBi",
+            f"HPBW (3dB) = {hpbw:.2f}°\nMain Lobe Direction = {peak_theta:.2f}°\nMain Lobe Magnitude ={main_lobe_mag:.2f}dBi",
             transform=ax.transAxes,
             fontsize=12,
             color="black",
@@ -702,6 +743,15 @@ class SimUtils:
             f" Directivity at {freq_formatter(freq)}",
             fontsize=14,
         )
+
+        cursor = mplcursors.cursor(lines, multiple=True)
+
+        @cursor.connect("add")
+        def on_add(sel):
+            sel.annotation.set_text(
+                f"theta={np.rad2deg(sel.target[0]):.2f}°\nDirectivity = {sel.target[1]:.2f} dBi"
+            )
+
         ax.grid(True)
         ax.set_xlabel("theta (deg)")
         ax.set_theta_zero_location("N")
@@ -919,7 +969,7 @@ class SimUtils:
 
         power = np.squeeze(nf2ff_3d.P_rad)
 
-        power /= np.max(power)  # normalize
+        power = power / np.max(power)  # normalize
 
         power_db = 10 * np.log10(power)
 
@@ -964,13 +1014,13 @@ class SimUtils:
         file_format: str
             File format to save the plot (e.g., 'png', 'jpg', 'pdf').
 
-        Notes
-        -----
-        This method must be called after ``show_plots`` while all matplotlib plots are open
-
         Returns
         -------
             None
+
+        Notes
+        -----
+        This method must be called after ``show_plots`` while all matplotlib plots are open
         """
         plot_path = output_path / "plots"
         plot_path.mkdir(parents=True, exist_ok=True)
@@ -1115,7 +1165,6 @@ class SimUtils:
     def show_plots() -> None:
         """
         Display all generated plots.
-
         This method triggers the rendering of plots that have been created but not
         yet displayed.
 
@@ -1134,11 +1183,11 @@ class SimUtils:
     def print_and_save_params(params, output_path: Path) -> None:
         """
         Print and save the simulation parameters.
-
         This method prints the simulation paramaters to the terminal and saves them to text file.
 
-        Paramaters
+        Parameters
         ----------
+
         params: object
             parameter object that contains all simulation parmaters.
         output_path: Path
@@ -1245,7 +1294,7 @@ def param_sweep(
 ) -> None:
     """
     Perform a parameter sweep using a simulation function.
-    The function supports multiple parameter sweeps. The parameter sweep performed is cartesian sweep 
+    The function supports multiple parameter sweeps. The parameter sweep performed is cartesian sweep
     which can make the simulation take longer if supplied with multiple parameters.
 
     Parameters
@@ -1254,7 +1303,7 @@ def param_sweep(
         Simulation function to be invoked during the parameter sweep.
 
     sweep_vals : dict[str, tuple]
-        Dictionary defining the parameter sweep ranges. The sweep_vals should be a dictionary 
+        Dictionary defining the parameter sweep ranges. The sweep_vals should be a dictionary
         where the keys represent the parameter name and values are a tuple of (min_value, max_value, num_points)
         then numpy's linspace is used to generate the sweep values.
 

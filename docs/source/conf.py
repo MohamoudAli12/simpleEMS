@@ -21,8 +21,9 @@ extensions = [
     "sphinx.ext.todo",
     "sphinx.ext.mathjax",
     "sphinx.ext.autosummary",
-    "numpydoc",
+    "myst_parser",
 ]
+autosummary_generate = True
 
 templates_path = ["_templates"]
 exclude_patterns = []
@@ -44,7 +45,4 @@ html_theme_options = {
             "icon": "fab fa-github",
         }
     ],
-}
-html_sidebars = {
-    "**": ["sidebar-nav-bs.html"]
 }
