@@ -4,7 +4,7 @@ from .patch_antenna import (
     InsetPatchParams,
     ProbePatchParams,
 )
-from .sim_utils import DumpType, SimUtils, setup_simulation, optimize_s11, param_sweep
+from .sim_tools import DumpType, SimTools, setup_simulation, optimize_s11, param_sweep
 from .export_gerber import export_gerber
 
 __all__ = [
@@ -13,7 +13,7 @@ __all__ = [
     "InsetPatchParams",
     "ProbePatchParams",
     "DumpType",
-    "SimUtils",
+    "SimTools",
     "setup_simulation",
     "optimize_s11",
     "param_sweep",

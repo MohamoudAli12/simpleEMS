@@ -24,11 +24,28 @@ from CSXCAD import ContinuousStructure
 from CSXCAD import AppCSXCAD_BIN
 from pysmithchart import S_PARAMETER
 from skrf import Network
-from simpleEMS import export_gerber
+from simplems import export_gerber
 
 # ----------------------------
 from PyQt6.QtCore import QCoreApplication
+
 # ----------------------------
+# Public APIS
+# ----------------------------
+__all__ = [
+    "DumpType",
+    "SimTools",
+    "setup_simulation",
+    "optimize_s11",
+    "param_sweep",
+    "export_gerber",
+    "mm_to_m",
+    "m_to_mm",
+    "mil_to_mm",
+    "mm_to_mil",
+    "cm_to_mm",
+    "mm_to_cm",
+]
 
 freq_formatter = EngFormatter(unit="Hz", places=2)
 plt.rcParams["figure.constrained_layout.use"] = True
@@ -39,8 +56,9 @@ class DumpType(Enum):
     """
     Represents field and other dump types provided by openEMS.
 
-    Attributes
+    Parameters
     ----------
+
     efield_time: tuple[int, str]
         Electric field time-domain dump
     hfield_time: tuple[int, str]
@@ -65,6 +83,7 @@ class DumpType(Enum):
         10g averaging SAR frequency-domain dump
     raw_data: tuple[int, str]
         raw data needed for SAR calculations (electric field FD, cell volume, conductivity and density)
+
     """
 
     efield_time = (0, "Et")
@@ -111,7 +130,7 @@ def setup_simulation(
     return CSX, FDTD
 
 
-class SimUtils:
+class SimTools:
     """
     A collection of common utility functions for simulations.
     This class is not intended to be instantiated. It provides a
@@ -1333,19 +1352,19 @@ def param_sweep(
         sweep_path.mkdir(parents=True, exist_ok=True)
 
         network_params = simulate_fn(sweep_path, sweep, values)
-        SimUtils.plot_s11(
+        SimTools.plot_s11(
             network_params.freqs,
             network_params.s11,
             label=label,
         )
-    SimUtils.show_plots()
+    SimTools.show_plots()
 
 
 def mm_to_m(mm: float) -> float:
     """
     Converts millimeters to meters.
 
-    Paramaters
+    Parameters
     ----------
 
     mm: float
@@ -1353,6 +1372,7 @@ def mm_to_m(mm: float) -> float:
     Returns
     -------
     Value in meters
+
     """
     return mm / 1000.0
 
@@ -1361,14 +1381,15 @@ def m_to_mm(m: float) -> float:
     """
     Converts meters to millimeters.
 
-    Paramaters
+    Parameters
     ----------
 
     mm: float
         Value in meters
     Returns
-    -------
+    ------
     Value in millimeters
+
     """
     return m * 1000.0
 
@@ -1384,6 +1405,7 @@ def mil_to_mm(mil: float) -> float:
     Returns
     -------
     Value in millimeters
+
     """
     return mil * 0.0254
 
@@ -1399,6 +1421,7 @@ def mm_to_mil(mm: float) -> float:
     Returns
     -------
     Value in mils
+
     """
     return mm / 0.0254
 
@@ -1414,6 +1437,7 @@ def cm_to_mm(cm: float) -> float:
     Returns
     -------
     Value in millimeters
+
     """
     return cm * 10.0
 
@@ -1429,5 +1453,6 @@ def mm_to_cm(mm: float) -> float:
     Returns
     -------
     Value in centimeters
+
     """
     return mm / 10.0

@@ -2,7 +2,7 @@ from openEMS.physical_constants import C0
 import numpy as np
 from scipy.integrate import quad
 from typing import NamedTuple
-from .sim_utils import m_to_mm, mm_to_m
+from .sim_tools import m_to_mm, mm_to_m
 
 
 def phase_shift_length(

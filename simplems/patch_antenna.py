@@ -3,7 +3,17 @@ import warnings
 import numpy as np
 from .calc import microstrip_width_from_impedance, patch_dims, phase_shift_length
 from .sim_params import SimParams
-from .sim_utils import SimUtils, mm_to_m
+from .sim_tools import SimTools, mm_to_m
+
+# ----------------------------
+# Public APIS
+# ----------------------------
+__all__ = [
+    "InsetPatchParams",
+    "InsetFedPatchAntenna",
+    "ProbePatchParams",
+    "ProbeFedPatchAntenna",
+]
 
 
 @dataclass
@@ -74,7 +84,7 @@ class InsetPatchParams(SimParams):
         )
 
 
-class PatchAntenna(SimUtils):
+class PatchAntenna(SimTools):
     def __init__(self, params, CSX, FDTD):
         self.params = params
         self.CSX = CSX

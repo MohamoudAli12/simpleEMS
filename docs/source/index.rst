@@ -1,24 +1,21 @@
-simpleEMS documentation
+simplEMS documentation
 =======================
 A short, friendly description of what your project does.
 
 .. toctree::
    :maxdepth: 2
-   :caption: User Guide
 
-   user/installation
-
-.. toctree::
-   :maxdepth: 2
-   :caption: API Reference
-
-   api/simpleEMS
+   user/index
 
 .. toctree::
    :maxdepth: 2
-   :caption: Developer Guide
 
-   dev/contributing
+   api/index
+
+.. toctree::
+   :maxdepth: 2
+
+   dev/index
 
 Indices and tables
 ==================

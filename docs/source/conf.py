@@ -6,7 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "simpleEMS"
+project = "simplEMS"
 copyright = "%Y, Mohamoud Ali"
 author = "Mohamoud Ali"
 release = "0.1.0"
@@ -16,6 +16,8 @@ release = "0.1.0"
 
 extensions = [
     "sphinx.ext.autodoc",
+    'sphinx_automodapi.automodapi',
+    'sphinx_automodapi.smart_resolver',
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
     "sphinx.ext.todo",
@@ -24,7 +26,7 @@ extensions = [
     "myst_parser",
 ]
 autosummary_generate = True
-
+automodapi_toctreedirnm = 'api/build'
 templates_path = ["_templates"]
 exclude_patterns = []
 
