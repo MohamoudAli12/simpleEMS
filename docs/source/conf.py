@@ -6,7 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "simplEMS"
+project = "simplems"
 copyright = "%Y, Mohamoud Ali"
 author = "Mohamoud Ali"
 release = "0.1.0"
@@ -25,18 +25,14 @@ extensions = [
     "sphinx.ext.autosummary",
     "myst_parser",
 ]
-autosummary_generate = True
 automodapi_toctreedirnm = 'api/build'
 templates_path = ["_templates"]
-exclude_patterns = []
-
+html_static_path = ["_static"]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "pydata_sphinx_theme"
-# html_theme = "sphinx_rtd_theme"
-html_static_path = ["_static"]
 html_theme_options = {
     "navigation_depth": 3,
     "show_toc_level": 2,

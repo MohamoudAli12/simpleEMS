@@ -56,7 +56,7 @@ class DumpType(Enum):
     """
     Represents field and other dump types provided by openEMS.
 
-    Parameters
+    Attributes
     ----------
 
     efield_time: tuple[int, str]

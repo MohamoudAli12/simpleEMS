@@ -1,4 +1,4 @@
-simplEMS documentation
+simplems documentation
 =======================
 A short, friendly description of what your project does.
 
@@ -17,8 +17,8 @@ A short, friendly description of what your project does.
 
    dev/index
 
-Indices and tables
-==================
+Index
+=====
 
 * :ref:`genindex`
 * :ref:`modindex`
