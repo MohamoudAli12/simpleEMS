@@ -8,6 +8,9 @@ from enum import Enum
 from itertools import product
 
 # ----------------------------
+from .console import console
+
+# ----------------------------
 import numpy as np
 from scipy.optimize import minimize
 
@@ -24,7 +27,7 @@ from CSXCAD import ContinuousStructure
 from CSXCAD import AppCSXCAD_BIN
 from pysmithchart import S_PARAMETER
 from skrf import Network
-from simplems import export_gerber
+from .export_gerber import export_gerber
 
 # ----------------------------
 from PyQt6.QtCore import QCoreApplication
@@ -562,7 +565,7 @@ class SimTools:
             )
 
         theta = np.arange(-180.0, 181.0, 2.0)
-        print("Calculating 2D Radiation Pattern.........")
+        console.print("Calculating 2D Radiation Pattern.........", style="bright_cyan")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
             output_path,
             freq,
@@ -672,7 +675,7 @@ class SimTools:
             )
 
         theta = np.arange(-180.0, 181.0, 0.1)
-        print("Calculating Farfield Directivity.........")
+        console.print("Calculating Farfield Directivity.........", style = "bright_cyan")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
             output_path,
             freq,
@@ -809,7 +812,7 @@ class SimTools:
         theta = np.arange(0, 181, 2)  # elevation
         phi = np.arange(0, 361, 2)  # azimuth
 
-        print("Calculating 3D Pattern.........")
+        console.print("Calculating 3D Pattern.........", style = "bright_cyan")
         nf2ff_3d_result = nf2ff.CalcNF2FF(
             output_path,
             freq,
@@ -1052,7 +1055,7 @@ class SimTools:
             fig.set_size_inches(12, 6)
             file_path = plot_path / f"plot_{i + 1}.{file_format}"
             fig.savefig(file_path, format=file_format, dpi=300)
-            print(f"Plot {i + 1} saved as {file_path}")
+            console.print(f"Plot {i + 1} saved as {file_path}", syle="bright_cyan")
 
     @staticmethod
     def add_field_dump(
@@ -1174,7 +1177,7 @@ class SimTools:
         """
         gerber_path = output_path / "gerber"
         gerber_path.mkdir(parents=True, exist_ok=True)
-        export_gerber.export_gerber(
+        export_gerber(
             CSX=CSX,
             output_path=gerber_path,
             options=options,
@@ -1221,11 +1224,11 @@ class SimTools:
         params_path = output_path / "params"
         params_path.mkdir(parents=True, exist_ok=True)
         cls_name = params.__class__.__name__
-        print(f"{cls_name}:")
+        console.print(f"{cls_name}:", style="yellow")
         lines = []
         for field in fields(params):
             value = getattr(params, field.name)
-            print(f"  {field.name}: {value}")
+            console.print(f"  [field]{field.name}:[/field] [value]{value}[/value]")
             lines.append(f"  {field.name}: {value}\n")
         with open(params_path / "params.txt", "w") as file:
             file.write(f"{cls_name}:\n")
@@ -1260,9 +1263,9 @@ def optimize_s11(
     None
         This function does not return any value.
     """
-    print("-------------------------------------")
-    print("Running Optimization")
-    print("-------------------------------------")
+    console.print("-------------------------------------", style="green")
+    console.print("Running Optimization", style="green")
+    console.print("-------------------------------------", style="green")
     x0_values = list(x0.values())
     x0_keys = list(x0.keys())
 
@@ -1337,9 +1340,9 @@ def param_sweep(
     None
         This function does not return any value.
     """
-    print("*************************************")
-    print("Running Parameter Sweep")
-    print("*************************************")
+    console.print("-------------------------------------", style="green")
+    console.print("Running Parameter Sweep", style="green")
+    console.print("-------------------------------------", style="green")
 
     sweep_values = {key: np.linspace(*val).tolist() for key, val in sweep_vals.items()}
     cartesian_sweep = list(product(*sweep_values.values()))

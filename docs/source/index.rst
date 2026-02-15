@@ -1,5 +1,5 @@
 simplems documentation
-=======================
+======================
 A short, friendly description of what your project does.
 
 .. toctree::

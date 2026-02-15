@@ -5,7 +5,6 @@ from .patch_antenna import (
     ProbePatchParams,
 )
 from .sim_tools import DumpType, SimTools, setup_simulation, optimize_s11, param_sweep
-from .export_gerber import export_gerber
 
 __all__ = [
     "InsetFedPatchAntenna",
@@ -17,7 +16,6 @@ __all__ = [
     "setup_simulation",
     "optimize_s11",
     "param_sweep",
-    "export_gerber",
 ]
 
 __version__ = "0.1.0"

@@ -16,8 +16,8 @@ release = "0.1.0"
 
 extensions = [
     "sphinx.ext.autodoc",
-    'sphinx_automodapi.automodapi',
-    'sphinx_automodapi.smart_resolver',
+    "sphinx_automodapi.automodapi",
+    "sphinx_automodapi.smart_resolver",
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
     "sphinx.ext.todo",
@@ -25,7 +25,12 @@ extensions = [
     "sphinx.ext.autosummary",
     "myst_parser",
 ]
-automodapi_toctreedirnm = 'api/build'
+autosummary_generate = True
+
+autodoc_member_order = 'bysource'
+
+automodapi_toctreedirnm = "api/build"
+
 templates_path = ["_templates"]
 html_static_path = ["_static"]
 

@@ -191,11 +191,11 @@ def export_gerber(CSX, output_path, options=None):
 
     with open(filename, "w") as file:
         # Gerber header
-        file.write("G04 gerber RS274X-file exported by simpleEMS*\n")
+        file.write("G04 gerber RS274X-file exported by simplems*\n")
         file.write("G04 Author : Mohamoud Ali*\n")
         file.write("%FSLAX66Y66*%\n")
         file.write("%MOMM*%\n")
-        file.write("%INsimpleEMS export*%\n")
+        file.write("%INsimplems export*%\n")
         file.write("%ADD10C,0.00100*%\n")
 
         all_props = CSX.GetAllProperties()

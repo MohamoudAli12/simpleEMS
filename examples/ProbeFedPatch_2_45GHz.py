@@ -28,7 +28,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.patch_length_mm = optimize_val[0]
         params.patch_width_mm = optimize_val[1]
 
-    params.probe_pos = np.round(params.probe_pos - 7, params.fp_precision)
+    params.probe_pos_mm = np.round(params.probe_pos_mm - 7, params.fp_precision)
     params.patch_length_mm = np.round(
         params.patch_length_mm - 1.14, params.fp_precision
     )
