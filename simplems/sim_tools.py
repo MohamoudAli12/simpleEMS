@@ -135,7 +135,7 @@ def setup_simulation(
 
 class SimTools:
     """
-    A collection of common utility functions for simulations.
+    A collection of common tools and functions for simulations.
     This class is not intended to be instantiated. It provides a
     namespace for common simulation utilities and function.
 
@@ -160,7 +160,7 @@ class SimTools:
                 "output path does not exist. Make sure to provide valid output path."
             )
         structure_3d = output_path / "structure.xml"
-        CSX.Write2XML(structure_3d)
+        CSX.Write2XML(str(structure_3d)) #str in this fixes an error encountered on Windows.
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)
 
     @staticmethod
@@ -632,7 +632,7 @@ class SimTools:
         @cursor.connect("add")
         def on_add(sel):
             sel.annotation.set_text(
-                f"theta={np.rad2deg(sel.target[0]):.2f}°\n efield= {sel.target[1]:.2f} dB"
+                f"phi={np.rad2deg(sel.target[0]):.2f}°\n efield= {sel.target[1]:.2f} dB"
             )
 
         ax.grid(True)
@@ -1025,7 +1025,7 @@ class SimTools:
     @staticmethod
     def save_plots(output_path: Path, file_format: str = "png") -> None:
         """
-        Save all currently open plots with unique filenames to a specified output path.
+        Save all currently open plots to a specified output path.
 
         Parameters
         ----------
@@ -1042,7 +1042,8 @@ class SimTools:
 
         Notes
         -----
-        This method must be called after ``show_plots`` while all matplotlib plots are open
+        This method must be called after ``show_plots`` while all matplotlib plots are open. 
+        This will not save any annotations on the plots. use the manual `save` button to save annotations. 
         """
         plot_path = output_path / "plots"
         plot_path.mkdir(parents=True, exist_ok=True)
@@ -1050,12 +1051,12 @@ class SimTools:
         figures = plt.get_fignums()
 
         for i, fig_num in enumerate(figures):
-            fig = plt.figure(fig_num)
+            fig = plt.figure(fig_numma)
             fig = plt.gcf()  # Get the current figure
             fig.set_size_inches(12, 6)
             file_path = plot_path / f"plot_{i + 1}.{file_format}"
             fig.savefig(file_path, format=file_format, dpi=300)
-            console.print(f"Plot {i + 1} saved as {file_path}", syle="bright_cyan")
+            console.print(f"Plot {i + 1} saved as {file_path}", style="bright_cyan")
 
     @staticmethod
     def add_field_dump(
@@ -1138,6 +1139,7 @@ class SimTools:
             This method does not return any value.
 
         """
+        #TODO using skrf for touchstone is overkill. use manual export based on touchstone format. add support for s2p.
         touchstone_path = output_path / "touchstone"
         touchstone_path.mkdir(parents=True, exist_ok=True)
         ntwk = Network(

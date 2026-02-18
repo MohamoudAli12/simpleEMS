@@ -565,8 +565,8 @@ class ProbeFedPatchAntenna(PatchAntenna):
             and impedance results after the simulation.
         """
 
-        port_start = [1, self.params.probe_pos, 0]
-        port_stop = [0, self.params.probe_pos, self.params.substrate_thickness_mm]
+        port_start = [1, self.params.probe_pos_mm, 0]
+        port_stop = [0, self.params.probe_pos_mm, self.params.substrate_thickness_mm]
         port = self.FDTD.AddLumpedPort(
             1,
             self.params.charac_imp,

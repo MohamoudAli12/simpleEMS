@@ -1,4 +1,5 @@
-import math
+import numpy as np
+from .console import console
 
 drawing_unit = None
 coord_system = None
@@ -17,8 +18,8 @@ def gerber_coord(v, prim_type=None):
     # -------------------------------------------------------
     if coord_system == 1 and prim_type == "CSPrimCylinder":  # cylindrical
         r, a = v[0], v[1]
-        x = r * math.cos(a)
-        y = r * math.sin(a)
+        x = r * np.cos(a)
+        y = r * np.sin(a)
     else:  # Cartesian
         x = v[0]
         y = v[1]
@@ -101,23 +102,23 @@ def primitive_polygon(
         print("Skipping polygon: normal direction is not +Z")
         return
 
-    xs, ys = poly.GetCoords()
+    x0, x1 = poly.GetCoords()
 
-    if len(xs) < 3:
+    if len(x0) < 3:
         print("Skipping polygon: not enough points")
         return
 
     file.write("G36*\n")
 
     # Move to first vertex
-    file.write(gerber_coord((xs[0], ys[0])) + "D02*\n")
+    file.write(gerber_coord((x0[0], x1[0])) + "D02*\n")
 
     # Draw edges
-    for x, y in zip(xs[1:], ys[1:]):
+    for x, y in zip(x0[1:], x1[1:]):
         file.write(gerber_coord((x, y)) + "D01*\n")
 
     # Close polygon explicitly
-    file.write(gerber_coord((xs[0], ys[0])) + "D01*\n")
+    file.write(gerber_coord((x0[0], x1[0])) + "D01*\n")
     file.write("G37*\n")
 
 
@@ -130,7 +131,7 @@ def process_primitives(file, prop_list, options):
     for prop in prop_list:
         name = prop.GetName()
         if name in ignore:
-            print(f"omitting {name}")
+            console.print(f"omitting {name}")
             continue
 
         # Material filtering: skip if no Kappa
@@ -138,13 +139,13 @@ def process_primitives(file, prop_list, options):
         #     print(f"omitting {name} ")
         #     continue
 
-        print(f"processing {name}")
+        console.print(f"processing {name}")
         file.write(f"%LN{name}*%\n")
 
         # primitives
         primitives = prop.GetAllPrimitives()
         if not primitives:
-            print("  no primitives found")
+            console.print("  no primitives found")
             break
 
         for prim in primitives:
@@ -180,9 +181,9 @@ def export_gerber(CSX, output_path, options=None):
     Export openEMS CSX geometry to Gerber RS-274X (XY-plane only).
     """
     global drawing_unit, coord_system
-    print("-------------------------------------------")
-    print("Exporting Geometry to Gerber")
-    print("-------------------------------------------")
+    console.print("-------------------------------------------")
+    console.print("Exporting Geometry to Gerber")
+    console.print("-------------------------------------------")
     grid = CSX.GetGrid()
 
     drawing_unit = grid.GetDeltaUnit()

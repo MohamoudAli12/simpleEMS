@@ -60,7 +60,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return s11[idx]
 
     if not (sweep or optimize):
-        # patch.run_simulation(FDTD, output_path)
+        patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(port, params, output_path)
         nf2ff_3d_result = patch.compute_nf2ff_3d(
             nf2ff, params.resonant_freq, output_path
