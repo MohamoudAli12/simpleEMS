@@ -1,9 +1,9 @@
 [project]
 name = "simplems"
 version = "0.1.0"
-description = "simplEMS is a framework built on top of openEMS to make design and simulation of antennas and other microwave structures easier"
+description = "simplems is a framework built on top of openEMS to make design and simulation of antennas and other microwave structures simpler"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.13"
 dependencies = [
     "h5py>=3.15.1",
@@ -11,9 +11,10 @@ dependencies = [
     "mplcursors>=0.7",
     "numpy>=2.4.0",
     "pyqt6>=6.10.1",
-    "pysmithchart>=0.4.1",
+    "pysmithchart==0.4.1",
     "pyvista>=0.46.4",
     "pyvistaqt>=0.11.3",
+    "rich>=14.3.3",
     "scikit-rf>=1.9.0",
     "scipy>=1.16.3",
 ]

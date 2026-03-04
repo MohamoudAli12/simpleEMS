@@ -1,7 +1,3 @@
-- Add fielddump
-- Add touchstone
-- Add optimizer
-- Gerber export port openems matlab to python
-
+- Gerber export layer by layer. implement layering system
 
 

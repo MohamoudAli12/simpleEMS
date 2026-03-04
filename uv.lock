@@ -826,16 +826,16 @@ wheels = [
 
 [[package]]
 name = "pysmithchart"
-version = "0.9.0"
+version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/18/17/4781ddbdd8ce027bda9ef02fce1a350211cb3456df2419790de4d86852da/pysmithchart-0.9.0.tar.gz", hash = "sha256:8811610e2f83ed44799eaee3b22cae18f102989db949935b291a846b6c3a5203", size = 117396, upload-time = "2026-01-29T04:28:09.029Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/4d/f3a94dc0714a4e510db3cefc5f0907068e7e2ac60d671edb0f67a12350d7/pysmithchart-0.4.1.tar.gz", hash = "sha256:f7de6e4d6a511ba2aa78227deedc1c55e9e38ce58dea2d5d530fceea6ec53dea", size = 86896, upload-time = "2025-11-24T17:32:48.749Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/49/7a1cdf98cd067e5390f16bf0855e32fd1c016c77d8d9770c3ae95d5e57b6/pysmithchart-0.9.0-py3-none-any.whl", hash = "sha256:ae82bd88c541309013ca554b083cc17d74c673aacae78a4ac99e2d4977b2b7d0", size = 53157, upload-time = "2026-01-29T04:28:07.86Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/e0/748ecb5c6e1dcee309b25c3ff6d13ef691d4694b5e3ee1a7ad2caaca5ac6/pysmithchart-0.4.1-py3-none-any.whl", hash = "sha256:b04ec17ac8543c0b330e10f1bfddfdb0791d5f91c293849b1cc70e94dcf44a58", size = 31908, upload-time = "2025-11-24T17:32:47.605Z" },
 ]
 
 [[package]]
@@ -945,6 +945,19 @@ wheels = [
 ]
 
 [[package]]
+name = "rich"
+version = "14.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+    { name = "pygments" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b3/c6/f3b320c27991c46f43ee9d856302c70dc2d0fb2dba4842ff739d5f46b393/rich-14.3.3.tar.gz", hash = "sha256:b8daa0b9e4eef54dd8cf7c86c03713f53241884e814f4e2f5fb342fe520f639b", size = 230582, upload-time = "2026-02-19T17:23:12.474Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/25/b208c5683343959b670dc001595f2f3737e051da617f66c31f7c4fa93abc/rich-14.3.3-py3-none-any.whl", hash = "sha256:793431c1f8619afa7d3b52b2cdec859562b950ea0d4b6b505397612db8d5362d", size = 310458, upload-time = "2026-02-19T17:23:13.732Z" },
+]
+
+[[package]]
 name = "roman-numerals"
 version = "4.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1042,6 +1055,7 @@ dependencies = [
     { name = "pysmithchart" },
     { name = "pyvista" },
     { name = "pyvistaqt" },
+    { name = "rich" },
     { name = "scikit-rf" },
     { name = "scipy" },
 ]
@@ -1062,9 +1076,10 @@ requires-dist = [
     { name = "mplcursors", specifier = ">=0.7" },
     { name = "numpy", specifier = ">=2.4.0" },
     { name = "pyqt6", specifier = ">=6.10.1" },
-    { name = "pysmithchart", specifier = ">=0.4.1" },
+    { name = "pysmithchart", specifier = "==0.4.1" },
     { name = "pyvista", specifier = ">=0.46.4" },
     { name = "pyvistaqt", specifier = ">=0.11.3" },
+    { name = "rich", specifier = ">=14.3.3" },
     { name = "scikit-rf", specifier = ">=1.9.0" },
     { name = "scipy", specifier = ">=1.16.3" },
 ]

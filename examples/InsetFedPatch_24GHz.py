@@ -12,14 +12,13 @@ from simplems import (
 
 def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_val=[]):
     params = InsetPatchParams(
-        resonant_freq=60e9,  # Hz
-        corner_freq=3e9,  # Hz
-        substrate_thickness_mm=0.125,  # mm
-        substrate_eps_r=3.00,
-        substrate_tand=0.001,
+        resonant_freq=24.125e9,  # Hz
+        corner_freq=2e9,  # Hz
+        substrate_thickness_mm=0.254,  # mm
+        substrate_eps_r=3.48,
+        substrate_tand=0.0037,
         charac_imp=50.0,
         end_criteria=1e-5,
-        mesh_resolution_factor=20,
         metal_mesh_resolution_factor=50,
     )
 
@@ -34,10 +33,11 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.patch_width_mm = optimize_val[3]
 
     # parameters values after optimization
-    params.inset_length_mm = 0.489096
-    params.inset_width_mm = 0.156097
-    params.patch_length_mm = 1.378419
-    params.patch_width_mm = 1.74283
+    params.patch_length_mm = 3.15
+    params.patch_width_mm = 3.26
+    params.inset_length_mm = 1.075
+    params.inset_width_mm = 0.475
+    params.feed_width_mm = 0.275
 
     CSX, FDTD = setup_simulation(params)
 
@@ -51,7 +51,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    # patch.write_and_show_structure(CSX, output_path)
+    patch.write_and_show_structure(CSX, output_path)
     network_params = None
 
     if sweep:
@@ -69,7 +69,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return s11[idx]
 
     if not (sweep or optimize):
-        patch.run_simulation(FDTD, output_path)
+        # patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(port, params, output_path)
         nf2ff_3d_result = patch.compute_nf2ff_3d(
             nf2ff, params.resonant_freq, output_path
@@ -88,10 +88,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             output_path,
         )
         patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
-        patch.show_plots()
         patch.save_plots(output_path)
+        patch.show_plots()
+        # patch.export_touchstone(network_params, output_path, params.charac_imp)
         patch.export_stl(output_path)
-        patch.export_touchstone(network_params, output_path, params.charac_imp)
         patch.export_gerber(
             CSX,
             output_path,
@@ -131,3 +131,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
