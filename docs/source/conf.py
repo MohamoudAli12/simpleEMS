@@ -6,7 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "simplems"
+project = "simpleEMS"
 copyright = "%Y, Mohamoud Ali"
 author = "Mohamoud Ali"
 release = "0.1.0"
@@ -25,7 +25,6 @@ extensions = [
     "sphinx.ext.autosummary",
     "myst_parser",
 ]
-autosummary_generate = True
 
 autodoc_member_order = 'bysource'
 

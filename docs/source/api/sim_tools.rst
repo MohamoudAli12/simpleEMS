@@ -2,6 +2,6 @@ Simulation Tools
 ================
 Helpful functions 
 
-.. automodapi:: simplems.sim_tools
+.. automodapi:: simpleEMS.sim_tools
    :no-inheritance-diagram:
 

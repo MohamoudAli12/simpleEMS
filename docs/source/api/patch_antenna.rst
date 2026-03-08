@@ -1,5 +1,6 @@
 Patch Antennas
-=================
+==============
 
-.. automodapi:: simplems.patch_antenna
+.. automodapi:: simpleEMS.patch_antenna
    :no-inheritance-diagram:
+   :inherited-members:

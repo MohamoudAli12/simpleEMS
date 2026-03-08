@@ -1,4 +1,4 @@
-# simplems
+# simpleEMS
 # Copyright (C) 2026 Mohamoud Ali
 #
 # This program is free software: you can redistribute it and/or modify

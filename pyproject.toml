@@ -1,7 +1,7 @@
 [project]
-name = "simplems"
+name = "simpleEMS"
 version = "0.1.0"
-description = "simplems is a framework built on top of openEMS to make design and simulation of antennas and other microwave structures simpler"
+description = "simpleEMS is a framework built on top of openEMS to make design and simulation of antennas and other microwave structures simpler"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.13"

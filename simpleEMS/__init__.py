@@ -1,4 +1,4 @@
-# simplems
+# simpleEMS
 # Copyright (C) 2026 Mohamoud Ali
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,31 +14,26 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from rich.console import Console
-from rich.theme import Theme
+from .patch_antenna import (
+    InsetFedPatchAntenna,
+    ProbeFedPatchAntenna,
+    InsetPatchParams,
+    ProbePatchParams,
+)
+from .sim_tools import DumpType, SimTools, setup_simulation, optimize_s11, param_sweep
 
-color_theme = Theme({
-    "black": "black",
-    "red": "red",
-    "green": "green",
-    "yellow": "yellow",
-    "blue": "blue",
-    "magenta": "magenta",
-    "cyan": "cyan",
-    "white": "white",
+__all__ = [
+    "InsetFedPatchAntenna",
+    "ProbeFedPatchAntenna",
+    "InsetPatchParams",
+    "ProbePatchParams",
+    "DumpType",
+    "SimTools",
+    "setup_simulation",
+    "optimize_s11",
+    "param_sweep",
+]
 
-    "bright_red": "bright_red",
-    "bright_green": "bright_green",
-    "bright_yellow": "bright_yellow",
-    "bright_blue": "bright_blue",
-    "bright_magenta": "bright_magenta",
-    "bright_cyan": "bright_cyan",
-
-    "class_name": "yellow",
-    "warning": "magenta",
-    "field": "cyan",
-    "value": "green",
-})
-
-console = Console(theme=color_theme)
-
+__version__ = "0.1.0"
+__author__ = "Mohamoud Ali"
+__license__ = "GPL-3.0-or-later"
