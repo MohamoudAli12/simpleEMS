@@ -42,7 +42,7 @@ class InsetPatchParams(SimParams):
 
     Parameters
     ----------
-    ang_length : int, optional
+    ang_length_deg : int, optional
         Electrical length (in degrees) used to compute the feed phase
         shift length. Default is 90.
 
@@ -69,7 +69,7 @@ class InsetPatchParams(SimParams):
         size: ``[x_size_mm, y_size_mm, z_size_mm]``.
     """
 
-    ang_length: int = 90
+    ang_length_deg: int = 90
     patch_length_mm: float = field(init=False)
     patch_width_mm: float = field(init=False)
     inset_length_mm: float = field(init=False)
@@ -93,7 +93,7 @@ class InsetPatchParams(SimParams):
 
         self.feed_length_mm = np.round(
             phase_shift_length(
-                self.ang_length, self.substrate_eps_r, self.resonant_freq
+                self.ang_length_deg, self.substrate_eps_r, self.resonant_freq
             ),
             self.fp_precision,
         )
@@ -612,7 +612,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
         mesh = self.CSX.GetGrid()
         mesh.SetDeltaUnit(self.params.unit)
 
-        mesh.AddLine("y", self.params.probe_pos)
+        mesh.AddLine("y", self.params.probe_pos_mm)
         mesh.AddLine(
             "x",
             np.linspace(

@@ -121,7 +121,7 @@ class DumpType(Enum):
 
 def setup_simulation(
     params,
-    boundary_cond: list[str] = ["MUR", "MUR", "MUR", "MUR", "MUR", "MUR"],
+    boundary_cond: list[str] = ["PML_8", "PML_8", "PML_8", "PML_8", "PML_8", "PML_8"],
 ):
     """
     Sets up the openEMS simulation.
@@ -176,7 +176,9 @@ class SimTools:
                 "output path does not exist. Make sure to provide valid output path."
             )
         structure_3d = output_path / "structure.xml"
-        CSX.Write2XML(str(structure_3d)) #str in this fixes an error encountered on Windows.
+        CSX.Write2XML(
+            str(structure_3d)
+        )  # str in this fixes an error encountered on Windows.
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)
 
     @staticmethod
@@ -581,7 +583,7 @@ class SimTools:
             )
 
         theta = np.arange(-180.0, 181.0, 2.0)
-        console.print("Calculating 2D Radiation Pattern.........", style="bright_cyan")
+        console.print("Calculating 2D Radiation Pattern.........", style="info")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
             output_path,
             freq,
@@ -691,7 +693,7 @@ class SimTools:
             )
 
         theta = np.arange(-180.0, 181.0, 0.1)
-        console.print("Calculating Farfield Directivity.........", style = "bright_cyan")
+        console.print("Calculating Farfield Directivity.........", style="info")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
             output_path,
             freq,
@@ -828,7 +830,7 @@ class SimTools:
         theta = np.arange(0, 181, 2)  # elevation
         phi = np.arange(0, 361, 2)  # azimuth
 
-        console.print("Calculating 3D Pattern.........", style = "bright_cyan")
+        console.print("Calculating 3D Radiation Pattern.........", style="info")
         nf2ff_3d_result = nf2ff.CalcNF2FF(
             output_path,
             freq,
@@ -912,7 +914,9 @@ class SimTools:
         )
 
     @staticmethod
-    def plot_3d_gain(nf2ff_3d, freq, input_power, output_path):
+    def plot_3d_gain(
+        nf2ff_3d, freq: float, input_power: float, output_path: Path
+    ) -> None:
         """
         Plot the 3D gain pattern of an antenna at a specified frequency.
 
@@ -1058,8 +1062,9 @@ class SimTools:
 
         Notes
         -----
-        This method must be called after ``show_plots`` while all matplotlib plots are open. 
-        This will not save any annotations on the plots. use the manual `save` button to save annotations. 
+        #TODO : confirm below statement
+        This method must be called after ``show_plots`` while all matplotlib plots are open.
+        This will not save any annotations on the plots. use the manual `save` button to save annotations.
         """
         plot_path = output_path / "plots"
         plot_path.mkdir(parents=True, exist_ok=True)
@@ -1072,7 +1077,7 @@ class SimTools:
             fig.set_size_inches(12, 6)
             file_path = plot_path / f"plot_{i + 1}.{file_format}"
             fig.savefig(file_path, format=file_format, dpi=300)
-            console.print(f"Plot {i + 1} saved as {file_path}", style="bright_cyan")
+            console.print(f"Plot {i + 1} saved as {file_path}", style="info")
 
     @staticmethod
     def add_field_dump(
@@ -1155,7 +1160,7 @@ class SimTools:
             This method does not return any value.
 
         """
-        #TODO using skrf for touchstone is overkill. use manual export based on touchstone format. add support for s2p.
+        # TODO using skrf for touchstone is overkill. use manual export based on touchstone format. add support for s2p.
         touchstone_path = output_path / "touchstone"
         touchstone_path.mkdir(parents=True, exist_ok=True)
         ntwk = Network(
@@ -1242,7 +1247,7 @@ class SimTools:
         params_path = output_path / "params"
         params_path.mkdir(parents=True, exist_ok=True)
         cls_name = params.__class__.__name__
-        console.print(f"{cls_name}:", style="yellow")
+        console.print(f"{cls_name}:", style="class_name")
         lines = []
         for field in fields(params):
             value = getattr(params, field.name)
@@ -1281,9 +1286,9 @@ def optimize_s11(
     None
         This function does not return any value.
     """
-    console.print("-------------------------------------", style="green")
-    console.print("Running Optimization", style="green")
-    console.print("-------------------------------------", style="green")
+    console.print("-------------------------------------", style="info")
+    console.print("Running Optimization", style="info")
+    console.print("-------------------------------------", style="info")
     x0_values = list(x0.values())
     x0_keys = list(x0.keys())
 
@@ -1358,9 +1363,9 @@ def param_sweep(
     None
         This function does not return any value.
     """
-    console.print("-------------------------------------", style="green")
-    console.print("Running Parameter Sweep", style="green")
-    console.print("-------------------------------------", style="green")
+    console.print("-------------------------------------", style="info")
+    console.print("Running Parameter Sweep", style="info")
+    console.print("-------------------------------------", style="info")
 
     sweep_values = {key: np.linspace(*val).tolist() for key, val in sweep_vals.items()}
     cartesian_sweep = list(product(*sweep_values.values()))

@@ -35,9 +35,10 @@ color_theme = Theme({
     "bright_cyan": "bright_cyan",
 
     "class_name": "yellow",
-    "warning": "magenta",
+    "warning": "bright_red",
     "field": "cyan",
     "value": "green",
+    "info":"green"
 })
 
 console = Console(theme=color_theme)

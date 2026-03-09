@@ -71,7 +71,7 @@ class SimParams:
 
     metal_mesh_resolution_factor : float, optional
         Division factor used to compute the metal primitives mesh resolution
-        (``lambda0 / factor``). Default is ``40``.
+        (``lambda0 / factor``). Default is ``60``.
 
 
     Attributes
@@ -111,7 +111,7 @@ class SimParams:
     timestep: int = 1000000
     end_criteria: float = 1e-4
     mesh_resolution_factor: int = 20
-    metal_mesh_resolution_factor: int = 40
+    metal_mesh_resolution_factor: int = 60
 
     substrate_kappa: float = field(init=False)
     lambda0: float = field(init=False)
