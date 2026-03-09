@@ -19,9 +19,14 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_tand=0.0037,
         charac_imp=50.0,
         end_criteria=1e-5,
-        metal_mesh_resolution_factor=50,
     )
 
+    params.patch_length_mm = 3.15
+    params.patch_width_mm = 3.26
+    params.inset_length_mm = 1.075
+    params.inset_width_mm = 0.475
+    params.feed_width_mm = 0.275
+    params.substrate_width_mm = 10
     if sweep:
         params.inset_length_mm = sweep_val[0]
         params.inset_width_mm = sweep_val[1]
@@ -32,12 +37,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.patch_length_mm = optimize_val[2]
         params.patch_width_mm = optimize_val[3]
 
-    # parameters values after optimization
-    params.patch_length_mm = 3.15
-    params.patch_width_mm = 3.26
-    params.inset_length_mm = 1.075
-    params.inset_width_mm = 0.475
-    params.feed_width_mm = 0.275
 
     CSX, FDTD = setup_simulation(params)
 
@@ -69,7 +68,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return s11[idx]
 
     if not (sweep or optimize):
-        # patch.run_simulation(FDTD, output_path)
+        patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(port, params, output_path)
         nf2ff_3d_result = patch.compute_nf2ff_3d(
             nf2ff, params.resonant_freq, output_path
@@ -90,7 +89,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
         patch.save_plots(output_path)
         patch.show_plots()
-        # patch.export_touchstone(network_params, output_path, params.charac_imp)
+        patch.export_touchstone(network_params, output_path, params.charac_imp)
         patch.export_stl(output_path)
         patch.export_gerber(
             CSX,
