@@ -20,23 +20,14 @@ import numpy as np
 from .console import console
 
 
-def gerber_coord(v, coord_system=0, prim_type=None):
+def gerber_coord(vertices_xy_pos):
     """
     Convert a 2D or cylindrical coordinate into Gerber RS-274X format.
     Uses global drawingunit and CoordSystem.
     Returns a string like 'X+000001234567Y+000005678901'.
     """
-
-    # -------------------------------------------------------
-    # Convert coordinates depending on coordinate system
-    # -------------------------------------------------------
-    if coord_system == 1 and prim_type == "CSPrimCylinder":  # cylindrical
-        r, a = v[0], v[1]
-        x = r * np.cos(a)
-        y = r * np.sin(a)
-    else:  # Cartesian
-        x = v[0]
-        y = v[1]
+    x = vertices_xy_pos[0]
+    y = vertices_xy_pos[1]
 
     # -------------------------------------------------------
     # Convert to integer Gerber units
@@ -77,22 +68,6 @@ def primitive_box(file, box):
     file.write("G37*\n")
 
 
-def primitive_cylinder(file, cyl, coord_system):
-    start = cyl.GetStart()
-    stop = cyl.GetStop()
-    radius = cyl.GetRadius()
-
-    # Only circular projection in XY-plane
-    if start == stop:
-        file.write(f"%ADD10C,{radius * 2 * 1e3:.6f}*%\n")
-        file.write("G54D10*\n")
-        file.write(
-            gerber_coord(start, coord_system, prim_type="CSPrimCylinder") + "D03*\n"
-        )
-    else:
-        print("Skipping cylinder: projection is not circular")
-
-
 def primitive_polygon(file, poly):
     # Only export XY-plane polygons (+Z normal)
     if poly.GetNormDir() != 2:
@@ -122,7 +97,7 @@ def primitive_polygon(file, poly):
 # ---------------------------------------------------------------------
 # Process CSX properties
 # ---------------------------------------------------------------------
-def process_primitives(file, coord_system, prop_list, options):
+def process_primitives(file,  prop_list, options):
     ignore = options.get("ignore", [])
 
     for prop in prop_list:
@@ -150,8 +125,6 @@ def process_primitives(file, coord_system, prop_list, options):
 
             if cls == "CSPrimBox":
                 primitive_box(file, prim)
-            elif cls == "CSPrimCylinder":
-                primitive_cylinder(file, prim, coord_system)
             elif cls == "CSPrimPoly":
                 primitive_polygon(file, prim)
             elif cls == "CSPrimLinPoly":
@@ -194,6 +167,6 @@ def export_gerber(CSX, output_path, options=None):
                 metals.append(prob)
 
         if metals:
-            process_primitives(file, coord_system, metals, options)
+            process_primitives(file,  metals, options)
 
         file.write("M02*\n")
