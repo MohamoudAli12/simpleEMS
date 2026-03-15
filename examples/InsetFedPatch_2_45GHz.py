@@ -108,7 +108,7 @@ def main():
     if sweep:
         sweep_vals = {
             "inset_length_mm": (0.533, 0.750, 3),
-            # "inset_width_mm": (0.148, 0.158, 3),
+            "inset_width_mm": (0.148, 0.158, 3),
         }
         param_sweep(
             simulate_fn=simulate,
