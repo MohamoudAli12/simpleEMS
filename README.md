@@ -49,7 +49,7 @@ empowering engineers to work on more complex projects without the constraints of
 
 ## Demo
 Below is a design of 2.45GHz Inset-Fed patch antenna
-```
+```python
 #!/usr/bin/env python3
 from pathlib import Path
 from simpleEMS import (
