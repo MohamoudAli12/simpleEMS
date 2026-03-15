@@ -2,6 +2,7 @@
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL_v3_or_later-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![PyPI Version](https://img.shields.io/pypi/v/project-name.svg)](https://pypi.org/project/project-name/)
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
+
 simpleEMS is a python library built on top of [openEMS](https://openems.readthedocs.io/en/latest/) to make the design of antennas and other RF structures simpler.
 
 ## Motivation
@@ -119,6 +120,16 @@ patch.export_gerber(
 Below is a visualisation of the model created by the above code
 ![patch_antenna_2_45GHz.png](./images/patch_antenna_2_45GHz.png)
 The result of the simulation
+![s11.png](./images/s11.png)
+![smith_chart.png](./images/smith_chart.png)
+![z11.png](./images/z11.png)
+![vswr.png](./images/vswr.png)
+![radiation_pattern.png](./images/radiation_polar.png)
+![directivity_polar.png](./images/directivity_polar.png)
+![3d_directivity.png](./images/3d_directivity.png)
+![3d_gain.png](./images/3d_gain.png)
+![3d_power.png](./images/3d_power.png)
+
 
 ## Installation
 
