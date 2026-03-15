@@ -25,10 +25,12 @@ from itertools import product
 
 # ----------------------------
 from .console import console
+from .export_gerber import export_gerber
 
 # ----------------------------
 import numpy as np
 from scipy.optimize import minimize
+from skrf import Network
 
 # ----------------------------
 import matplotlib.pyplot as plt
@@ -36,14 +38,12 @@ from matplotlib.ticker import EngFormatter
 import mplcursors
 import pyvista as pv
 from pyvistaqt import BackgroundPlotter
+from pysmithchart import S_PARAMETER
 
 # ----------------------------
 from openEMS.openEMS import openEMS
 from CSXCAD import ContinuousStructure
 from CSXCAD import AppCSXCAD_BIN
-from pysmithchart import S_PARAMETER
-from skrf import Network
-from .export_gerber import export_gerber
 
 # ----------------------------
 from PyQt6.QtCore import QCoreApplication
@@ -57,7 +57,6 @@ __all__ = [
     "setup_simulation",
     "optimize_s11",
     "param_sweep",
-    "export_gerber",
     "mm_to_m",
     "m_to_mm",
     "mil_to_mm",
@@ -66,7 +65,7 @@ __all__ = [
     "mm_to_cm",
 ]
 
-freq_formatter = EngFormatter(unit="Hz", places=2)
+freq_formatter = EngFormatter(unit="Hz", places=3)
 plt.rcParams["figure.constrained_layout.use"] = True
 plt.rcParams["savefig.dpi"] = 300
 
@@ -428,6 +427,7 @@ class SimTools:
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.title(title)
+        plt.legend()
         plt.grid(True)
 
     @staticmethod
