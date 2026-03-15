@@ -128,7 +128,7 @@ The result of the simulation
 ![directivity_polar.png](./images/directivity_polar.png)
 ![3d_directivity.png](./images/3d_directivity.png)
 ![3d_gain.png](./images/3d_gain.png)
-![3d_power.png](./images/3d_power.png)
+![3d_power.png](./images/3d_power_pattern.png)
 
 
 ## Installation
