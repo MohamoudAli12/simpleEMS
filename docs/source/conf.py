@@ -13,6 +13,20 @@ release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
+from pathlib import Path
+import shutil
+
+def setup(app):
+    def copy_images(app):
+        docs_dir = Path(__file__).parent.parent.resolve()
+        src = (docs_dir / "../images").resolve()
+        dst = (docs_dir / "build/html/images").resolve()
+
+        if src.exists():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+
+    app.connect("builder-inited", copy_images)
+
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -25,8 +39,7 @@ extensions = [
     "sphinx.ext.autosummary",
     "myst_parser",
 ]
-
-autodoc_member_order = 'bysource'
+autodoc_member_order = "bysource"
 
 automodapi_toctreedirnm = "api/build"
 

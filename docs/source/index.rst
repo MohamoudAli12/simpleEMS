@@ -1,22 +1,13 @@
-simpleEMS documentation
-======================
-
-A short, friendly description of what your project does.
-
 .. toctree::
    :maxdepth: 2
+   :hidden:
 
    user/index
-
-.. toctree::
-   :maxdepth: 2
-
    api/index
-
-.. toctree::
-   :maxdepth: 2
-
    dev/index
+
+.. include:: ../../README.md
+   :parser: myst_parser.sphinx_
 
 Index
 =====

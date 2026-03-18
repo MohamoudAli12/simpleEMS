@@ -6,11 +6,11 @@
 simpleEMS is a python library built on top of [openEMS](https://openems.readthedocs.io/en/latest/) to make the design of antennas and other RF structures simpler.
 
 ## Motivation
-As an Electronic Engineer, I wanted to create an accessible, open-source tool for antenna design, particularly for professional Electronic Engineers, freelancers and hobbyists.
-Many proprietary design tools offer limited functionality in their free versions, often restricting memory and making them impractical for serious designs.
-After working with openEMS for FDTD simulations, I saw an opportunity to build a more flexible and user-friendly solution.
-This Python package leverages openEMS to provide a cost-effective, scalable alternative for simulating, optimizing, and visualizing antenna and other RF designs,
-empowering engineers to work on more complex projects without the constraints of proprietary software.
+
+This Python package provides an alternative to proprietary suites with expensive licenses or the restrictive "Student" versions such as CST, HFSS and Sonnet
+which often impose stifling mesh cell limits and memory caps. By leveraging the openEMS FDTD engine, it offers a scalable framework for simulating, optimizing, and
+visualizing complex RF designs. whether you are a professional engineer, a freelancer, or a dedicated hobbyist,
+this library will enable you to design RF circuits easily.
 ## Key Features:
 
 ### **Antenna Design**
