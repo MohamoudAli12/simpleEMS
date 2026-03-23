@@ -159,14 +159,14 @@ class SimTools:
     """
 
     @staticmethod
-    def write_and_show_structure(CSX, output_path: Path) -> None:
+    def write_and_show_structure(FDTD, output_path: Path) -> None:
         """
         This method shows the CSXCAD structure.
 
         Parameters
         ----------
-        CSX:object
-            CSXCAD geometry object.
+        FDTD:object
+            FDTD openEMS object.
         output_path: Path
             The output path where simulation results is stored.
         """
@@ -175,7 +175,7 @@ class SimTools:
                 "output path does not exist. Make sure to provide valid output path."
             )
         structure_3d = output_path / "structure.xml"
-        CSX.Write2XML(
+        FDTD.Write2XML(
             str(structure_3d)
         )  # str in this fixes an error encountered on Windows.
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)

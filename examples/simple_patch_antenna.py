@@ -31,7 +31,7 @@ patch.create_ground()
 patch.create_mesh()
 nf2ff = patch.create_nf2ff(FDTD)
 patch.add_field_dump(CSX, params, output_path)
-patch.write_and_show_structure(CSX, output_path)
+patch.write_and_show_structure(FDTD, output_path)
 
 network_params = None
 

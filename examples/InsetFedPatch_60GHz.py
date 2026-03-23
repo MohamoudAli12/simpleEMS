@@ -51,7 +51,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    # patch.write_and_show_structure(CSX, output_path)
+    patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:
@@ -69,29 +69,29 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return s11[idx]
 
     if not (sweep or optimize):
-        # patch.run_simulation(FDTD, output_path)
-        # network_params = patch.compute_network_params(port, params, output_path)
-        # nf2ff_3d_result = patch.compute_nf2ff_3d(
-        #     nf2ff, params.resonant_freq, output_path
-        # )
-        # patch.plot_s11(network_params.freqs, network_params.s11)
-        # patch.plot_smith_chart(network_params.freqs, network_params.s11)
-        # patch.plot_vswr(network_params.freqs, network_params.vswr)
-        # patch.plot_impedance(network_params.freqs, network_params.z11)
-        # patch.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
-        # patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
-        # patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq, output_path)
-        # patch.plot_3d_gain(
-        #     nf2ff_3d_result,
-        #     params.resonant_freq,
-        #     network_params.input_power,
-        #     output_path,
-        # )
-        # patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
-        # patch.show_plots()
-        # patch.save_plots(output_path)
-        # patch.export_stl(output_path)
-        # patch.export_touchstone(network_params, output_path, params.charac_imp)
+        patch.run_simulation(FDTD, output_path)
+        network_params = patch.compute_network_params(port, params, output_path)
+        nf2ff_3d_result = patch.compute_nf2ff_3d(
+            nf2ff, params.resonant_freq, output_path
+        )
+        patch.plot_s11(network_params.freqs, network_params.s11)
+        patch.plot_smith_chart(network_params.freqs, network_params.s11)
+        patch.plot_vswr(network_params.freqs, network_params.vswr)
+        patch.plot_impedance(network_params.freqs, network_params.z11)
+        patch.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
+        patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
+        patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq, output_path)
+        patch.plot_3d_gain(
+            nf2ff_3d_result,
+            params.resonant_freq,
+            network_params.input_power,
+            output_path,
+        )
+        patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
+        patch.show_plots()
+        patch.save_plots(output_path)
+        patch.export_stl(output_path)
+        patch.export_touchstone(network_params, output_path, params.charac_imp)
         patch.export_gerber(
             CSX,
             output_path,

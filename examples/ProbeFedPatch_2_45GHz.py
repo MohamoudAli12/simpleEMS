@@ -43,7 +43,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_mesh()
     patch.add_field_dump(CSX, params, output_path)
     nf2ff = patch.create_nf2ff(FDTD)
-    patch.write_and_show_structure(CSX, output_path)
+    patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:
