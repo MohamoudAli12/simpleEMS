@@ -20,7 +20,14 @@ from .patch_antenna import (
     InsetPatchParams,
     ProbePatchParams,
 )
-from .sim_tools import DumpType, SimTools, setup_simulation, optimize_s11, param_sweep
+
+from .sim_tools import (
+    DumpType,
+    SimTools,
+    setup_simulation,
+    optimize_s11,
+    param_sweep,
+)
 
 __all__ = [
     "InsetFedPatchAntenna",
