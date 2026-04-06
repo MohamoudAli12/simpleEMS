@@ -4,27 +4,27 @@ version = "0.1.0"
 description = "simpleEMS is a framework built on top of openEMS to make design and simulation of antennas and other microwave structures simpler"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
-    "h5py>=3.15.1",
-    "matplotlib>=3.10.8",
-    "mplcursors>=0.7",
-    "numpy>=2.4.0",
-    "pyqt6>=6.10.1",
+    "h5py==3.15.1",
+    "matplotlib==3.10.8",
+    "mplcursors==0.7",
+    "numpy==2.4.4",
+    "pyqt6==6.10.1",
     "pysmithchart==0.4.1",
-    "pyvista>=0.46.4",
-    "pyvistaqt>=0.11.3",
-    "rich>=14.3.3",
-    "scikit-rf>=1.9.0",
-    "scipy>=1.16.3",
+    "pyvista==0.46.4",
+    "pyvistaqt==0.11.3",
+    "rich==14.3.3",
+    "scikit-rf==1.9.0",
+    "scipy==1.16.3",
 ]
 
 [dependency-groups]
 dev = [
-    "myst-parser>=5.0.0",
-    "pydata-sphinx-theme>=0.16.1",
-    "sphinx>=9.1.0",
-    "sphinx-automodapi>=0.22.0",
-    "tqdm>=4.67.1",
+    "myst-parser==5.0.0",
+    "pydata-sphinx-theme==0.16.1",
+    "sphinx==9.1.0",
+    "sphinx-automodapi==0.22.0",
+    "tqdm==4.67.1",
 ]
 

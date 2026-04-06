@@ -39,7 +39,7 @@ extensions = [
     "sphinx.ext.autosummary",
     "myst_parser",
 ]
-autodoc_member_order = "bysource"
+sourcautodoc_member_order = "bysource"
 
 automodapi_toctreedirnm = "api/build"
 

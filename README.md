@@ -11,6 +11,7 @@ This Python package provides an alternative to proprietary suites with expensive
 which often impose stifling mesh cell limits and memory caps. By leveraging the openEMS FDTD engine, it offers a scalable framework for simulating, optimizing, and
 visualizing complex RF designs. whether you are a professional engineer, a freelancer, or a dedicated hobbyist,
 this library will enable you to design RF circuits easily.
+
 ## Key Features:
 
 ### **Antenna Design**
