@@ -12,3 +12,4 @@ wheels/
 ref_material/*
 
 examples/*/
+docs/source/CHANGELOG.md
