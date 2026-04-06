@@ -4,7 +4,8 @@
 
    user/index
    api/index
-   dev/index
+   contributing
+   CHANGELOG
 
 .. include:: ../../README.md
    :parser: myst_parser.sphinx_

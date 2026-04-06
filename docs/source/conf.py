@@ -16,16 +16,23 @@ release = "0.1.0"
 from pathlib import Path
 import shutil
 
+
 def setup(app):
-    def copy_images(app):
+    def copy_assets(app):
         docs_dir = Path(__file__).parent.parent.resolve()
-        src = (docs_dir / "../images").resolve()
-        dst = (docs_dir / "build/html/images").resolve()
+        image_src = (docs_dir / "../images").resolve()
+        image_dst = (docs_dir / "build/html/images").resolve()
 
-        if src.exists():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
+        changlog_src = docs_dir.parent / "CHANGELOG.md"
+        changelog_dst = (docs_dir / "source").resolve()
 
-    app.connect("builder-inited", copy_images)
+        if image_src.exists():
+            shutil.copytree(image_src, image_dst, dirs_exist_ok=True)
+
+        if changlog_src.exists():
+            shutil.copy2(changlog_src, changelog_dst)
+
+    app.connect("builder-inited", copy_assets)
 
 
 extensions = [
