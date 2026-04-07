@@ -445,6 +445,16 @@ class InsetFedPatchAntenna(PatchAntenna):
 
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
 
+    def build_inset_fed_patch_antenna(self):
+        self.create_patch_with_inset()
+        self.create_feed()
+        self.create_substrate()
+        self.create_ground()
+        port = self.create_port()
+        self.create_mesh()
+        nf2ff = self.create_nf2ff(self.FDTD)
+        return port, nf2ff
+
 
 @dataclass
 class ProbePatchParams(SimParams):
@@ -646,3 +656,12 @@ class ProbeFedPatchAntenna(PatchAntenna):
         )
 
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+
+    def build_inset_fed_patch_antenna(self):
+        self.create_probe_fed_patch()
+        self.create_substrate()
+        self.create_ground()
+        port = self.create_port()
+        self.create_mesh()
+        nf2ff = self.create_nf2ff(self.FDTD)
+        return port, nf2ff

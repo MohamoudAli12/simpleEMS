@@ -372,8 +372,8 @@ class SimTools:
         vswr: np.ndarray,
         x_label: str = "Frequency",
         y_label: str = "VSWR",
+        label: str = "",
         title: str = "VSWR vs Frequency",
-        label: str = "VSWR",
     ):
         """
         Plot the Voltage Standing Wave Ratio (VSWR) as a function of frequency.
@@ -395,11 +395,11 @@ class SimTools:
         y_label : str, optional
             Label for the y-axis. Default is "VSWR".
 
+        label : str, optional
+            Label used for the plot legend.
+
         title : str, optional
             Title of the plot. Default is "VSWR vs Frequency".
-
-        label : str, optional
-            Label used for the plot legend. Default is "VSWR".
 
         Returns
         -------
@@ -693,7 +693,7 @@ class SimTools:
             )
 
         theta = np.arange(-180.0, 181.0, 0.1)
-        console.print("Calculating Farfield Directivity.........", style="info")
+        console.print("Calculating 2D Directivity.........", style="info")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
             output_path,
             freq,
@@ -1116,8 +1116,9 @@ class SimTools:
         # TODO Add appropriate dump mode based on openEMS docs
         dump_path = output_path / "field_dump"
         dump_path.mkdir(parents=True, exist_ok=True)
+        dump_file = dump_path / dump_type.value[1]
         dump = CSX.AddDump(
-            str(dump_path / dump_type.value[1]),
+            str(dump_file.name),
             file_type=0,
             dump_type=dump_type.value[0],
             dump_mode=0,
@@ -1256,6 +1257,30 @@ class SimTools:
         with open(params_path / "params.txt", "w") as file:
             file.write(f"{cls_name}:\n")
             file.writelines(lines)
+
+    @staticmethod
+    def run_all_post_processing(
+        CSX, network_params, nf2ff, nf2ff_3d_result, params, output_path
+    ):
+        SimTools.plot_s11(network_params.freqs, network_params.s11)
+        SimTools.plot_smith_chart(network_params.freqs, network_params.s11)
+        SimTools.plot_vswr(network_params.freqs, network_params.vswr)
+        SimTools.plot_impedance(network_params.freqs, network_params.z11)
+        SimTools.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
+        SimTools.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
+        SimTools.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq, output_path)
+        SimTools.plot_3d_gain(
+            nf2ff_3d_result,
+            params.resonant_freq,
+            network_params.input_power,
+            output_path,
+        )
+        SimTools.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
+        SimTools.save_plots(output_path)
+        SimTools.show_plots()
+        SimTools.export_stl(output_path)
+        SimTools.export_touchstone(network_params, output_path, params.charac_imp)
+        SimTools.export_gerber(CSX, output_path, options={"ignore": ["ground"]})
 
 
 def optimize_s11(
