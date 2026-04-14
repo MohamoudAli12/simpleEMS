@@ -55,16 +55,15 @@ Below is a design of 2.45GHz Inset-Fed patch antenna
 #!/usr/bin/env python3
 from pathlib import Path
 from simpleEMS import (
-    InsetPatchParams,
+    InsetFedPatchParams,
     InsetFedPatchAntenna,
     setup_simulation,
 )
 
-
 output_path = Path(__file__).with_suffix("")
 output_path.mkdir(parents=True, exist_ok=True)
 
-params = InsetPatchParams(
+params = InsetFedPatchParams(
     resonant_freq=2.45e9,
     corner_freq=0.5e9,
     substrate_thickness_mm=1.6,
@@ -78,16 +77,14 @@ CSX, FDTD = setup_simulation(params)
 patch = InsetFedPatchAntenna(params, CSX, FDTD)
 patch.print_and_save_params(params, output_path)
 patch.create_patch_with_inset()
-patch.create_feed()
-port = patch.create_port()
 patch.create_substrate()
+patch.create_feed()
 patch.create_ground()
+port = patch.create_port()
 patch.create_mesh()
 nf2ff = patch.create_nf2ff(FDTD)
 patch.add_field_dump(CSX, params, output_path)
 patch.write_and_show_structure(CSX, output_path)
-
-network_params = None
 
 patch.run_simulation(FDTD, output_path)
 
@@ -143,4 +140,5 @@ The result of the simulation
 
 ## Installation
 
+Refer to the installation instructions in the docs.
 

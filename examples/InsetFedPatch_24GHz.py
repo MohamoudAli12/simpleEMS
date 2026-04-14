@@ -2,7 +2,7 @@
 from pathlib import Path
 import numpy as np
 from simpleEMS import (
-    InsetPatchParams,
+    InsetFedPatchParams,
     InsetFedPatchAntenna,
     setup_simulation,
     optimize_s11,
@@ -11,7 +11,7 @@ from simpleEMS import (
 
 
 def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_val=[]):
-    params = InsetPatchParams(
+    params = InsetFedPatchParams(
         resonant_freq=24.125e9,  # Hz
         corner_freq=2e9,  # Hz
         substrate_thickness_mm=0.254,  # mm

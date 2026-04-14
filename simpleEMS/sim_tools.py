@@ -159,7 +159,7 @@ class SimTools:
     """
 
     @staticmethod
-    def write_and_show_structure(FDTD, output_path: Path) -> None:
+    def write_and_show_structure(FDTD, output_path: Path | None = None) -> None:
         """
         This method shows the CSXCAD structure.
 
@@ -170,18 +170,19 @@ class SimTools:
         output_path: Path
             The output path where simulation results is stored.
         """
-        if not output_path.exists():
-            raise ValueError(
-                "output path does not exist. Make sure to provide valid output path."
-            )
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+            output_path.mkdir(parents=True, exist_ok=True)
+
         structure_3d = output_path / "structure.xml"
+
         FDTD.Write2XML(
             str(structure_3d)
         )  # str in this fixes an error encountered on Windows.
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)
 
     @staticmethod
-    def export_stl(output_path: Path) -> None:
+    def export_stl(output_path: Path | None = None) -> None:
         """
         This method exports the CSXCAD structure to STL objects.
 
@@ -190,6 +191,9 @@ class SimTools:
         output_path: Path
             The output path of the simulation results.
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         structure_3d = output_path / "structure.xml"
         if not structure_3d.exists():
             raise ValueError(
@@ -206,7 +210,7 @@ class SimTools:
         subprocess.run(cmd, check=True)
 
     @staticmethod
-    def run_simulation(FDTD, output_path: Path) -> None:
+    def run_simulation(FDTD, output_path: Path | None = None) -> None:
         """
         This method starts and runs the openEMS simulation.
 
@@ -218,6 +222,9 @@ class SimTools:
         output_path: Path
             The output path of the simulation results.
         """
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+
         FDTD.Run(output_path)
 
     @staticmethod
@@ -240,7 +247,7 @@ class SimTools:
         return nf2ff
 
     @staticmethod
-    def compute_network_params(port, params, output_path: Path):
+    def compute_network_params(port, params, output_path: Path | None = None):
         """
         Computes several network parameters for plotting and post-processing of simulation results.
 
@@ -285,6 +292,9 @@ class SimTools:
         - The method assumes the simulation results are available at the specified `output_path`.
         - The frequency range for post-processing is determined by the resonant frequency and the corner frequency.
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         NetworkParams = namedtuple(
             "NetworkParams", ["freqs", "s11", "z11", "vswr", "input_power"]
         )
@@ -293,7 +303,7 @@ class SimTools:
             params.resonant_freq + params.corner_freq,
             params.num_points,
         )
-        port.CalcPort(output_path, freqs, ref_impedance=params.charac_imp)
+        port.CalcPort(str(output_path), freqs, ref_impedance=params.charac_imp)
         z11 = port.uf_tot / port.if_tot
         s11 = port.uf_ref / port.uf_inc
         s11_mag = np.abs(s11)
@@ -553,7 +563,7 @@ class SimTools:
         plt.legend(loc="lower right", bbox_to_anchor=(1.5, 1.0))
 
     @staticmethod
-    def plot_2d_rad_pattern(nf2ff, freq, output_path):
+    def plot_2d_rad_pattern(nf2ff, freq, output_path: Path | None = None):
         """
         Plot the 2D efield radiation pattern at a specified frequency.
 
@@ -577,6 +587,9 @@ class SimTools:
             This method does not return any value. It generates the 2D
             radiation pattern plot.
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         if not np.isscalar(freq):
             raise TypeError(
                 "Please specify only one frequency and not array for radiation pattern calculation"
@@ -664,7 +677,7 @@ class SimTools:
         ax.legend()
 
     @staticmethod
-    def plot_2d_directivity(nf2ff, freq, output_path):
+    def plot_2d_directivity(nf2ff, freq, output_path: Path | None = None):
         """
         Plot the 2D directivity at a specified frequency.
 
@@ -687,6 +700,9 @@ class SimTools:
         None
             This method does not return any value. It plots the 2D directivity.
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         if not np.isscalar(freq):
             raise TypeError(
                 "Please specify only one frequency and not array for directivity calculation"
@@ -799,7 +815,7 @@ class SimTools:
         ax.legend()
 
     @staticmethod
-    def compute_nf2ff_3d(nf2ff, freq: float, output_path: Path) -> object:
+    def compute_nf2ff_3d(nf2ff, freq: float, output_path: Path | None = None) -> object:
         """
         Compute the 3D far-field radiation pattern.
 
@@ -822,6 +838,9 @@ class SimTools:
         nf2ff_3d_result : object
             Returns nf2ff 3D result object.
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         if not np.isscalar(freq):
             raise TypeError(
                 "Please specify only one frequency and not array for 3D far-field calculation"
@@ -843,7 +862,7 @@ class SimTools:
         return nf2ff_3d_result
 
     @staticmethod
-    def plot_3d_directivity(nf2ff_3d_result, freq, output_path):
+    def plot_3d_directivity(nf2ff_3d_result, freq, output_path: Path | None = None):
         """
         Plot the 3D directivity pattern of an antenna at a specified frequency.
 
@@ -867,6 +886,8 @@ class SimTools:
             This method does not return any value. It generates and saves a 3D plot of
             the directivity pattern.
         """
+        if output_path is None:
+            output_path = Path.cwd()
 
         if not np.isscalar(freq):
             raise TypeError(
@@ -915,7 +936,7 @@ class SimTools:
 
     @staticmethod
     def plot_3d_gain(
-        nf2ff_3d, freq: float, input_power: float, output_path: Path
+        nf2ff_3d, freq: float, input_power: float, output_path: Path | None = None
     ) -> None:
         """
         Plot the 3D gain pattern of an antenna at a specified frequency.
@@ -940,6 +961,8 @@ class SimTools:
             This method does not return any value. It generates and saves a 3D plot of
             the gain pattern.
         """
+        if output_path is None:
+            output_path = Path.cwd()
 
         e_field = np.squeeze(nf2ff_3d.E_norm)
         e_field /= np.max(e_field)  # normalize
@@ -981,7 +1004,7 @@ class SimTools:
         plotter.add_text("Antenna 3D Pattern - Gain (dBi) ", position="upper_edge")
 
     @staticmethod
-    def plot_3d_power(nf2ff_3d, freq: float, output_path: Path) -> None:
+    def plot_3d_power(nf2ff_3d, freq: float, output_path: Path | None = None) -> None:
         """
         Plot the 3D power pattern of an antenna at a specified frequency.
 
@@ -1005,6 +1028,8 @@ class SimTools:
             This method does not return any value. It generates and saves a 3D plot of
             the power pattern.
         """
+        if output_path is None:
+            output_path = Path.cwd()
 
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
@@ -1043,7 +1068,7 @@ class SimTools:
         plotter.add_text("Antenna 3D Pattern - Power (dB)", position="upper_edge")
 
     @staticmethod
-    def save_plots(output_path: Path, file_format: str = "png") -> None:
+    def save_plots(output_path: Path | None = None, file_format: str = "png") -> None:
         """
         Save all currently open plots to a specified output path.
 
@@ -1066,6 +1091,9 @@ class SimTools:
         This method must be called after ``show_plots`` while all matplotlib plots are open.
         This will not save any annotations on the plots. use the manual `save` button to save annotations.
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         plot_path = output_path / "plots"
         plot_path.mkdir(parents=True, exist_ok=True)
         # Get all open figure numbers
@@ -1083,7 +1111,7 @@ class SimTools:
     def add_field_dump(
         CSX,
         params,
-        output_path: Path,
+        output_path: Path | None = None,
         dump_type: DumpType = DumpType.efield_time,
     ) -> None:
         """
@@ -1113,12 +1141,15 @@ class SimTools:
         -------
         None
         """
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+
         # TODO Add appropriate dump mode based on openEMS docs
         dump_path = output_path / "field_dump"
         dump_path.mkdir(parents=True, exist_ok=True)
-        dump_file = dump_path / dump_type.value[1]
+        # dump_file = dump_path / dump_type.value[1]
         dump = CSX.AddDump(
-            str(dump_file.name),
+            str(dump_path / dump_type.value[1]),
             file_type=0,
             dump_type=dump_type.value[0],
             dump_mode=0,
@@ -1133,7 +1164,10 @@ class SimTools:
 
     @staticmethod
     def export_touchstone(
-        network_params, output_path: Path, charac_imp: float = 50.0, filename="s_param"
+        network_params,
+        output_path: Path | None = None,
+        charac_imp: float = 50.0,
+        filename="s_param",
     ):
         """
         Export  S-parameters to a Touchstone file.
@@ -1161,6 +1195,9 @@ class SimTools:
             This method does not return any value.
 
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         # TODO using skrf for touchstone is overkill. use manual export based on touchstone format. add support for s2p.
         touchstone_path = output_path / "touchstone"
         touchstone_path.mkdir(parents=True, exist_ok=True)
@@ -1171,7 +1208,7 @@ class SimTools:
 
     @staticmethod
     def export_gerber(
-        CSX, output_path: Path, options: dict[str, list] = {"ignore": []}
+        CSX, output_path: Path | None = None, options: dict[str, list] = {"ignore": []}
     ):
         """
         Export CSXCAD geometry to Gerber format.
@@ -1199,6 +1236,9 @@ class SimTools:
         Layers should be exported separately by specifying ignore options. i.e. to export only top metal layer ignore the ground.
 
         """
+        if output_path is None:
+            output_path = Path.cwd()
+
         gerber_path = output_path / "gerber"
         gerber_path.mkdir(parents=True, exist_ok=True)
         export_gerber(
@@ -1226,7 +1266,7 @@ class SimTools:
         plt.show()
 
     @staticmethod
-    def print_and_save_params(params, output_path: Path) -> None:
+    def print_and_save_params(params, output_path: Path | None = None) -> None:
         """
         Print and save the simulation parameters.
         This method prints the simulation paramaters to the terminal and saves them to text file.
@@ -1237,13 +1277,16 @@ class SimTools:
         params: object
             parameter object that contains all simulation parmaters.
         output_path: Path
-            The path to the directory where simulation result is stored.
+            The path to the directory where simulation result is stored. default is `cwd`
 
         Returns
         -------
         None
             This method does not return any value.
         """
+
+        if output_path is None:
+            output_path = Path.cwd()
 
         params_path = output_path / "params"
         params_path.mkdir(parents=True, exist_ok=True)

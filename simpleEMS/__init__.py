@@ -17,8 +17,8 @@
 from .patch_antenna import (
     InsetFedPatchAntenna,
     ProbeFedPatchAntenna,
-    InsetPatchParams,
-    ProbePatchParams,
+    InsetFedPatchParams,
+    ProbeFedPatchParams,
 )
 
 from .sim_tools import (
@@ -32,8 +32,8 @@ from .sim_tools import (
 __all__ = [
     "InsetFedPatchAntenna",
     "ProbeFedPatchAntenna",
-    "InsetPatchParams",
-    "ProbePatchParams",
+    "InsetFedPatchParams",
+    "ProbeFedPatchParams",
     "DumpType",
     "SimTools",
     "setup_simulation",

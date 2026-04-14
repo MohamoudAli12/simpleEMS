@@ -44,17 +44,16 @@ extensions = [
     "sphinx.ext.todo",
     "sphinx.ext.mathjax",
     "sphinx.ext.autosummary",
+    "sphinx_copybutton",
     "myst_parser",
 ]
+
 sourcautodoc_member_order = "bysource"
 
 automodapi_toctreedirnm = "api/build"
 
 templates_path = ["_templates"]
 html_static_path = ["_static"]
-
-# -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "pydata_sphinx_theme"
 html_theme_options = {

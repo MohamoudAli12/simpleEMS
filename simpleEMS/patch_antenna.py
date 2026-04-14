@@ -25,15 +25,15 @@ from .console import console
 # Public APIS
 # ----------------------------
 __all__ = [
-    "InsetPatchParams",
+    "InsetFedPatchParams",
     "InsetFedPatchAntenna",
-    "ProbePatchParams",
+    "ProbeFedPatchParams",
     "ProbeFedPatchAntenna",
 ]
 
 
 @dataclass
-class InsetPatchParams(SimParams):
+class InsetFedPatchParams(SimParams):
     """
     Parameters for an inset-fed rectangular microstrip patch antenna.
 
@@ -457,7 +457,7 @@ class InsetFedPatchAntenna(PatchAntenna):
 
 
 @dataclass
-class ProbePatchParams(SimParams):
+class ProbeFedPatchParams(SimParams):
     """
     Parameters for an probe-fed rectangular microstrip patch antenna.
 

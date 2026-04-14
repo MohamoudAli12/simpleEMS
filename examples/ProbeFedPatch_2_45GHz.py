@@ -2,7 +2,7 @@
 from pathlib import Path
 import numpy as np
 from simpleEMS import (
-    ProbePatchParams,
+    ProbeFedPatchParams,
     ProbeFedPatchAntenna,
     setup_simulation,
     optimize_s11,
@@ -11,7 +11,7 @@ from simpleEMS import (
 
 
 def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_val=[]):
-    params = ProbePatchParams(
+    params = ProbeFedPatchParams(
         resonant_freq=2.45e9,  # Hz
         corner_freq=0.5e9,  # Hz
         substrate_thickness_mm=1.6,  # mm
