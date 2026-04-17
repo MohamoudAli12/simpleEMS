@@ -215,3 +215,14 @@ patch.export_gerber(
     options={"ignore": ["ground"]},
 )
 ``` 
+## Simplifying The Code 
+
+This is a lot of code. who has the time to type all of this code.
+The above code is very verbose for a reason; to make the user understand what is going on under the hood.
+
+Below is much simpler version of the same code.
+
+```{code-block} python
+:linenos
+
+```

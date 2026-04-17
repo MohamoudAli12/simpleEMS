@@ -657,7 +657,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
 
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
 
-    def build_inset_fed_patch_antenna(self):
+    def build_probe_fed_patch_antenna(self):
         self.create_probe_fed_patch()
         self.create_substrate()
         self.create_ground()

@@ -5,29 +5,29 @@ This tutorial will walk you through the process of designing a simple Probe-Fed/
 You will need to have a working installation of simpleEMS and openEMS.
 ```
 
-First create a file named `inset_fed_patch_antenna.py` in your favourite editor.
+First create a file named `probe_fed_patch_antenna.py` in your favourite editor.
 
 ## Import Modules
 
-Now import `InsetFedPatchParams`, `InsetFedPatchAntenna` and `setup_simulation` from `simpleEMS`
+Now import `ProbeFedPatchParams`, `ProbeFedPatchAntenna` and `setup_simulation` from `simpleEMS`
 
 ```python
 from simpleEMS import (
-    InsetFedPatchParams,
-    InsetFedPatchAntenna,
+    ProbeFedPatchParams,
+    ProbeFedPatchAntenna,
     setup_simulation,
 )
 ```
 
-This import will give us access to `InsetFedPatchParams` class which holds all parameters that will be used to define the antenna and simulation domain.
+This import will give us access to `ProbeFedPatchParams` class which holds all parameters that will be used to define the antenna and simulation domain.
 ```{seealso}
-- {class}`simpleEMS.patch_antenna.InsetFedPatchParams`
+- {class}`simpleEMS.patch_antenna.ProbeFedPatchParams`
 
 ```
 
-We also get access to the `InsetFedPatchAntenna` class which will create the antenna object.
+We also get access to the `ProbeFedPatchAntenna` class which will create the antenna object.
 ```{seealso}
-- {class}`simpleEMS.patch_antenna.InsetFedPatchAntenna`
+- {class}`simpleEMS.patch_antenna.ProbeFedPatchAntenna`
 ```
 
 The third imported function is `setup_simulation` function which will create the `CSX` geometry and `FDTD` engine and we can use to setup various aspects of the simulation.
@@ -35,11 +35,11 @@ The third imported function is `setup_simulation` function which will create the
 - {class}`simpleEMS.sim_tools.setup_simulation`
 ```
 
-Now we are ready to define all the parameters needed to create the `Inset Fed Patch antenna` and simulation domain.
+Now we are ready to define all the parameters needed to create the `Probe Fed Patch antenna` and simulation domain.
 ## Parameter definition
 
 ```python
-params = InsetFedPatchParams(
+params = ProbeFedPatchParams(
     resonant_freq=2.45e9,
     corner_freq=0.5e9,
     substrate_thickness_mm=1.6,
@@ -48,15 +48,15 @@ params = InsetFedPatchParams(
     charac_imp=50,
 )
 ``` 
-The `InsetFedPatchParams` class defines parameters such as resonant frequency, substrate properties, and 
+The `ProbeFedPatchParams` class defines parameters such as resonant frequency, substrate properties, and 
 and characteristic impedance of the antenna.
 
-- *resonant_freq*: defines the resonant frequency of the antenna
-- *corner_freq*: is used to generate a span centered around the resonant frequency. for example, `0.5e9` will
+- *`resonant_freq`*: defines the resonant frequency of the antenna
+- *`corner_freq`*: is used to generate a span centered around the resonant frequency. for example, `0.5e9` will
 generate a frequency span of `0.5e9` higher than the `resonant_freq` and `0.5e9` lower than the `resonant_freq`.
-- *substrate_thickness_mm*: defines the thickness of the substrate material in millimeters.
-- *substrate_eps_r*: defines the relative permittivity of the substrate material.
-- *charac_imp*: defines the characteristic impedance of the input port.
+- *`substrate_thickness_mm`*: defines the thickness of the substrate material in millimeters.
+- *`substrate_eps_r`*: defines the relative permittivity of the substrate material.
+- *`charac_imp`*: defines the characteristic impedance of the input port.
 
 ## Setup simulation
 
@@ -69,10 +69,9 @@ The `setup_simulation` function is used to setup the `FDTD` simulation engine an
 ## Antenna Creation
 
 ```python
-patch = InsetFedPatchAntenna(params, CSX, FDTD)
+patch = ProbeFedPatchAntenna(params, CSX, FDTD)
 patch.print_and_save_params(params)
-patch.create_patch_with_inset()
-patch.create_feed()
+patch.create_patch_with_probe()
 patch.create_substrate()
 patch.create_ground()
 port = patch.create_port()
@@ -81,13 +80,12 @@ nf2ff = patch.create_nf2ff(FDTD)
 patch.add_field_dump(CSX, params)
 patch.write_and_show_structure(FDTD)
 ```
-The above code creates the `Inset Fed Patch Antenna` and launches `CSXCAD` to visualise the antenna structure.
+The above code creates the `Probe Fed Patch Antenna` and launches `CSXCAD` to visualise the antenna structure.
 The code builds the individual antenna parts and then calls `AppCSXCAD` to view the model.
 
-- *`patch = InsetFedPatchAntenna(params, CSX, FDTD)`*: This creates the Inset Fed Patch Antenna object and takes the `params`, `CSX`, and `FDTD` object.
+- *`patch = ProbeFedPatchAntenna(params, CSX, FDTD)`*: This creates the Probe Fed Patch Antenna object and takes the `params`, `CSX`, and `FDTD` object.
 - *`patch.print_and_save_params(params)`*: Once the antenna is created, all parameters and properties of the antenna is printed and saved to `.txt` file for review.
-- *`patch.create_patch_with_inset()`*: Creates a patch with an inset cutout.
-- *`patch.create_feed()`*: Creates the feed line to antenna where the inset cutout is.
+- *`patch.create_patch_with_probe()`*: Creates probe fed patch antenna element.
 - *`patch.create_substrate()`*: Creates the substrate material.
 - *`patch.create_ground()`*: Creates the ground below beneath the substrate.
 - *`patch.create_port()`*: Creates a lumped port with the specified characteristic impedance.
@@ -140,12 +138,14 @@ patch.show_plots()
 - *`patch.show_plots()`*: Displays all 2D and 3D plots to the user.
 
 ## External Export
+simpleEMS can also export the created model to other formats for further processing.
 
 ```python
 patch.export_stl()
 patch.export_touchstone(network_params)
 patch.export_gerber(CSX, options={"ignore": ["ground"]},)
 ```
+
 - *`patch.export_stl()`*: Exports the geometry of the antenna to 3D `STL` file.
 - *`patch.export_touchstone`*: Exports the `S11` parameters to touchstone format.
 - *`patch.export_gerber`*: Exports the patch antenna model to gerber file.
@@ -153,12 +153,32 @@ patch.export_gerber(CSX, options={"ignore": ["ground"]},)
 
 ## Complete script
 
-Below is the compelete script to design, simulate and post-process the inset fed patch antenna.
+Below is the compelete script to design, simulate and post-process the probe fed patch antenna.
 
 ```{code-block} python 
 :linenos:
 
 #!/usr/bin/env python3
+from simpleEMS import (
+    ProbeFedPatchParams,
+    ProbeFedPatchAntenna,
+    setup_simulation,
+)
+
+params = ProbeFedPatchParams(
+    resonant_freq=2.45e9,
+    corner_freq=0.5e9,
+    substrate_thickness_mm=1.6,
+    substrate_eps_r=4.4,
+    substrate_tand=0.001,
+    charac_imp=50,
+)
+
+CSX, FDTD = setup_simulation(params)
+
+patch = ProbeFedPatchAntenna(params, CSX, FDTD)
+patch.print_and_save_params(params)
+patch.create_probe_fed_patch()
 patch.create_substrate()
 patch.create_ground()
 port = patch.create_port()
@@ -178,11 +198,7 @@ patch.plot_impedance(network_params.freqs, network_params.z11)
 patch.plot_2d_directivity(nf2ff, params.resonant_freq)
 patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq)
 patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq)
-patch.plot_3d_gain(
-           nf2ff_3d_result, 
-           params.resonant_freq, 
-           network_params.input_power,
-)
+patch.plot_3d_gain(nf2ff_3d_result, params.resonant_freq, network_params.input_power)
 patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq)
 patch.save_plots()
 patch.show_plots()
@@ -193,3 +209,43 @@ patch.export_gerber(
     options={"ignore": ["ground"]},
 )
 ``` 
+## Simplifying The Code 
+
+This is a lot of code. who has the time to type all of this code.
+The above code is very verbose for a reason; to make the user understand what is going on under the hood.
+
+Below is much simpler version of the same code.
+
+```{code-block} python
+:linenos
+#!/usr/bin/env python3
+from simpleEMS import (
+    ProbeFedPatchParams,
+    ProbeFedPatchAntenna,
+    setup_simulation,
+)
+
+params = ProbeFedPatchParams(
+    resonant_freq=2.45e9,
+    corner_freq=0.5e9,
+    substrate_thickness_mm=1.6,
+    substrate_eps_r=4.4,
+    substrate_tand=0.001,
+    charac_imp=50,
+)
+
+CSX, FDTD = setup_simulation(params)
+
+patch = ProbeFedPatchAntenna(params, CSX, FDTD)
+patch.print_and_save_params(params)
+port, nf2ff = patch.build_probe_fed_patch_antenna()
+patch.add_field_dump(CSX, params)
+patch.write_and_show_structure(FDTD)
+
+patch.run_simulation(FDTD)
+
+network_params = patch.compute_network_params(port, params)
+nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
+patch.run_all_post_processing(CSX, network_params, nf2ff, nf2ff_3d_result, params, output_path)
+```
+Wow! how simple is designing an antenna. 
