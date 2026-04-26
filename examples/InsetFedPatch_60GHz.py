@@ -39,7 +39,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.patch_length_mm = optimize_val[2]
         params.patch_width_mm = optimize_val[3]
 
-    CSX, FDTD = setup_simulation(params, boundary_cond=["MUR"]*6)
+    CSX, FDTD = setup_simulation(params, boundary_cond=["MUR"] * 6)
 
     patch = InsetFedPatchAntenna(params, CSX, FDTD)
     patch.print_and_save_params(params, output_path)
@@ -56,12 +56,28 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if sweep:
         patch.run_simulation(FDTD, output_path)
-        network_params = patch.compute_network_params(port, params, output_path)
+        network_params = patch.compute_network_params(
+            port,
+            params.resonant_freq,
+            params.corner_freq,
+            params.num_points,
+            params.charac_imp,
+            output_path,
+        )
+
         return network_params
 
     if optimize:
         patch.run_simulation(FDTD, output_path)
-        network_params = patch.compute_network_params(port, params, output_path)
+        network_params = patch.compute_network_params(
+            port,
+            params.resonant_freq,
+            params.corner_freq,
+            params.num_points,
+            params.charac_imp,
+            output_path,
+        )
+
         freqs = network_params.freqs
         s11 = network_params.s11
         s11 = 20.0 * np.log10(np.abs(s11))
@@ -70,7 +86,15 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if not (sweep or optimize):
         patch.run_simulation(FDTD, output_path)
-        network_params = patch.compute_network_params(port, params, output_path)
+        network_params = patch.compute_network_params(
+            port,
+            params.resonant_freq,
+            params.corner_freq,
+            params.num_points,
+            params.charac_imp,
+            output_path,
+        )
+
         nf2ff_3d_result = patch.compute_nf2ff_3d(
             nf2ff, params.resonant_freq, output_path
         )
@@ -91,12 +115,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.show_plots()
         patch.save_plots(output_path)
         patch.export_stl(output_path)
-        patch.export_touchstone(network_params, output_path, params.charac_imp)
-        patch.export_gerber(
-            CSX,
-            output_path,
-            options={"ignore": ["ground"]},
-        )
+        patch.export_touchstone(network_params.freqs, network_params.s11, output_path, params.charac_imp)
+        patch.export_gerber(CSX, output_path)
 
 
 def main():

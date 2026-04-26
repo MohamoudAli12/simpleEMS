@@ -44,18 +44,34 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch = InsetFedPatchAntenna(params, CSX, FDTD)
     patch.print_and_save_params(params, output_path)
     port, nf2ff = patch.build_inset_fed_patch_antenna()
-    patch.add_field_dump(CSX,params,output_path)
+    patch.add_field_dump(CSX, params, output_path)
     patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:
         patch.run_simulation(FDTD, output_path)
-        network_params = patch.compute_network_params(port, params, output_path)
+        network_params = patch.compute_network_params(
+            port,
+            params.resonant_freq,
+            params.corner_freq,
+            params.num_points,
+            params.charac_imp,
+            output_path,
+        )
+
         return network_params
 
     if optimize:
         patch.run_simulation(FDTD, output_path)
-        network_params = patch.compute_network_params(port, params, output_path)
+        network_params = patch.compute_network_params(
+            port,
+            params.resonant_freq,
+            params.corner_freq,
+            params.num_points,
+            params.charac_imp,
+            output_path,
+        )
+
         freqs = network_params.freqs
         s11 = network_params.s11
         s11 = 20.0 * np.log10(np.abs(s11))
@@ -64,13 +80,25 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if not (sweep or optimize):
         patch.run_simulation(FDTD, output_path)
-        network_params = patch.compute_network_params(port, params, output_path)
+        network_params = patch.compute_network_params(
+            port,
+            params.resonant_freq,
+            params.corner_freq,
+            params.num_points,
+            params.charac_imp,
+            output_path,
+        )
+
         nf2ff_3d_result = patch.compute_nf2ff_3d(
             nf2ff, params.resonant_freq, output_path
         )
         patch.run_all_post_processing(
             CSX,
-            network_params,
+            network_params.freqs,
+            network_params.s11,
+            network_params.vswr,
+            network_params.z11,
+            network_params.input_power,
             nf2ff,
             nf2ff_3d_result,
             params,

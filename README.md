@@ -87,8 +87,15 @@ patch.add_field_dump(CSX, params, output_path)
 patch.write_and_show_structure(CSX, output_path)
 
 patch.run_simulation(FDTD, output_path)
+network_params = patch.compute_network_params(
+    port,
+    params.resonant_freq,
+    params.corner_freq,
+    params.num_points,
+    params.charac_imp,
+    output_path,
+)
 
-network_params = patch.compute_network_params(port, params, output_path)
 nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq, output_path)
 patch.plot_s11(network_params.freqs, network_params.s11)
 patch.plot_smith_chart(network_params.freqs, network_params.s11)
@@ -108,11 +115,7 @@ patch.save_plots(output_path)
 patch.show_plots()
 patch.export_stl(output_path)
 patch.export_touchstone(network_params, output_path)
-patch.export_gerber(
-    CSX,
-    output_path,
-    options={"ignore": ["ground"]},
-)
+patch.export_gerber(CSX, output_path)
 
 ```
 Below is a visualisation of the model created by the above code

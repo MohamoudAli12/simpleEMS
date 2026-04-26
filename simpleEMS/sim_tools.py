@@ -135,9 +135,9 @@ def setup_simulation(
 
     Returns
     -------
-    CSX:object
+    CSX:ContinuousStructure
         CSXCAD geometry object.
-    FDTD: object
+    FDTD: openEMS
         openEMS FDTD object.
     """
     CSX = ContinuousStructure()
@@ -159,13 +159,15 @@ class SimTools:
     """
 
     @staticmethod
-    def write_and_show_structure(FDTD, output_path: Path | None = None) -> None:
+    def write_and_show_structure(
+        FDTD: openEMS, output_path: Path | None = None
+    ) -> None:
         """
         This method shows the CSXCAD structure.
 
         Parameters
         ----------
-        FDTD:object
+        FDTD:openEMS
             FDTD openEMS object.
         output_path: Path
             The output path where simulation results is stored.
@@ -210,14 +212,14 @@ class SimTools:
         subprocess.run(cmd, check=True)
 
     @staticmethod
-    def run_simulation(FDTD, output_path: Path | None = None) -> None:
+    def run_simulation(FDTD: openEMS, output_path: Path | None = None) -> None:
         """
         This method starts and runs the openEMS simulation.
 
         Parameters
         ----------
 
-        FDTD: object
+        FDTD: openEMS
             openEMS FDTD object.
         output_path: Path
             The output path of the simulation results.
@@ -228,14 +230,14 @@ class SimTools:
         FDTD.Run(output_path)
 
     @staticmethod
-    def create_nf2ff(FDTD):
+    def create_nf2ff(FDTD: openEMS):
         """
         Creates near field to far field (NF2FF) recording box.
 
         Parameters
         ----------
 
-        FDTD: object
+        FDTD: openEMS
             openEMS FDTD object.
 
         Returns
@@ -247,7 +249,14 @@ class SimTools:
         return nf2ff
 
     @staticmethod
-    def compute_network_params(port, params, output_path: Path | None = None):
+    def compute_network_params(
+        port,
+        resonant_freq,
+        corner_freq,
+        num_points,
+        charac_imp,
+        output_path: Path | None = None,
+    ):
         """
         Computes several network parameters for plotting and post-processing of simulation results.
 
@@ -259,10 +268,14 @@ class SimTools:
         ----------
         port : object
             The openEMS port object representing the simulation port.
-
-        params : object
-            The parameter object that holds all simulation parameters, including frequency range and other settings.
-
+        resonant_freq: float
+            the resonant frequency of an antenna.
+        corner_freq: float
+            This refers to the span of frequency below and above the resonant frequency of antenna.
+        num_points: floats
+            number of points to be calculated.
+        charac_imp: float
+            characteristic impedance of the input port.
         output_path : Path
             The path to the directory where the simulation results are saved.
 
@@ -299,11 +312,11 @@ class SimTools:
             "NetworkParams", ["freqs", "s11", "z11", "vswr", "input_power"]
         )
         freqs = np.linspace(
-            params.resonant_freq - params.corner_freq,
-            params.resonant_freq + params.corner_freq,
-            params.num_points,
+            resonant_freq - corner_freq,
+            resonant_freq + corner_freq,
+            num_points,
         )
-        port.CalcPort(str(output_path), freqs, ref_impedance=params.charac_imp)
+        port.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
         z11 = port.uf_tot / port.if_tot
         s11 = port.uf_ref / port.uf_inc
         s11_mag = np.abs(s11)
@@ -1109,7 +1122,7 @@ class SimTools:
 
     @staticmethod
     def add_field_dump(
-        CSX,
+        CSX: ContinuousStructure,
         params,
         output_path: Path | None = None,
         dump_type: DumpType = DumpType.efield_time,
@@ -1123,7 +1136,7 @@ class SimTools:
 
         Parameters
         ----------
-        CSX : object
+        CSX : ContinuousStructure
             The openEMS CSX object representing the simulation geometry and settings.
 
         params : object
@@ -1164,7 +1177,8 @@ class SimTools:
 
     @staticmethod
     def export_touchstone(
-        network_params,
+        freqs,
+        s11,
         output_path: Path | None = None,
         charac_imp: float = 50.0,
         filename="s_param",
@@ -1177,8 +1191,10 @@ class SimTools:
 
         Parameters
         ----------
-        network_params : object
-            Computed network parameter result returned from ``compute_network_params`` method.
+        freqs:float
+            List of frequencies to be exported.
+        s11:float
+            calculated S11 parameters over the frequency range.
 
         output_path : Path
             Path to the directory where simulation result is saved.
@@ -1201,14 +1217,14 @@ class SimTools:
         # TODO using skrf for touchstone is overkill. use manual export based on touchstone format. add support for s2p.
         touchstone_path = output_path / "touchstone"
         touchstone_path.mkdir(parents=True, exist_ok=True)
-        ntwk = Network(
-            frequency=network_params.freqs, s=network_params.s11, z0=charac_imp
-        )
+        ntwk = Network(frequency=freqs, s=s11, z0=charac_imp)
         ntwk.write_touchstone(filename=filename, dir=touchstone_path)
 
     @staticmethod
     def export_gerber(
-        CSX, output_path: Path | None = None, options: dict[str, list] = {"ignore": []}
+        CSX: ContinuousStructure,
+        output_path: Path | None = None,
+        options: dict[str, list] = {"ignore": []},
     ):
         """
         Export CSXCAD geometry to Gerber format.
@@ -1216,7 +1232,7 @@ class SimTools:
 
         Parameters
         ----------
-        CSX : object
+        CSX : ContinuousStructure
             CSXCAD geometry object.
 
         output_path : Path
@@ -1303,26 +1319,38 @@ class SimTools:
 
     @staticmethod
     def run_all_post_processing(
-        CSX, network_params, nf2ff, nf2ff_3d_result, params, output_path
+        CSX: ContinuousStructure,
+        freqs,
+        s11,
+        vswr,
+        z11,
+        input_power,
+        nf2ff,
+        nf2ff_3d_result,
+        params,
+        output_path=None,
     ):
-        SimTools.plot_s11(network_params.freqs, network_params.s11)
-        SimTools.plot_smith_chart(network_params.freqs, network_params.s11)
-        SimTools.plot_vswr(network_params.freqs, network_params.vswr)
-        SimTools.plot_impedance(network_params.freqs, network_params.z11)
+        if output_path is None:
+            output_path = Path.cwd()
+
+        SimTools.plot_s11(freqs, s11)
+        SimTools.plot_smith_chart(freqs, s11)
+        SimTools.plot_vswr(freqs, vswr)
+        SimTools.plot_impedance(freqs, z11)
         SimTools.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
         SimTools.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
         SimTools.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq, output_path)
         SimTools.plot_3d_gain(
             nf2ff_3d_result,
             params.resonant_freq,
-            network_params.input_power,
+            input_power,
             output_path,
         )
         SimTools.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
         SimTools.save_plots(output_path)
         SimTools.show_plots()
         SimTools.export_stl(output_path)
-        SimTools.export_touchstone(network_params, output_path, params.charac_imp)
+        SimTools.export_touchstone(freqs, s11, output_path, params.charac_imp)
         SimTools.export_gerber(CSX, output_path, options={"ignore": ["ground"]})
 
 
@@ -1428,8 +1456,8 @@ def param_sweep(
 
     Returns
     -------
-    None
-        This function does not return any value.
+    Network_params
+        This function return network parameters such as S11, VSWR, Z11.
     """
     console.print("-------------------------------------", style="info")
     console.print("Running Parameter Sweep", style="info")
@@ -1437,6 +1465,7 @@ def param_sweep(
 
     sweep_values = {key: np.linspace(*val).tolist() for key, val in sweep_vals.items()}
     cartesian_sweep = list(product(*sweep_values.values()))
+    network_params = None
 
     for values in cartesian_sweep:
         kv_pairs = list(zip(sweep_values.keys(), values))
@@ -1452,6 +1481,7 @@ def param_sweep(
             label=label,
         )
     SimTools.show_plots()
+    return network_params
 
 
 def mm_to_m(mm: float) -> float:

@@ -108,7 +108,13 @@ This calls the openEMS FDTD engine to run the simulation of the antenna. wait fo
 Once the simulation is finished, it is time to postprocess the simulation result to see some amazing plots and 3D visualisation.
 
 ```python
-network_params = patch.compute_network_params(port, params)
+network_params = patch.compute_network_params(
+    port,
+    params.resonant_freq,
+    params.corner_freq,
+    params.num_points,
+    params.charac_imp,
+)
 nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
 patch.plot_s11(network_params.freqs, network_params.s11)
 patch.plot_smith_chart(network_params.freqs, network_params.s11)
@@ -123,7 +129,7 @@ patch.save_plots()
 patch.show_plots()
 ```
 
-- *`network_params = patch.compute_network_params(port, params)`*: This function calculates various network parameters such as `S11`, `VSWR`, from the simulation result and returns the computed result.
+- *`network_params = patch.compute_network_params(port, params.*)`*: This function calculates various network parameters such as `S11`, `VSWR`, from the simulation result and returns the computed result.
 - *`nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)`*: Computes the 3D radiation pattern from nf2ff recording box.
 - *`patch.plot_s11(network_params.freqs, network_params.s11)`*: plots the reflection coefficient `S11` which indicates how well matched the antenna is. 
 - *`patch.plot_smith_chart(network_params.freqs, network_params.s11)`*:plots the reflection coefficient on a smith chart.
@@ -143,7 +149,7 @@ simpleEMS can also export the created model to other formats for further process
 ```python
 patch.export_stl()
 patch.export_touchstone(network_params)
-patch.export_gerber(CSX, options={"ignore": ["ground"]},)
+patch.export_gerber(CSX)
 ```
 
 - *`patch.export_stl()`*: Exports the geometry of the antenna to 3D `STL` file.
@@ -188,8 +194,13 @@ patch.add_field_dump(CSX, params)
 patch.write_and_show_structure(FDTD)
 
 patch.run_simulation(FDTD)
-
-network_params = patch.compute_network_params(port, params)
+network_params = patch.compute_network_params(
+    port,
+    params.resonant_freq,
+    params.corner_freq,
+    params.num_points,
+    params.charac_imp,
+)
 nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
 patch.plot_s11(network_params.freqs, network_params.s11)
 patch.plot_smith_chart(network_params.freqs, network_params.s11)
@@ -204,10 +215,7 @@ patch.save_plots()
 patch.show_plots()
 patch.export_stl()
 patch.export_touchstone(network_params)
-patch.export_gerber(
-    CSX,
-    options={"ignore": ["ground"]},
-)
+patch.export_gerber(CSX)
 ``` 
 ## Simplifying The Code 
 
@@ -244,8 +252,14 @@ patch.write_and_show_structure(FDTD)
 
 patch.run_simulation(FDTD)
 
-network_params = patch.compute_network_params(port, params)
+network_params = patch.compute_network_params(
+    port,
+    params.resonant_freq,
+    params.corner_freq,
+    params.num_points,
+    params.charac_imp,
+)
 nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
-patch.run_all_post_processing(CSX, network_params, nf2ff, nf2ff_3d_result, params, output_path)
+patch.run_all_post_processing(CSX, network_params, nf2ff, nf2ff_3d_result, params)
 ```
 Wow! how simple is designing an antenna. 
