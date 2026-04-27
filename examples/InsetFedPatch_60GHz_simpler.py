@@ -12,7 +12,7 @@ from simpleEMS import (
 
 def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_val=[]):
     params = InsetFedPatchParams(
-        resonant_freq=60e9,  # Hz
+        operating_freq=60e9,  # Hz
         corner_freq=3e9,  # Hz
         substrate_thickness_mm=0.125,  # mm
         substrate_eps_r=3.00,
@@ -52,7 +52,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            params.resonant_freq,
+            params.operating_freq,
             params.corner_freq,
             params.num_points,
             params.charac_imp,
@@ -65,7 +65,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            params.resonant_freq,
+            params.operating_freq,
             params.corner_freq,
             params.num_points,
             params.charac_imp,
@@ -75,14 +75,14 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         freqs = network_params.freqs
         s11 = network_params.s11
         s11 = 20.0 * np.log10(np.abs(s11))
-        idx = (np.abs(freqs - params.resonant_freq)).argmin()
+        idx = (np.abs(freqs - params.operating_freq)).argmin()
         return s11[idx]
 
     if not (sweep or optimize):
         patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            params.resonant_freq,
+            params.operating_freq,
             params.corner_freq,
             params.num_points,
             params.charac_imp,
@@ -90,7 +90,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
 
         nf2ff_3d_result = patch.compute_nf2ff_3d(
-            nf2ff, params.resonant_freq, output_path
+            nf2ff, params.operating_freq, output_path
         )
         patch.run_all_post_processing(
             CSX,

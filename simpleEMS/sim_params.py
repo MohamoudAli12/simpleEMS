@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from openEMS.physical_constants import C0, EPS0
 
+
 @dataclass
 class SimParams:
     """
@@ -92,12 +93,13 @@ class SimParams:
         This defines one third two thirds rule required for accurate results.
     """
 
-    resonant_freq: float
-    corner_freq: float
-
     substrate_eps_r: float
     substrate_tand: float
     substrate_thickness_mm: float
+
+    operating_freq: float
+    corner_freq: float
+
     substrate_width_mm: float = 100
     substrate_length_mm: float = 100
     substrate_cells: int = 4
@@ -124,7 +126,7 @@ class SimParams:
             self.substrate_tand
             * 2
             * np.pi
-            * self.resonant_freq
+            * self.operating_freq
             * EPS0
             * self.substrate_eps_r
         )
@@ -132,7 +134,7 @@ class SimParams:
         self.lambda0 = np.round(
             C0
             / (
-                (self.resonant_freq + self.corner_freq)
+                (self.operating_freq + self.corner_freq)
                 * np.sqrt(self.substrate_eps_r)
                 * self.unit
             ),

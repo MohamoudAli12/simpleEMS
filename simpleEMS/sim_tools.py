@@ -142,7 +142,7 @@ def setup_simulation(
     """
     CSX = ContinuousStructure()
     FDTD = openEMS(NrTS=params.timestep, EndCriteria=params.end_criteria)
-    FDTD.SetGaussExcite(params.resonant_freq, params.corner_freq)
+    FDTD.SetGaussExcite(params.operating_freq, params.corner_freq)
     FDTD.SetBoundaryCond(boundary_cond)
     FDTD.SetCSX(CSX)
     return CSX, FDTD
@@ -251,7 +251,7 @@ class SimTools:
     @staticmethod
     def compute_network_params(
         port,
-        resonant_freq,
+        operating_freq,
         corner_freq,
         num_points,
         charac_imp,
@@ -268,7 +268,7 @@ class SimTools:
         ----------
         port : object
             The openEMS port object representing the simulation port.
-        resonant_freq: float
+        operating_freq: float
             the resonant frequency of an antenna.
         corner_freq: float
             This refers to the span of frequency below and above the resonant frequency of antenna.
@@ -286,7 +286,7 @@ class SimTools:
 
             - freqs : ndarray
                 A numpy array of frequencies used for post-processing. The array is generated
-                from `resonant_freq - corner_freq` to `resonant_freq + corner_freq`.
+                from `operating_freq - corner_freq` to `operating_freq + corner_freq`.
 
             - s11 : ndarray
                 A numpy array of calculated complex S11 values across the entire frequency range.
@@ -309,30 +309,43 @@ class SimTools:
             output_path = Path.cwd()
 
         NetworkParams = namedtuple(
-            "NetworkParams", ["freqs", "s11", "z11", "vswr", "input_power"]
+            "NetworkParams", ["freqs", "s11", "s21", "z11", "vswr", "input_power"]
         )
         freqs = np.linspace(
-            resonant_freq - corner_freq,
-            resonant_freq + corner_freq,
+            operating_freq - corner_freq,
+            operating_freq + corner_freq,
             num_points,
         )
-        port.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
-        z11 = port.uf_tot / port.if_tot
-        s11 = port.uf_ref / port.uf_inc
-        s11_mag = np.abs(s11)
-        s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
-        vswr = (1 + s11_mag) / (1 - s11_mag)
-        input_power = 0.5 * np.real(port.uf_tot * np.conj(port.if_tot))
-        return NetworkParams(freqs, s11, z11, vswr, input_power)
+        if isinstance(port, list):
+            for p in port:
+                p.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
+            s11 = port[0].uf_ref / port[0].uf_inc
+            s21 = port[1].uf_ref / port[0].uf_inc
+            z11 = port[0].uf_tot / port[0].if_tot
+            s11_mag = np.abs(s11)
+            s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
+            vswr = (1 + s11_mag) / (1 - s11_mag)
+            input_power = 0.5 * np.real(port[0].uf_tot * np.conj(port[0].if_tot))
+            return NetworkParams(freqs, s11, s21, z11, vswr, input_power)
+        else:
+            port.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
+            s21 = None
+            z11 = port.uf_tot / port.if_tot
+            s11 = port.uf_ref / port.uf_inc
+            s11_mag = np.abs(s11)
+            s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
+            vswr = (1 + s11_mag) / (1 - s11_mag)
+            input_power = 0.5 * np.real(port.uf_tot * np.conj(port.if_tot))
+            return NetworkParams(freqs, s11, s21, z11, vswr, input_power)
 
     @staticmethod
-    def plot_s11(
+    def plot_s_param(
         freqs: np.ndarray,
         s11: np.ndarray,
+        s21=None,
         x_label: str = "Frequency",
-        y_label: str = "S11 (dB)",
-        label: str = "",
-        title: str = "S11 vs Frequency",
+        y_label: str = "S-parameter (dB)",
+        title: str = "S-parameters vs Frequency",
     ) -> None:
         """
         Plot the S11 parameter (reflection coefficient) against frequency.
@@ -353,9 +366,6 @@ class SimTools:
         y_label : str, optional
             Label for the y-axis. Default is "S11 (dB)".
 
-        label : str, optional
-            Label for the plot legend. Default is an empty string (no label).
-
         title : str, optional
             Title of the plot. Default is "S11 vs Frequency".
 
@@ -364,17 +374,22 @@ class SimTools:
         None
             This method does not return any value. It directly displays the plot.
         """
+        if s21 is not None:
+            s21 = np.log10(np.abs(s21))
+            s21_lines = plt.plot(freqs, s21, label = "S21")
+            cursor = mplcursors.cursor(s21_lines, multiple=True)
+
+            @cursor.connect("add")
+            def on_add(sel):
+                sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\nS21={sel.target[1]:.2f} dB"
+                )
+
         s11 = 20.0 * np.log10(np.abs(s11))
 
-        min_idx = np.nanargmin(s11)
-        lines = plt.plot(freqs, s11, label=label)
-        plt.scatter(
-            freqs[min_idx],
-            s11[min_idx],
-            color="red",
-            label=f"Min S11 is {s11[min_idx]:.2f} dB found at {freq_formatter(freqs[min_idx])}",
-        )
-        cursor = mplcursors.cursor(lines, multiple=True)
+        s11_lines = plt.plot(freqs, s11, label="S11")
+
+        cursor = mplcursors.cursor(s11_lines, multiple=True)
 
         @cursor.connect("add")
         def on_add(sel):
@@ -395,7 +410,7 @@ class SimTools:
         vswr: np.ndarray,
         x_label: str = "Frequency",
         y_label: str = "VSWR",
-        label: str = "",
+        label: str = "VSWR",
         title: str = "VSWR vs Frequency",
     ):
         """
@@ -431,13 +446,6 @@ class SimTools:
         """
         plt.figure()
         lines = plt.plot(freqs, vswr, label=label)
-        min_idx = np.nanargmin(vswr)
-        plt.scatter(
-            freqs[min_idx],
-            vswr[min_idx],
-            color="red",
-            label=f"Min VSWR = {vswr[min_idx]:.2f} found at {freq_formatter(freqs[min_idx])}",
-        )
         cursor = mplcursors.cursor(lines, multiple=True)
 
         @cursor.connect("add")
@@ -494,19 +502,19 @@ class SimTools:
         z11_real = np.real(z11)
         z11_imag = np.imag(z11)
         plt.figure()
-        lines = plt.plot(freqs, z11_real, label=f"Real Z11")
-        plt.plot(freqs, z11_imag, label=f"Imag Z11")
+        lines_real = plt.plot(freqs, z11_real, label=f"Real Z11")
+        cursor_real = mplcursors.cursor(lines_real, multiple=True)
 
-        tar_idx = len(freqs) // 2
-        plt.scatter(
-            freqs[tar_idx],
-            z11_real[tar_idx],
-            color="black",
-            label=f"Z11 is {z11_real[tar_idx]:.0f}Ω at target frequency {freq_formatter(freqs[tar_idx])}",
-        )
-        cursor = mplcursors.cursor(lines, multiple=True)
+        @cursor_real.connect("add")
+        def on_add(sel):
+            sel.annotation.set_text(
+                f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
+            )
 
-        @cursor.connect("add")
+        lines_imag = plt.plot(freqs, z11_imag, label=f"Imag Z11")
+        cursor_imag = mplcursors.cursor(lines_imag, multiple=True)
+
+        @cursor_imag.connect("add")
         def on_add(sel):
             sel.annotation.set_text(
                 f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
@@ -1181,6 +1189,7 @@ class SimTools:
         s11,
         output_path: Path | None = None,
         charac_imp: float = 50.0,
+        s21=None,
         filename="s_param",
     ):
         """
@@ -1214,11 +1223,21 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd()
 
-        # TODO using skrf for touchstone is overkill. use manual export based on touchstone format. add support for s2p.
         touchstone_path = output_path / "touchstone"
         touchstone_path.mkdir(parents=True, exist_ok=True)
-        ntwk = Network(frequency=freqs, s=s11, z0=charac_imp)
-        ntwk.write_touchstone(filename=filename, dir=touchstone_path)
+
+        if s21 is None:  # 1 port structure
+            ntwk = Network(frequency=freqs, s=s11, z0=charac_imp)
+            ntwk.write_touchstone(filename=filename, dir=touchstone_path)
+
+        elif s21 is not None:  # 2port structure
+            s_params = np.zeros((len(s11), 2, 2), dtype=complex)
+            s_params[:, 0, 0] = s11
+            s_params[:, 1, 0] = s21
+            # s_params[:, 0, 1] = s21
+            # s_params[:, 1, 1] = s11
+            ntwk = Network(frequency=freqs, s=s_params, z0=charac_imp)
+            ntwk.write_touchstone(filename=filename, dir=touchstone_path)
 
     @staticmethod
     def export_gerber(
@@ -1328,29 +1347,32 @@ class SimTools:
         nf2ff,
         nf2ff_3d_result,
         params,
+        s21=None,
         output_path=None,
     ):
         if output_path is None:
             output_path = Path.cwd()
 
-        SimTools.plot_s11(freqs, s11)
+        SimTools.plot_s_param(freqs, s11, s21)
         SimTools.plot_smith_chart(freqs, s11)
         SimTools.plot_vswr(freqs, vswr)
         SimTools.plot_impedance(freqs, z11)
-        SimTools.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
-        SimTools.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
-        SimTools.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq, output_path)
+        SimTools.plot_2d_directivity(nf2ff, params.operating_freq, output_path)
+        SimTools.plot_2d_rad_pattern(nf2ff, params.operating_freq, output_path)
+        SimTools.plot_3d_directivity(
+            nf2ff_3d_result, params.operating_freq, output_path
+        )
         SimTools.plot_3d_gain(
             nf2ff_3d_result,
-            params.resonant_freq,
+            params.operating_freq,
             input_power,
             output_path,
         )
-        SimTools.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
+        SimTools.plot_3d_power(nf2ff_3d_result, params.operating_freq, output_path)
         SimTools.save_plots(output_path)
         SimTools.show_plots()
         SimTools.export_stl(output_path)
-        SimTools.export_touchstone(freqs, s11, output_path, params.charac_imp)
+        SimTools.export_touchstone(freqs, s11, output_path, params.charac_imp, s21)
         SimTools.export_gerber(CSX, output_path, options={"ignore": ["ground"]})
 
 
@@ -1475,7 +1497,7 @@ def param_sweep(
         sweep_path.mkdir(parents=True, exist_ok=True)
 
         network_params = simulate_fn(sweep_path, sweep, values)
-        SimTools.plot_s11(
+        SimTools.plot_s_param(
             network_params.freqs,
             network_params.s11,
             label=label,

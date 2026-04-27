@@ -28,12 +28,18 @@ from .sim_tools import (
     optimize_s11,
     param_sweep,
 )
+from .microstrip_line import (
+    MicrostripLineParams,
+    MicrostripLine,
+)
 
 __all__ = [
     "InsetFedPatchAntenna",
     "ProbeFedPatchAntenna",
+    "MicrostripLine",
     "InsetFedPatchParams",
     "ProbeFedPatchParams",
+    "MicrostripLineParams",
     "DumpType",
     "SimTools",
     "setup_simulation",
@@ -43,4 +49,4 @@ __all__ = [
 
 __version__ = "0.1.0"
 __author__ = "Mohamoud Ali"
-__license__ = "GPL-3.0-or-later"
+__license__ = "AGPL-3.0-or-later"

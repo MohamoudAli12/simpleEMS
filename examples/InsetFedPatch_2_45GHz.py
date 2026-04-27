@@ -12,7 +12,7 @@ from simpleEMS import (
 
 def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_val=[]):
     params = InsetFedPatchParams(
-        resonant_freq=2.45e9,
+        operating_freq=2.45e9,
         corner_freq=0.5e9,
         substrate_thickness_mm=1.6,
         substrate_eps_r=4.4,
@@ -49,7 +49,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            params.resonant_freq,
+            params.operating_freq,
             params.corner_freq,
             params.num_points,
             params.charac_imp,
@@ -61,7 +61,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            params.resonant_freq,
+            params.operating_freq,
             params.corner_freq,
             params.num_points,
             params.charac_imp,
@@ -71,14 +71,14 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         freqs = network_params.freqs
         s11 = network_params.s11
         s11 = 20.0 * np.log10(np.abs(s11))
-        idx = (np.abs(freqs - params.resonant_freq)).argmin()
+        idx = (np.abs(freqs - params.operating_freq)).argmin()
         return s11[idx]
 
     if not (sweep or optimize):
         patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            params.resonant_freq,
+            params.operating_freq,
             params.corner_freq,
             params.num_points,
             params.charac_imp,
@@ -86,22 +86,22 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
 
         nf2ff_3d_result = patch.compute_nf2ff_3d(
-            nf2ff, params.resonant_freq, output_path
+            nf2ff, params.operating_freq, output_path
         )
-        patch.plot_s11(network_params.freqs, network_params.s11)
+        patch.plot_s_param(network_params.freqs, network_params.s11)
         patch.plot_smith_chart(network_params.freqs, network_params.s11)
         patch.plot_vswr(network_params.freqs, network_params.vswr)
         patch.plot_impedance(network_params.freqs, network_params.z11)
-        patch.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
-        patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
-        patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq, output_path)
+        patch.plot_2d_directivity(nf2ff, params.operating_freq, output_path)
+        patch.plot_2d_rad_pattern(nf2ff, params.operating_freq, output_path)
+        patch.plot_3d_directivity(nf2ff_3d_result, params.operating_freq, output_path)
         patch.plot_3d_gain(
             nf2ff_3d_result,
-            params.resonant_freq,
+            params.operating_freq,
             network_params.input_power,
             output_path,
         )
-        patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
+        patch.plot_3d_power(nf2ff_3d_result, params.operating_freq, output_path)
         patch.save_plots(output_path)
         patch.show_plots()
         patch.export_stl(output_path)

@@ -6,7 +6,7 @@ from simpleEMS import (
 )
 
 params = ProbeFedPatchParams(
-    resonant_freq=2.45e9,
+    operating_freq=2.45e9,
     corner_freq=0.5e9,
     substrate_thickness_mm=1.6,
     substrate_eps_r=4.4,
@@ -26,12 +26,12 @@ patch.run_simulation(FDTD)
 
 network_params = patch.compute_network_params(
     port,
-    params.resonant_freq,
+    params.operating_freq,
     params.corner_freq,
     params.num_points,
     params.charac_imp,
 )
-nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
+nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.operating_freq)
 patch.run_all_post_processing(
     CSX,
     network_params.freqs,
