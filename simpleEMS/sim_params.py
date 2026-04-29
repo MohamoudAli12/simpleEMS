@@ -96,9 +96,12 @@ class SimParams:
     substrate_eps_r: float
     substrate_tand: float
     substrate_thickness_mm: float
+    substrate_kappa: float = field(init=False)
 
-    operating_freq: float
-    corner_freq: float
+    resonant_freq: float | None = None
+    span_freq: float | None = None
+    min_freq: float | None = None
+    max_freq: float | None = None
 
     substrate_width_mm: float = 100
     substrate_length_mm: float = 100
@@ -110,36 +113,50 @@ class SimParams:
     copper_thickness_mm: float = 0.035
     fp_precision: int = 3
     charac_imp: float = 50
-    timestep: int = 1000000
+    timestep: int = 90000000
     end_criteria: float = 1e-4
+
     mesh_resolution_factor: int = 20
     metal_mesh_resolution_factor: int = 60
-
-    substrate_kappa: float = field(init=False)
+    mesh_resolution: float = field(init=False)
     lambda0: float = field(init=False)
     simulation_box: np.ndarray = field(init=False)
-    mesh_resolution: float = field(init=False)
     thirds_rule: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        self.substrate_kappa = (
-            self.substrate_tand
-            * 2
-            * np.pi
-            * self.operating_freq
-            * EPS0
-            * self.substrate_eps_r
-        )
+        if self.resonant_freq is not None and self.span_freq is not None:
+            self.substrate_kappa = (
+                self.substrate_tand
+                * 2
+                * np.pi
+                * self.resonant_freq
+                * EPS0
+                * self.substrate_eps_r
+            )
 
-        self.lambda0 = np.round(
-            C0
-            / (
-                (self.operating_freq + self.corner_freq)
-                * np.sqrt(self.substrate_eps_r)
-                * self.unit
-            ),
-            self.fp_precision,
-        )
+            self.lambda0 = np.round(
+                C0
+                / (
+                    (self.resonant_freq + self.span_freq)
+                    * np.sqrt(self.substrate_eps_r)
+                    * self.unit
+                ),
+                self.fp_precision,
+            )
+        elif self.max_freq is not None and self.min_freq is not None:
+            self.substrate_kappa = (
+                self.substrate_tand
+                * 2
+                * np.pi
+                * self.max_freq
+                * EPS0
+                * self.substrate_eps_r
+            )
+
+            self.lambda0 = np.round(
+                C0 / ((self.max_freq) * np.sqrt(self.substrate_eps_r) * self.unit),
+                self.fp_precision,
+            )
 
         # mesh resolution
         self.mesh_resolution = np.round(

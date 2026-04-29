@@ -139,13 +139,31 @@ def setup_simulation(
         CSXCAD geometry object.
     FDTD: openEMS
         openEMS FDTD object.
+    freqs:ndarray
+        a list of frequencies that will be used in the simulation and post-processing.
     """
+
     CSX = ContinuousStructure()
     FDTD = openEMS(NrTS=params.timestep, EndCriteria=params.end_criteria)
-    FDTD.SetGaussExcite(params.operating_freq, params.corner_freq)
     FDTD.SetBoundaryCond(boundary_cond)
     FDTD.SetCSX(CSX)
-    return CSX, FDTD
+    freqs = None
+    if params.resonant_freq is not None and params.span_freq is not None:
+        FDTD.SetGaussExcite(params.resonant_freq, params.span_freq)
+        freqs = np.linspace(
+            params.resonant_freq - params.span_freq,
+            params.resonant_freq + params.span_freq,
+            params.num_points,
+        )
+    elif params.max_freq is not None and params.min_freq is not None:
+        FDTD.SetGaussExcite(params.max_freq / 2, params.max_freq / 2)
+        freqs = np.linspace(
+            params.min_freq,
+            params.max_freq,
+            params.num_points,
+        )
+
+    return CSX, FDTD, freqs
 
 
 class SimTools:
@@ -251,9 +269,7 @@ class SimTools:
     @staticmethod
     def compute_network_params(
         port,
-        operating_freq,
-        corner_freq,
-        num_points,
+        freqs,
         charac_imp,
         output_path: Path | None = None,
     ):
@@ -268,12 +284,8 @@ class SimTools:
         ----------
         port : object
             The openEMS port object representing the simulation port.
-        operating_freq: float
-            the resonant frequency of an antenna.
-        corner_freq: float
-            This refers to the span of frequency below and above the resonant frequency of antenna.
-        num_points: floats
-            number of points to be calculated.
+        freqs: ndarray
+            takes list of frequencies that was used for the simulation.
         charac_imp: float
             characteristic impedance of the input port.
         output_path : Path
@@ -285,11 +297,13 @@ class SimTools:
             A named tuple containing the following attributes:
 
             - freqs : ndarray
-                A numpy array of frequencies used for post-processing. The array is generated
-                from `operating_freq - corner_freq` to `operating_freq + corner_freq`.
+                A numpy array of frequencies used for post-processing.
 
             - s11 : ndarray
                 A numpy array of calculated complex S11 values across the entire frequency range.
+
+            - s21 : ndarray
+                A numpy array of calculated complex S21 values across the entire frequency range.
 
             - z11 : ndarray
                 A numpy array of calculated complex Z11 values across the entire frequency range.
@@ -310,11 +324,6 @@ class SimTools:
 
         NetworkParams = namedtuple(
             "NetworkParams", ["freqs", "s11", "s21", "z11", "vswr", "input_power"]
-        )
-        freqs = np.linspace(
-            operating_freq - corner_freq,
-            operating_freq + corner_freq,
-            num_points,
         )
         if isinstance(port, list):
             for p in port:
@@ -376,7 +385,7 @@ class SimTools:
         """
         if s21 is not None:
             s21 = np.log10(np.abs(s21))
-            s21_lines = plt.plot(freqs, s21, label = "S21")
+            s21_lines = plt.plot(freqs, s21, label="S21")
             cursor = mplcursors.cursor(s21_lines, multiple=True)
 
             @cursor.connect("add")
@@ -1357,18 +1366,36 @@ class SimTools:
         SimTools.plot_smith_chart(freqs, s11)
         SimTools.plot_vswr(freqs, vswr)
         SimTools.plot_impedance(freqs, z11)
-        SimTools.plot_2d_directivity(nf2ff, params.operating_freq, output_path)
-        SimTools.plot_2d_rad_pattern(nf2ff, params.operating_freq, output_path)
-        SimTools.plot_3d_directivity(
-            nf2ff_3d_result, params.operating_freq, output_path
-        )
-        SimTools.plot_3d_gain(
-            nf2ff_3d_result,
-            params.operating_freq,
-            input_power,
-            output_path,
-        )
-        SimTools.plot_3d_power(nf2ff_3d_result, params.operating_freq, output_path)
+
+        if params.resonant_freq is not None and params.span_freq is not None:
+            SimTools.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
+            SimTools.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
+            SimTools.plot_3d_directivity(
+                nf2ff_3d_result, params.resonant_freq, output_path
+            )
+            SimTools.plot_3d_gain(
+                nf2ff_3d_result,
+                params.resonant_freq,
+                input_power,
+                output_path,
+            )
+            SimTools.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
+
+        if params.max_freq is not None and params.min_freq is not None:
+
+            SimTools.plot_2d_directivity(nf2ff, params.centre_freq, output_path)
+            SimTools.plot_2d_rad_pattern(nf2ff, params.centre_freq, output_path)
+            SimTools.plot_3d_directivity(
+                nf2ff_3d_result, params.centre_freq, output_path
+            )
+            SimTools.plot_3d_gain(
+                nf2ff_3d_result,
+                params.centre_freq,
+                input_power,
+                output_path,
+            )
+            SimTools.plot_3d_power(nf2ff_3d_result, params.centre_freq, output_path)
+
         SimTools.save_plots(output_path)
         SimTools.show_plots()
         SimTools.export_stl(output_path)

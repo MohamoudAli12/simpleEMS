@@ -18,8 +18,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from .calc import microstrip_width_from_impedance, phase_shift_length
 from .sim_params import SimParams
-from .sim_tools import SimTools, mm_to_m
-from .console import console
+from .sim_tools import SimTools
 
 # ----------------------------
 # Public APIS
@@ -42,9 +41,11 @@ class MicrostripLineParams(SimParams):
     ang_length_deg: int = 90
     microstrip_length_mm: float = field(init=False)
     microstrip_width_mm: float = field(init=False)
+    centre_freq: float | None = field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
+        self.centre_freq = np.mean([self.min_freq, self.max_freq])
 
         self.microstrip_width_mm = np.round(
             microstrip_width_from_impedance(
@@ -52,13 +53,15 @@ class MicrostripLineParams(SimParams):
                 self.substrate_thickness_mm,
                 self.copper_thickness_mm,
                 self.substrate_eps_r,
-                self.operating_freq,
+                self.centre_freq,
             ),
             self.fp_precision,
         )
         self.microstrip_length_mm = np.round(
             phase_shift_length(
-                self.ang_length_deg, self.substrate_eps_r, self.operating_freq
+                self.ang_length_deg,
+                self.substrate_eps_r,
+                self.centre_freq,
             ),
             self.fp_precision,
         )
@@ -173,7 +176,7 @@ class MicrostripLine(SimTools):
         """
         create port
         """
-        port = [None,None]
+        port = [None, None]
         port_1_start = [
             self.params.microstrip_width_mm / 2,
             -self.params.microstrip_length_mm / 2,

@@ -93,7 +93,7 @@ class InsetFedPatchParams(SimParams):
 
         self.feed_length_mm = np.round(
             phase_shift_length(
-                self.ang_length_deg, self.substrate_eps_r, self.operating_freq
+                self.ang_length_deg, self.substrate_eps_r, self.resonant_freq
             ),
             self.fp_precision,
         )
@@ -103,12 +103,12 @@ class InsetFedPatchParams(SimParams):
                 self.substrate_thickness_mm,
                 self.copper_thickness_mm,
                 self.substrate_eps_r,
-                self.operating_freq,
+                self.resonant_freq,
             ),
             self.fp_precision,
         )
         self.patch_dims = patch_dims(
-            self.operating_freq,
+            self.resonant_freq,
             self.substrate_eps_r,
             mm_to_m(self.substrate_thickness_mm),
             self.charac_imp,
@@ -504,7 +504,7 @@ class ProbeFedPatchParams(SimParams):
 
         super().__post_init__()
         self.patch_dims = patch_dims(
-            self.operating_freq,
+            self.resonant_freq,
             self.substrate_eps_r,
             self.substrate_thickness_mm * self.unit,
             self.charac_imp,

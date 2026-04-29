@@ -6,15 +6,15 @@ from simpleEMS import (
 )
 
 params = MicrostripLineParams(
-    operating_freq=2.45e9,
-    corner_freq=1e9,
+    min_freq=100e6,
+    max_freq=4e9,
     substrate_thickness_mm=1.6,
     substrate_eps_r=4.4,
     substrate_tand=0.001,
     charac_imp=50,
 )
 
-CSX, FDTD = setup_simulation(params, boundary_cond=["MUR"] * 6)
+CSX, FDTD, freqs = setup_simulation(params, boundary_cond=["MUR"] * 6)
 
 microstrip = MicrostripLine(params, CSX, FDTD)
 microstrip.print_and_save_params(params)
@@ -31,16 +31,14 @@ microstrip.run_simulation(FDTD)
 
 network_params = microstrip.compute_network_params(
     port,
-    params.operating_freq,
-    params.corner_freq,
-    params.num_points,
+    freqs,
     params.charac_imp,
 )
 
-nf2ff_3d_result = microstrip.compute_nf2ff_3d(nf2ff, params.operating_freq)
+nf2ff_3d_result = microstrip.compute_nf2ff_3d(nf2ff, params.centre_freq)
 microstrip.run_all_post_processing(
     CSX,
-    network_params.freqs,
+    freqs,
     network_params.s11,
     network_params.vswr,
     network_params.z11,
