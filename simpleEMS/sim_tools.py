@@ -142,26 +142,19 @@ def setup_simulation(
     freqs:ndarray
         a list of frequencies that will be used in the simulation and post-processing.
     """
-
     CSX = ContinuousStructure()
     FDTD = openEMS(NrTS=params.timestep, EndCriteria=params.end_criteria)
+
     FDTD.SetBoundaryCond(boundary_cond)
     FDTD.SetCSX(CSX)
-    freqs = None
-    if params.resonant_freq is not None and params.span_freq is not None:
-        FDTD.SetGaussExcite(params.resonant_freq, params.span_freq)
-        freqs = np.linspace(
-            params.resonant_freq - params.span_freq,
-            params.resonant_freq + params.span_freq,
-            params.num_points,
-        )
-    elif params.max_freq is not None and params.min_freq is not None:
-        FDTD.SetGaussExcite(params.max_freq / 2, params.max_freq / 2)
-        freqs = np.linspace(
-            params.min_freq,
-            params.max_freq,
-            params.num_points,
-        )
+
+    fmin, fmax = params.freq_range
+    centre_freq = (fmin + fmax) / 2
+    span_freq = (fmax - fmin) / 2
+
+    FDTD.SetGaussExcite(centre_freq, span_freq)
+
+    freqs = np.linspace(fmin, fmax, params.num_points)
 
     return CSX, FDTD, freqs
 
@@ -1362,40 +1355,22 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd()
 
+        target_freq = params.main_freq 
+
         SimTools.plot_s_param(freqs, s11, s21)
         SimTools.plot_smith_chart(freqs, s11)
         SimTools.plot_vswr(freqs, vswr)
         SimTools.plot_impedance(freqs, z11)
-
-        if params.resonant_freq is not None and params.span_freq is not None:
-            SimTools.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
-            SimTools.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
-            SimTools.plot_3d_directivity(
-                nf2ff_3d_result, params.resonant_freq, output_path
-            )
-            SimTools.plot_3d_gain(
-                nf2ff_3d_result,
-                params.resonant_freq,
-                input_power,
-                output_path,
-            )
-            SimTools.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
-
-        if params.max_freq is not None and params.min_freq is not None:
-
-            SimTools.plot_2d_directivity(nf2ff, params.centre_freq, output_path)
-            SimTools.plot_2d_rad_pattern(nf2ff, params.centre_freq, output_path)
-            SimTools.plot_3d_directivity(
-                nf2ff_3d_result, params.centre_freq, output_path
-            )
-            SimTools.plot_3d_gain(
-                nf2ff_3d_result,
-                params.centre_freq,
-                input_power,
-                output_path,
-            )
-            SimTools.plot_3d_power(nf2ff_3d_result, params.centre_freq, output_path)
-
+        SimTools.plot_2d_directivity(nf2ff, target_freq, output_path)
+        SimTools.plot_2d_rad_pattern(nf2ff, target_freq, output_path)
+        SimTools.plot_3d_directivity(nf2ff_3d_result, target_freq, output_path)
+        SimTools.plot_3d_gain(
+            nf2ff_3d_result,
+            target_freq,
+            input_power,
+            output_path,
+        )
+        SimTools.plot_3d_power(nf2ff_3d_result, target_freq, output_path)
         SimTools.save_plots(output_path)
         SimTools.show_plots()
         SimTools.export_stl(output_path)

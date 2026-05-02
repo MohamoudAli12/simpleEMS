@@ -69,6 +69,8 @@ class InsetFedPatchParams(SimParams):
         size: ``[x_size_mm, y_size_mm, z_size_mm]``.
     """
 
+    resonant_freq: float
+    span_freq: float
     ang_length_deg: int = 90
     patch_length_mm: float = field(init=False)
     patch_width_mm: float = field(init=False)
@@ -77,37 +79,38 @@ class InsetFedPatchParams(SimParams):
     feed_width_mm: float = field(init=False)
     feed_length_mm: float = field(init=False)
 
+    @property
+    def freq_range(self):
+        return (
+            self.resonant_freq - self.span_freq,
+            self.resonant_freq + self.span_freq,
+        )
+
+    @property
+    def main_freq(self):
+        return self.resonant_freq
+
     def __post_init__(self):
-        """
-        Perform geometric calculations after data class initialization.
-
-        This method triggers the calculation of all physical dimensions
-        based on the frequency and material parameters provided.
-
-        Returns
-        -------
-        None
-        """
-
         super().__post_init__()
+        self._compute_geometry()
+        self._create_simulation_box()
 
-        self.feed_length_mm = np.round(
-            phase_shift_length(
-                self.ang_length_deg, self.substrate_eps_r, self.resonant_freq
-            ),
-            self.fp_precision,
+    def _compute_geometry(self):
+        self.feed_length_mm = phase_shift_length(
+            self.ang_length_deg,
+            self.substrate_eps_r,
+            self.resonant_freq,
         )
-        self.feed_width_mm = np.round(
-            microstrip_width_from_impedance(
-                self.charac_imp,
-                self.substrate_thickness_mm,
-                self.copper_thickness_mm,
-                self.substrate_eps_r,
-                self.resonant_freq,
-            ),
-            self.fp_precision,
+
+        self.feed_width_mm = microstrip_width_from_impedance(
+            self.charac_imp,
+            self.substrate_thickness_mm,
+            self.copper_thickness_mm,
+            self.substrate_eps_r,
+            self.resonant_freq,
         )
-        self.patch_dims = patch_dims(
+
+        dims = patch_dims(
             self.resonant_freq,
             self.substrate_eps_r,
             mm_to_m(self.substrate_thickness_mm),
@@ -115,36 +118,31 @@ class InsetFedPatchParams(SimParams):
             self.copper_thickness_mm,
         )
 
-        self.patch_width_mm = np.round(
-            self.patch_dims.patch_width_mm, self.fp_precision
-        )
-        self.patch_length_mm = np.round(
-            self.patch_dims.patch_length_mm, self.fp_precision
-        )
-        self.inset_width_mm = np.round(
-            self.patch_dims.inset_width_mm / 2, self.fp_precision
-        )
+        self.patch_width_mm = dims.patch_width_mm
+        self.patch_length_mm = dims.patch_length_mm
+        self.inset_width_mm = dims.inset_width_mm / 2
+        self.inset_length_mm = dims.inset_length_mm
 
-        self.inset_length_mm = np.round(
-            self.patch_dims.inset_length_mm, self.fp_precision
-        )
-        self.substrate_width_mm = np.round(
-            self.patch_width_mm + 2 * self.lambda0, self.fp_precision
-        )
-        self.substrate_length_mm = np.round(
-            self.patch_length_mm + 2 * self.lambda0, self.fp_precision
-        )
+        self.substrate_width_mm = self.patch_width_mm + 2 * self.lambda0
+        self.substrate_length_mm = self.patch_length_mm + 2 * self.lambda0
 
-        self.simulation_box = np.round(
-            np.array(
-                [
-                    self.substrate_width_mm + self.lambda0,
-                    self.substrate_length_mm + self.lambda0,
-                    self.lambda0 * 2,
-                ]
-            ),
-            self.fp_precision,
-        )
+        self._round_outputs()
+
+    def _round_outputs(self):
+        for attr in [
+            "patch_width_mm",
+            "patch_length_mm",
+            "inset_width_mm",
+            "inset_length_mm",
+            "feed_width_mm",
+            "feed_length_mm",
+            "substrate_width_mm",
+            "substrate_length_mm",
+            "lambda0",
+            "mesh_resolution",
+            "thirds_rule",
+        ]:
+            setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
 
 
 class PatchAntenna(SimTools):

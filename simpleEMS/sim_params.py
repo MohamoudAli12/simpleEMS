@@ -20,7 +20,7 @@ import numpy as np
 from openEMS.physical_constants import C0, EPS0
 
 
-@dataclass
+@dataclass(kw_only=True)
 class SimParams:
     """
     This class stores all user-defined parameters required for an OpenEMS
@@ -98,11 +98,6 @@ class SimParams:
     substrate_thickness_mm: float
     substrate_kappa: float = field(init=False)
 
-    resonant_freq: float | None = None
-    span_freq: float | None = None
-    min_freq: float | None = None
-    max_freq: float | None = None
-
     substrate_width_mm: float = 100
     substrate_length_mm: float = 100
     substrate_cells: int = 4
@@ -123,58 +118,43 @@ class SimParams:
     simulation_box: np.ndarray = field(init=False)
     thirds_rule: np.ndarray = field(init=False)
 
+    @property
+    def freq_range(self):
+        raise NotImplementedError("Subclasses must define freq_range")
+
+    @property
+    def main_freq(self):
+        raise NotImplementedError("Subclasses must define target_freq")
+
     def __post_init__(self):
-        if self.resonant_freq is not None and self.span_freq is not None:
-            self.substrate_kappa = (
-                self.substrate_tand
-                * 2
-                * np.pi
-                * self.resonant_freq
-                * EPS0
-                * self.substrate_eps_r
-            )
+        self._compute_common()
 
-            self.lambda0 = np.round(
-                C0
-                / (
-                    (self.resonant_freq + self.span_freq)
-                    * np.sqrt(self.substrate_eps_r)
-                    * self.unit
-                ),
-                self.fp_precision,
-            )
-        elif self.max_freq is not None and self.min_freq is not None:
-            self.substrate_kappa = (
-                self.substrate_tand
-                * 2
-                * np.pi
-                * self.max_freq
-                * EPS0
-                * self.substrate_eps_r
-            )
+    def _compute_common(self):
+        fmin, fmax = self.freq_range
+        f_ref = fmax
 
-            self.lambda0 = np.round(
-                C0 / ((self.max_freq) * np.sqrt(self.substrate_eps_r) * self.unit),
-                self.fp_precision,
-            )
-
-        # mesh resolution
-        self.mesh_resolution = np.round(
-            self.lambda0 / self.mesh_resolution_factor, self.fp_precision
-        )
-        self.metal_mesh_resolution = np.round(
-            self.lambda0 / self.metal_mesh_resolution_factor, self.fp_precision
+        self.substrate_kappa = (
+            self.substrate_tand * 2 * np.pi * f_ref * EPS0 * self.substrate_eps_r
         )
 
-        self.thirds_rule = np.round(
-            (
-                np.array(
-                    [
-                        2 * self.mesh_resolution / 3,
-                        -self.mesh_resolution / 3,
-                    ]
-                )
-                / 4
+        self.lambda0 = C0 / (f_ref * np.sqrt(self.substrate_eps_r) * self.unit)
+
+        self.mesh_resolution = self.lambda0 / self.mesh_resolution_factor
+        self.metal_mesh_resolution = self.lambda0 / self.metal_mesh_resolution_factor
+
+        self.thirds_rule = (
+            np.array([2 * self.mesh_resolution / 3, -self.mesh_resolution / 3]) / 4
+        )
+
+    def _create_simulation_box(self):
+        """Call AFTER geometry is defined."""
+        self.simulation_box = np.round(
+            np.array(
+                [
+                    self.substrate_width_mm + self.lambda0,
+                    self.substrate_length_mm + self.lambda0,
+                    self.lambda0 * 2,
+                ]
             ),
             self.fp_precision,
         )

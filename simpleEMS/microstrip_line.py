@@ -33,55 +33,63 @@ __all__ = [
 class MicrostripLineParams(SimParams):
     """
     This dataclass represents the parameters for a microstrip line.
-
-
-
     """
+
+    min_freq: float
+    max_freq: float
+    target_freq:float
 
     ang_length_deg: int = 90
     microstrip_length_mm: float = field(init=False)
     microstrip_width_mm: float = field(init=False)
-    centre_freq: float | None = field(init=False)
+
+    @property
+    def freq_range(self):
+        return self.min_freq, self.max_freq
+
+    @property
+    def main_freq(self):
+        return self.target_freq
+
 
     def __post_init__(self):
         super().__post_init__()
-        self.centre_freq = np.mean([self.min_freq, self.max_freq])
+        self._compute_geometry()
+        self._create_simulation_box()
 
-        self.microstrip_width_mm = np.round(
-            microstrip_width_from_impedance(
-                self.charac_imp,
-                self.substrate_thickness_mm,
-                self.copper_thickness_mm,
-                self.substrate_eps_r,
-                self.centre_freq,
-            ),
-            self.fp_precision,
-        )
-        self.microstrip_length_mm = np.round(
-            phase_shift_length(
-                self.ang_length_deg,
-                self.substrate_eps_r,
-                self.centre_freq,
-            ),
-            self.fp_precision,
-        )
-        self.substrate_width_mm = np.round(
-            self.microstrip_width_mm + 2 * self.lambda0, self.fp_precision
-        )
-        self.substrate_length_mm = np.round(
-            self.microstrip_length_mm + 2 * self.lambda0, self.fp_precision
+    def _compute_geometry(self):
+
+        self.microstrip_width_mm = microstrip_width_from_impedance(
+            self.charac_imp,
+            self.substrate_thickness_mm,
+            self.copper_thickness_mm,
+            self.substrate_eps_r,
+            self.main_freq,
         )
 
-        self.simulation_box = np.round(
-            np.array(
-                [
-                    self.substrate_width_mm + self.lambda0,
-                    self.substrate_length_mm + self.lambda0,
-                    self.lambda0 * 2,
-                ]
-            ),
-            self.fp_precision,
+        self.microstrip_length_mm = phase_shift_length(
+            self.ang_length_deg,
+            self.substrate_eps_r,
+            self.main_freq,
         )
+
+        self.substrate_width_mm = self.microstrip_width_mm + 2 * self.lambda0
+        self.substrate_length_mm = self.microstrip_length_mm + 2 * self.lambda0
+
+        self._round_outputs()
+
+    def _round_outputs(self):
+        for attr in [
+            "microstrip_width_mm",
+            "microstrip_length_mm",
+            "substrate_width_mm",
+            "substrate_length_mm",
+            "lambda0",
+            "mesh_resolution",
+            "metal_mesh_resolution",
+            "thirds_rule",
+        ]:
+            setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
 
 
 class MicrostripLine(SimTools):
