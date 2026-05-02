@@ -6,8 +6,9 @@ from simpleEMS import (
 )
 
 params = MicrostripLineParams(
-    min_freq=100e6,
-    max_freq=4e9,
+    min_freq=1e9,
+    max_freq=2e9,
+    target_freq=1.7e9,
     substrate_thickness_mm=1.6,
     substrate_eps_r=4.4,
     substrate_tand=0.001,
@@ -35,7 +36,7 @@ network_params = microstrip.compute_network_params(
     params.charac_imp,
 )
 
-nf2ff_3d_result = microstrip.compute_nf2ff_3d(nf2ff, params.centre_freq)
+nf2ff_3d_result = microstrip.compute_nf2ff_3d(nf2ff, params.target_freq)
 microstrip.run_all_post_processing(
     CSX,
     freqs,
