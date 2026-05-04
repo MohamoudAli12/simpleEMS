@@ -55,7 +55,7 @@ __all__ = [
     "DumpType",
     "SimTools",
     "setup_simulation",
-    "optimize_s11",
+    "optimize_s_params",
     "param_sweep",
     "mm_to_m",
     "m_to_mm",
@@ -1189,9 +1189,10 @@ class SimTools:
     def export_touchstone(
         freqs,
         s11,
-        output_path: Path | None = None,
-        charac_imp: float = 50.0,
+        *,
         s21=None,
+        charac_imp: float = 50.0,
+        output_path: Path | None = None,
         filename="s_param",
     ):
         """
@@ -1355,7 +1356,7 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd()
 
-        target_freq = params.main_freq 
+        target_freq = params.main_freq
 
         SimTools.plot_s_param(freqs, s11, s21)
         SimTools.plot_smith_chart(freqs, s11)
@@ -1374,11 +1375,82 @@ class SimTools:
         SimTools.save_plots(output_path)
         SimTools.show_plots()
         SimTools.export_stl(output_path)
-        SimTools.export_touchstone(freqs, s11, output_path, params.charac_imp, s21)
+        SimTools.export_touchstone(
+            freqs,
+            s11,
+            output_path=output_path,
+            charac_imp=params.charac_imp,
+            s21=s21,
+        )
         SimTools.export_gerber(CSX, output_path, options={"ignore": ["ground"]})
 
 
-def optimize_s11(
+def optimize_s11(freqs, s11, target_freq=None, freq_band=None, mode="worst"):
+    """
+    Objective for S11 (reflection). Lower is better.
+
+    Parameters:
+        freqs : array
+        s11   : complex array
+        target_freq : float (optional)
+        band  : tuple (f_min, f_max) (optional)
+        mode  : "worst", "mean", or "threshold"
+
+    Returns:
+        scalar cost
+    """
+
+    s11_db = 20.0 * np.log10(np.abs(s11))
+
+    if target_freq is not None:
+        idx = (np.abs(freqs - target_freq)).argmin()
+        return s11_db[idx]
+
+    if freq_band is not None:
+        f_min, f_max = freq_band
+        mask = (freqs >= f_min) & (freqs <= f_max)
+
+        if mode == "worst":
+            return np.max(s11_db[mask])  # -3, -13, -23 return -3
+
+        elif mode == "mean":
+            return np.mean(s11_db[mask])  # -3, -13, -23 return average
+
+        elif mode == "threshold":
+            threshold = -10  # dB target
+            penalty = np.maximum(s11_db[mask] - threshold, 0)
+            return np.sum(penalty)
+
+        else:
+            raise ValueError("mode must be 'mean', 'worst', 'threshold'")
+
+    raise ValueError("Provide target_freq or freq_band")
+
+
+def optimize_s21(freqs, s21, target_freq=None, freq_band=None, mode="mean"):
+    s21_db = 20.0 * np.log10(np.abs(s21))
+
+    if target_freq is not None:
+        idx = (np.abs(freqs - target_freq)).argmin()
+        return -s21_db[idx]
+
+    if freq_band is not None:
+        f_min, f_max = freq_band
+        mask = (freqs >= f_min) & (freqs <= f_max)
+
+        if mode == "mean":
+            return -np.mean(s21_db[mask])
+
+        elif mode == "worst":
+            return -np.min(s21_db[mask])
+
+        else:
+            raise ValueError("mode must be 'mean' or 'worst'")
+
+    raise ValueError("Provide target_freq or freq_band")
+
+
+def optimize_s_params(
     simulate_fn: Callable, x0: dict[str, float], output_path: Path, bounds=None
 ) -> None:
     """

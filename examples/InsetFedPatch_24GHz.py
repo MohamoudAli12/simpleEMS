@@ -5,7 +5,7 @@ from simpleEMS import (
     InsetFedPatchParams,
     InsetFedPatchAntenna,
     setup_simulation,
-    optimize_s11,
+    optimize_s_params,
     param_sweep,
 )
 
@@ -105,7 +105,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.save_plots(output_path)
         patch.show_plots()
         patch.export_touchstone(
-            network_params.freqs, network_params.s11, output_path, params.charac_imp
+            freqs = network_params.freqs,
+            s11=network_params.s11,
+            charac_imp=params.charac_imp,
+            output_path=output_path,
         )
         patch.export_stl(output_path)
         patch.export_gerber(CSX, output_path)
@@ -123,7 +126,7 @@ def main():
             "patch_length_mm": 1.389,
             "patch_width_mm": 1.767,
         }
-        optimize_s11(simulate, x0, output_path)
+        optimize_s_params(simulate, x0, output_path)
 
     sweep = False
     if sweep:

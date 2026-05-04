@@ -484,9 +484,23 @@ class ProbeFedPatchParams(SimParams):
             Includes lambda0 air padding around the antenna structure.
     """
 
+    resonant_freq: float
+    span_freq: float
+
     patch_length_mm: float = field(init=False)
     patch_width_mm: float = field(init=False)
     probe_pos_mm: float = field(init=False)
+
+    @property
+    def freq_range(self):
+        return (
+            self.resonant_freq - self.span_freq,
+            self.resonant_freq + self.span_freq,
+        )
+
+    @property
+    def main_freq(self):
+        return self.resonant_freq
 
     def __post_init__(self):
         """
@@ -501,37 +515,36 @@ class ProbeFedPatchParams(SimParams):
         """
 
         super().__post_init__()
-        self.patch_dims = patch_dims(
+        self._compute_geometry()
+        self._create_simulation_box()
+
+    def _compute_geometry(self):
+        dims = patch_dims(
             self.resonant_freq,
             self.substrate_eps_r,
-            self.substrate_thickness_mm * self.unit,
+            mm_to_m(self.substrate_thickness_mm),
             self.charac_imp,
             self.copper_thickness_mm,
         )
-        self.patch_width_mm = np.round(
-            self.patch_dims.patch_width_mm, self.fp_precision
-        )
-        self.patch_length_mm = np.round(
-            self.patch_dims.patch_length_mm, self.fp_precision
-        )
-        self.probe_pos_mm = np.round((self.patch_dims.probe_pos_mm), self.fp_precision)
-        self.substrate_width_mm = np.round(
-            self.patch_width_mm + 2 * self.lambda0, self.fp_precision
-        )
-        self.substrate_length_mm = np.round(
-            self.patch_length_mm + 2 * self.lambda0, self.fp_precision
-        )
+        self.patch_width_mm = dims.patch_width_mm
+        self.patch_length_mm = dims.patch_length_mm
+        self.probe_pos_mm = dims.probe_pos_mm
+        self.substrate_width_mm = self.patch_width_mm + 2 * self.lambda0
+        self.substrate_length_mm = self.patch_length_mm + 2 * self.lambda0
+        self._round_outputs()
 
-        self.simulation_box = np.round(
-            np.array(
-                [
-                    self.substrate_width_mm + self.lambda0,
-                    self.substrate_length_mm + self.lambda0,
-                    self.lambda0 * 2,
-                ]
-            ),
-            self.fp_precision,
-        )
+    def _round_outputs(self):
+        for attr in [
+            "patch_width_mm",
+            "patch_length_mm",
+            "probe_pos_mm",
+            "substrate_width_mm",
+            "substrate_length_mm",
+            "lambda0",
+            "mesh_resolution",
+            "thirds_rule",
+        ]:
+            setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
 
 
 class ProbeFedPatchAntenna(PatchAntenna):

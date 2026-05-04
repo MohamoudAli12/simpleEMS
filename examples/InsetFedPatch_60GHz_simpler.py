@@ -5,7 +5,7 @@ from simpleEMS import (
     InsetFedPatchParams,
     InsetFedPatchAntenna,
     setup_simulation,
-    optimize_s11,
+    optimize_s_params,
     param_sweep,
 )
 
@@ -112,7 +112,7 @@ def main():
             "patch_length_mm": 1.389,
             "patch_width_mm": 1.767,
         }
-        optimize_s11(simulate, x0, output_path)
+        optimize_s_params(simulate, x0, output_path)
 
     sweep = False
     if sweep:

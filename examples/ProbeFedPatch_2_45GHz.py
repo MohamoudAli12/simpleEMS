@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import numpy as np
 from simpleEMS import (
     ProbeFedPatchParams,
     ProbeFedPatchAntenna,
     setup_simulation,
+    optimize_s_params,
     optimize_s11,
     param_sweep,
 )
@@ -27,6 +27,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     if optimize:
         params.probe_pos_mm = optimize_val[0]
         params.patch_width_mm = optimize_val[1]
+        params.patch_length_mm = optimize_val[2]
 
     # params.probe_pos_mm = np.round(params.probe_pos_mm - 7, params.fp_precision)
     # params.patch_length_mm = np.round(
@@ -65,12 +66,11 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             params.charac_imp,
             output_path,
         )
-
-        freqs = network_params.freqs
-        s11 = network_params.s11
-        s11 = 20.0 * np.log10(np.abs(s11))
-        idx = (np.abs(freqs - params.resonant_freq)).argmin()
-        return s11[idx]
+        return optimize_s11(
+            network_params.freqs,
+            network_params.s11,
+            target_freq=params.resonant_freq,
+        )
 
     elif not (sweep and optimize):
         patch.run_simulation(FDTD, output_path)
@@ -101,7 +101,13 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.save_plots(output_path)
         patch.show_plots()
         patch.export_stl(output_path)
-        patch.export_touchstone(network_params.freqs, network_params.s11, output_path, params.charac_imp)
+        patch.export_touchstone(
+            freqs = network_params.freqs,
+            s11=network_params.s11,
+            charac_imp=params.charac_imp,
+            output_path=output_path,
+        )
+
         patch.export_gerber(CSX, output_path)
 
 
@@ -114,8 +120,9 @@ def main():
         x0 = {
             "probe_pos_mm": 11.501,
             "patch_width_mm": 37.234,
+            "patch_length_mm": 28.809,
         }
-        optimize_s11(simulate, x0, output_path)
+        optimize_s_params(simulate, x0, output_path)
 
     sweep = False
     if sweep:
