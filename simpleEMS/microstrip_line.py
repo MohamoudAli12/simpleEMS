@@ -32,12 +32,35 @@ __all__ = [
 @dataclass
 class MicrostripLineParams(SimParams):
     """
-    This dataclass represents the parameters for a microstrip line.
+    Parameters for a microstrip transmission line.
+    This class extends SimParams and computes derived geometric
+    parameters required for microstrip line layout and simulation.
+    Parameters
+    ----------
+    min_freq : float
+        Minimum frequency of the simulation range in Hz.
+    max_freq : float
+        Maximum frequency of the simulation range in Hz.
+    target_freq : float
+        Target frequency used to compute the microstrip dimensions in Hz.
+    ang_length_deg : int, optional
+        Electrical length (in degrees) used to compute the microstrip
+        phase shift length. Default is 90.
+    Attributes
+    ----------
+    microstrip_width_mm : float
+        Computed width of the microstrip trace in millimeters.
+    microstrip_length_mm : float
+        Computed length of the microstrip trace in millimeters.
+    substrate_width_mm : float
+        Substrate width including margin (lambda0 padding).
+    substrate_length_mm : float
+        Substrate length including margin (lambda0 padding).
     """
 
     min_freq: float
     max_freq: float
-    target_freq:float
+    target_freq: float
 
     ang_length_deg: int = 90
     microstrip_length_mm: float = field(init=False)
@@ -45,12 +68,25 @@ class MicrostripLineParams(SimParams):
 
     @property
     def freq_range(self):
+        """
+        Return the simulation frequency range.
+        Returns
+        -------
+        tuple of (float, float)
+            A tuple containing (min_freq, max_freq).
+        """
         return self.min_freq, self.max_freq
 
     @property
     def main_freq(self):
+        """
+        Return the primary frequency of interest for analysis.
+        Returns
+        -------
+        float
+            The target frequency for the microstrip line simulation.
+        """
         return self.target_freq
-
 
     def __post_init__(self):
         super().__post_init__()
@@ -58,7 +94,15 @@ class MicrostripLineParams(SimParams):
         self._create_simulation_box()
 
     def _compute_geometry(self):
-
+        """
+        Compute all derived geometric parameters for the microstrip line.
+        This method calculates the microstrip width and length based on
+        the characteristic impedance, substrate properties, and target
+        frequency. It also computes the substrate dimensions.
+        Returns
+        -------
+        None
+        """
         self.microstrip_width_mm = microstrip_width_from_impedance(
             self.charac_imp,
             self.substrate_thickness_mm,
@@ -79,6 +123,14 @@ class MicrostripLineParams(SimParams):
         self._round_outputs()
 
     def _round_outputs(self):
+        """
+        Round all geometric parameters to the configured floating-point precision.
+        This method iterates over key geometric and mesh attributes and rounds
+        them to `self.fp_precision` decimal places.
+        Returns
+        -------
+        None
+        """
         for attr in [
             "microstrip_width_mm",
             "microstrip_length_mm",
@@ -94,9 +146,18 @@ class MicrostripLineParams(SimParams):
 
 class MicrostripLine(SimTools):
     """
-    this builds the microstrip line.
-
-
+    A class for modeling and simulating microstrip transmission lines.
+    This class extends SimTools and provides methods for creating the
+    substrate, ground plane, microstrip trace, ports, and mesh for
+    electromagnetic simulation using openEMS.
+    Parameters
+    ----------
+    params : MicrostripLineParams
+        Data container containing geometric and material properties.
+    CSX : ContinuousStructure
+        The CSXCAD geometry container used to define physical objects.
+    FDTD : openEMS
+        The FDTD simulation engine object.
     """
 
     def __init__(self, params, CSX, FDTD) -> None:
@@ -107,7 +168,13 @@ class MicrostripLine(SimTools):
 
     def create_substrate(self):
         """
-        create the substrate
+        Define and add the dielectric substrate to the simulation.
+        This method creates a material using the permittivity and
+        loss tangent (kappa) defined in self.params, colors it green,
+        and adds a box geometry centered on the XY plane.
+        Returns
+        -------
+        None
         """
         substrate = self.CSX.AddMaterial(
             "substrate",
@@ -159,7 +226,14 @@ class MicrostripLine(SimTools):
 
     def create_microstrip_line(self):
         """
-        create the microstrip line
+        Create the microstrip trace element.
+        Adds a rectangular metal box representing the microstrip
+        transmission line on top of the substrate and registers
+        the metal edges with the FDTD grid for accurate field
+        calculation.
+        Returns
+        -------
+        None
         """
         microstrip_line = self.CSX.AddMetal("microstrip")
         microstrip_line.SetColor("#B87333", 255)
@@ -182,7 +256,15 @@ class MicrostripLine(SimTools):
 
     def create_ports(self):
         """
-        create port
+        Define the excitation lumped ports at both ends of the microstrip line.
+        Creates two ports: Port 1 (excited) at one end and Port 2
+        (unexcited) at the opposite end, enabling S21 transmission
+        measurements.
+        Returns
+        -------
+        list
+            A list of two LumpedPort objects [port1, port2] used to
+            retrieve S-parameter and impedance results after the simulation.
         """
         port = [None, None]
         port_1_start = [
@@ -229,6 +311,17 @@ class MicrostripLine(SimTools):
         return port
 
     def create_mesh(self):
+        """
+        Generate an FDTD mesh for the microstrip line simulation domain.
+        This method defines mesh lines for the x, y, and z directions
+        based on the microstrip geometry, substrate thickness, and
+        simulation box size. It applies the "thirds rule" for mesh
+        refinement near metal edges and uses SmoothMeshLines to
+        ensure a stable grid transition.
+        Returns
+        -------
+        None
+        """
         mesh = self.CSX.GetGrid()
         mesh.SetDeltaUnit(self.params.unit)
 
@@ -262,13 +355,6 @@ class MicrostripLine(SimTools):
         mesh.AddLine(
             "y", self.params.microstrip_length_mm / 2 + self.params.thirds_rule
         )
-
-        # mesh.AddLine("x", -self.params.feed_width_mm / 2 - self.params.thirds_rule)
-        # mesh.AddLine("x", self.params.feed_width_mm / 2 + self.params.thirds_rule)
-        # mesh.AddLine("y", -self.params.patch_length_mm / 2 - self.params.feed_length_mm)
-        # mesh.AddLine(
-        #     "y", -self.params.patch_length_mm / 2 + self.params.inset_length_mm
-        # )
 
         mesh.AddLine(
             "z",

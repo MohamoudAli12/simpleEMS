@@ -278,12 +278,12 @@ def patch_dims(
             patch_width_mm: float
                 Width of the patch antenna in direction of x in mm.
             patch_length_mm: float
-                Length of the patch antenna in direction of x in mm
+                Length of the patch antenna in direction of y in mm
             inset_length_mm: float 
                 Inset length of the patch in direction of y in mm
-            inset_width: float 
+            inset_width_mm: float 
                 Inset width of the patch in the direction of x in mm
-            probe_pos: float 
+            probe_pos_mm: float 
                 The feed position of probe fed patch antenna in direction of y in mm
     """
     PatchDims = NamedTuple(

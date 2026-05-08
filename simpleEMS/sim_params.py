@@ -23,18 +23,20 @@ from openEMS.physical_constants import C0, EPS0
 @dataclass(kw_only=True)
 class SimParams:
     """
-    This class stores all user-defined parameters required for an OpenEMS
-    simulation, such as frequency settings, substrate dimensions, and mesh
-    controls. Several dependent quantities—such as wavelength, dielectric
-    loss, mesh resolution, and recommended simulation box size—are computed
-    automatically in ``__post_init__()`` based on the provided inputs.
+    Base class for all openEMS simulation parameters.
+    This class stores user-defined parameters required for an OpenEMS
+    simulation, such as substrate properties, material settings, and mesh
+    controls. Several dependent quantities — such as wavelength, dielectric
+    loss (kappa), mesh resolution, and recommended simulation box size —
+    are computed automatically in ``__post_init__()`` based on the
+    frequency range and inputs provided.
+    Subclasses (e.g., InsetFedPatchParams, ProbeFedPatchParams,
+    MicrostripLineParams) must define ``freq_range`` and ``main_freq``
+    properties, and are responsible for setting substrate dimensions
+    before calling ``_create_simulation_box()``.
 
     Parameters
     ----------
-    resonant_freq : float
-        Target resonant frequency in Hz.
-    corner_freq : float
-         frequency used to compute the upper and lower bounds of the frequency range
 
     substrate_eps_r : float
         Relative permittivity of the substrate.
@@ -49,23 +51,22 @@ class SimParams:
     substrate_cells : int, optional
         Suggested number of mesh cells along the substrate thickness.
         Default value is ``4``.
-
     unit : float, optional
         unit used in the model. Default value is ``1e-3`` which represents millimeters.
         this value should not be changed.
     copper_thickness_mm : float, optional
         Thickness of the copper layer in millimeters. Default is ``0.035``.
-
+    num_points : int
+        Number of frequency points for post-processing. Default is ``1000``.
     fp_precision : int, optional
         Floating-point precision used when generating geometric values.
         Default is ``3``.
     charac_imp : float, optional
         Feed/port impedance in ohms. Default is ``50 ohms``.
     timestep : int, optional
-        FDTD simulation time-step count. Default is ``1000000``.
+        FDTD simulation time-step count. Default is ``90000000``.
     end_criteria : float, optional
         Convergence threshold for the stopping criteria. Default is ``1e-4``.
-
     mesh_resolution_factor : float, optional
         Division factor used to compute the global mesh resolution
         (``lambda0 / factor``). Default is ``20``.
@@ -78,19 +79,20 @@ class SimParams:
     Attributes
     ----------
     substrate_kappa : float
-        Computed dielectric loss term.
+        Conductivity-equivalent dielectric loss term computed from
+        loss tangent, frequency, and permittivity.
     lambda0 : float
-        Free space wavelength.
+    Effective wavelength in the substrate, computed as C0 / (f_ref * sqrt(eps_r) * unit).
     simulation_box : ndarray of shape (3,)
-        Recommended bounding box for the FDTD domain
-        (width, length, height).
+        Bounding box dimensions [x, y, z] for the FDTD domain in mm,
+        including lambda0 air padding around the structure.
     mesh_resolution : float
         Computed global mesh resolution.
     metal_mesh_resolution : float
         Computed mesh resolution for metal primitives.
-
     thirds_rule : ndarray
-        This defines one third two thirds rule required for accurate results.
+        Small mesh offsets (2/3 and -1/3 of mesh_resolution) applied
+        near metal edges for accurate field resolution.
     """
 
     substrate_eps_r: float
@@ -114,22 +116,59 @@ class SimParams:
     mesh_resolution_factor: int = 20
     metal_mesh_resolution_factor: int = 60
     mesh_resolution: float = field(init=False)
+
     lambda0: float = field(init=False)
     simulation_box: np.ndarray = field(init=False)
     thirds_rule: np.ndarray = field(init=False)
 
     @property
     def freq_range(self):
+        """
+        Return the simulation frequency range.
+        This property must be implemented by subclasses to define the
+        frequency bounds used in the simulation.
+        Returns
+        -------
+        tuple of (float, float)
+            A tuple containing (f_min, f_max) for the simulation.
+        Raises
+        ------
+        NotImplementedError
+            If the subclass does not define this property.
+        """
         raise NotImplementedError("Subclasses must define freq_range")
 
     @property
     def main_freq(self):
-        raise NotImplementedError("Subclasses must define target_freq")
+        """
+        Return the primary frequency of interest.
+        This property must be implemented by subclasses to define the
+        main frequency used for post-processing and analysis.
+        Returns
+        -------
+        float
+            The main/target frequency.
+        Raises
+        ------
+        NotImplementedError
+            If the subclass does not define this property.
+        """
+        raise NotImplementedError("Subclasses must define main_freq")
 
     def __post_init__(self):
         self._compute_common()
 
     def _compute_common(self):
+        """
+        Compute common simulation parameters shared across all structure types.
+        This method calculates the substrate kappa (dielectric loss),
+        free-space wavelength, global mesh resolution, metal mesh resolution,
+        and the thirds rule for mesh refinement based on the frequency range
+        and material properties.
+        Returns
+        -------
+        None
+        """
         fmin, fmax = self.freq_range
         f_ref = fmax
 
@@ -147,7 +186,17 @@ class SimParams:
         )
 
     def _create_simulation_box(self):
-        """Call AFTER geometry is defined."""
+        """
+        Compute the 3D simulation bounding box from substrate dimensions
+        and lambda0 padding.
+        This method sets the simulation_box attribute as a numpy array
+        of shape (3,) containing [x, y, z] dimensions that enclose the
+        antenna structure with lambda0 air padding on all sides. Must be
+        called after substrate dimensions are defined.
+        Returns
+        -------
+        None
+        """
         self.simulation_box = np.round(
             np.array(
                 [

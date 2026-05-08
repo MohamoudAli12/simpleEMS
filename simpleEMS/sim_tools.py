@@ -56,6 +56,8 @@ __all__ = [
     "SimTools",
     "setup_simulation",
     "optimize_s_params",
+    "optimize_s11",
+    "optimize_s21",
     "param_sweep",
     "mm_to_m",
     "m_to_mm",
@@ -307,10 +309,6 @@ class SimTools:
             - input_power : float
                 The calculated input power at the port.
 
-        Notes
-        -----
-        - The method assumes the simulation results are available at the specified `output_path`.
-        - The frequency range for post-processing is determined by the resonant frequency and the corner frequency.
         """
         if output_path is None:
             output_path = Path.cwd()
@@ -366,10 +364,10 @@ class SimTools:
             Label for the x-axis. Default is "Frequency".
 
         y_label : str, optional
-            Label for the y-axis. Default is "S11 (dB)".
+            Label for the y-axis. Default is "S-Parameter (dB)".
 
         title : str, optional
-            Title of the plot. Default is "S11 vs Frequency".
+            Title of the plot. Default is "S-Parameters vs Frequency".
 
         Returns
         -------
@@ -959,7 +957,10 @@ class SimTools:
 
     @staticmethod
     def plot_3d_gain(
-        nf2ff_3d, freq: float, input_power: float, output_path: Path | None = None
+        nf2ff_3d_result,
+        freq: float,
+        input_power: float,
+        output_path: Path | None = None,
     ) -> None:
         """
         Plot the 3D gain pattern of an antenna at a specified frequency.
@@ -987,21 +988,21 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd()
 
-        e_field = np.squeeze(nf2ff_3d.E_norm)
+        e_field = np.squeeze(nf2ff_3d_result.E_norm)
         e_field /= np.max(e_field)  # normalize
 
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
-        max_directivity = nf2ff_3d.Dmax[0]
+        max_directivity = nf2ff_3d_result.Dmax[0]
         directivity = max_directivity * e_field
 
-        efficiency = nf2ff_3d.Prad[0] / (np.max(input_power))
+        efficiency = nf2ff_3d_result.Prad[0] / (np.max(input_power))
         gain = efficiency * directivity
         gain_dbi = 10 * np.log10(gain)
 
-        theta = nf2ff_3d.theta
-        phi = nf2ff_3d.phi
+        theta = nf2ff_3d_result.theta
+        phi = nf2ff_3d_result.phi
 
         THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
 
@@ -1027,7 +1028,9 @@ class SimTools:
         plotter.add_text("Antenna 3D Pattern - Gain (dBi) ", position="upper_edge")
 
     @staticmethod
-    def plot_3d_power(nf2ff_3d, freq: float, output_path: Path | None = None) -> None:
+    def plot_3d_power(
+        nf2ff_3d_result, freq: float, output_path: Path | None = None
+    ) -> None:
         """
         Plot the 3D power pattern of an antenna at a specified frequency.
 
@@ -1057,14 +1060,14 @@ class SimTools:
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
-        power = np.squeeze(nf2ff_3d.P_rad)
+        power = np.squeeze(nf2ff_3d_result.P_rad)
 
         power = power / np.max(power)  # normalize
 
         power_db = 10 * np.log10(power)
 
-        theta = nf2ff_3d.theta
-        phi = nf2ff_3d.phi
+        theta = nf2ff_3d_result.theta
+        phi = nf2ff_3d_result.phi
 
         THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
 
@@ -1203,10 +1206,13 @@ class SimTools:
 
         Parameters
         ----------
-        freqs:float
+        freqs:ndarray
             List of frequencies to be exported.
-        s11:float
+        s11:ndarray
             calculated S11 parameters over the frequency range.
+
+        s21:ndarray
+            calculated S21 parameters over the frequency range.
 
         output_path : Path
             Path to the directory where simulation result is saved.
@@ -1353,6 +1359,44 @@ class SimTools:
         s21=None,
         output_path=None,
     ):
+        """
+        Run all post-processing steps for a completed simulation.
+        This convenience method executes the full suite of post-processing
+        operations including plotting S-parameters, Smith chart, VSWR,
+        impedance, radiation patterns, directivity, gain, power, exporting
+        STL, Touchstone, and Gerber files, and saving/displaying all plots.
+
+        Parameters
+        ----------
+        CSX : ContinuousStructure
+            The CSXCAD geometry object containing the simulation structure.
+        freqs : ndarray
+            Array of frequencies used in the simulation.
+        s11 : ndarray
+            Complex S11 parameter array across the frequency range.
+        vswr : ndarray
+            VSWR values across the frequency range.
+        z11 : ndarray
+            Complex input impedance values across the frequency range.
+        input_power : float
+            Input power at the port.
+        nf2ff : object
+            Near-field to far-field transformation object.
+        nf2ff_3d_result : object
+            3D far-field result object from compute_nf2ff_3d.
+        params : object
+            Parameter object containing simulation settings.
+        s21 : ndarray, optional
+            Complex S21 parameter array across the frequency range.
+            Default is None for single-port structures.
+        output_path : Path, optional
+            Directory where simulation results and exports will be saved.
+            Defaults to current working directory.
+
+        Returns
+        -------
+        None
+        """
         if output_path is None:
             output_path = Path.cwd()
 
@@ -1385,15 +1429,22 @@ class SimTools:
         SimTools.export_gerber(CSX, output_path, options={"ignore": ["ground"]})
 
 
-def optimize_s11(freqs, s11, target_freq=None, freq_band=None, mode="worst"):
+def optimize_s11(
+    freqs,
+    s11,
+    target_freq=None,
+    freq_band=None,
+    mode="worst",
+    threshold=-15,
+):
     """
     Objective for S11 (reflection). Lower is better.
 
     Parameters:
         freqs : array
         s11   : complex array
-        target_freq : float (optional)
-        band  : tuple (f_min, f_max) (optional)
+        target_freq : float, optional
+        freq_band  : tuple (f_min, f_max), optional
         mode  : "worst", "mean", or "threshold"
 
     Returns:
@@ -1417,7 +1468,6 @@ def optimize_s11(freqs, s11, target_freq=None, freq_band=None, mode="worst"):
             return np.mean(s11_db[mask])  # -3, -13, -23 return average
 
         elif mode == "threshold":
-            threshold = -10  # dB target
             penalty = np.maximum(s11_db[mask] - threshold, 0)
             return np.sum(penalty)
 
@@ -1427,7 +1477,43 @@ def optimize_s11(freqs, s11, target_freq=None, freq_band=None, mode="worst"):
     raise ValueError("Provide target_freq or freq_band")
 
 
-def optimize_s21(freqs, s21, target_freq=None, freq_band=None, mode="mean"):
+def optimize_s21(
+    freqs,
+    s21,
+    target_freq=None,
+    freq_band=None,
+    mode="mean",
+):
+    """
+    Objective function for S21 (transmission) optimization. Higher S21 is better.
+    This function computes a scalar cost from S21 data for use in
+    optimization routines. Since optimizers minimize, the cost is
+    negated so that maximizing S21 corresponds to minimizing the cost.
+    Parameters
+    ----------
+    freqs : ndarray
+        Array of frequencies in Hz.
+    s21 : ndarray
+        Complex S21 parameter array across the frequency range.
+    target_freq : float, optional
+        Specific frequency at which to evaluate S21.
+    freq_band : tuple of (float, float), optional
+        Frequency band (f_min, f_max) over which to evaluate S21.
+    mode : str, optional
+        Evaluation mode within the frequency band.
+        - "mean" : Returns negative mean of S21 in dB across the band.
+        - "worst" : Returns negative minimum of S21 in dB across the band.
+        Default is "mean".
+    Returns
+    -------
+    float
+        Scalar cost value (negated S21 in dB).
+    Raises
+    ------
+    ValueError
+        If mode is not "mean" or "worst", or if neither target_freq
+        nor freq_band is provided.
+    """
     s21_db = 20.0 * np.log10(np.abs(s21))
 
     if target_freq is not None:
@@ -1451,7 +1537,10 @@ def optimize_s21(freqs, s21, target_freq=None, freq_band=None, mode="mean"):
 
 
 def optimize_s_params(
-    simulate_fn: Callable, x0: dict[str, float], output_path: Path, bounds=None
+    simulate_fn: Callable,
+    x0: dict[str, float],
+    output_path: Path,
+    bounds=None,
 ) -> None:
     """
     This function optimizes the S11 parameter utilizing Scipy's minimize function.
@@ -1527,6 +1616,7 @@ def param_sweep(
     simulate_fn: Callable,
     sweep_vals: dict[str, tuple],
     output_path: Path,
+    label: str = "",
     sweep: bool = True,
 ) -> None:
     """
@@ -1553,7 +1643,8 @@ def param_sweep(
     Returns
     -------
     Network_params
-        This function return network parameters such as S11, VSWR, Z11.
+        The network parameters returned by the simulation function. Contains
+        attributes such as freqs, s11, s21, vswr, z11, and input_power.
     """
     console.print("-------------------------------------", style="info")
     console.print("Running Parameter Sweep", style="info")
@@ -1604,7 +1695,7 @@ def m_to_mm(m: float) -> float:
     Parameters
     ----------
 
-    mm: float
+    m: float
         Value in meters
     Returns
     ------

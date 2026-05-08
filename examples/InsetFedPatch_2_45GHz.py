@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import numpy as np
 from simpleEMS import (
     InsetFedPatchParams,
     InsetFedPatchAntenna,
     setup_simulation,
+    optimize_s11,
     optimize_s_params,
     param_sweep,
 )
@@ -19,7 +19,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_tand=0.001,
         charac_imp=50,
     )
-
+    params.inset_length_mm = 7.630065548327785
+    params.inset_width_mm = 1.6269616446172428
+    params.patch_length_mm = 28.142656714299918
+    params.patch_width_mm = 51.49757999160293
     if sweep:
         params.inset_length_mm = sweep_val[0]
         params.inset_width_mm = sweep_val[1]
@@ -42,7 +45,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    patch.write_and_show_structure(FDTD, output_path)
+    # patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:
@@ -64,11 +67,15 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             output_path,
         )
 
-        freqs = network_params.freqs
-        s11 = network_params.s11
-        s11 = 20.0 * np.log10(np.abs(s11))
-        idx = (np.abs(freqs - params.resonant_freq)).argmin()
-        return s11[idx]
+        return optimize_s11(
+            network_params.freqs,
+            network_params.s11,
+            # target_freq=params.resonant_freq,
+            freq_band=(2.4e9, 2.48e9),
+            mode="threshold",
+        )
+
+
 
     if not (sweep or optimize):
         patch.run_simulation(FDTD, output_path)
@@ -115,10 +122,10 @@ def main():
     optimize = False
     if optimize:
         x0 = {
-            "inset_length_mm": 0.533,
-            "inset_width_mm": 0.148,
-            "patch_length_mm": 1.389,
-            "patch_width_mm": 1.767,
+            "inset_length_mm": 11.501,
+            "inset_width_mm": 1.531,
+            "patch_length_mm": 28.809,
+            "patch_width_mm": 37.234,
         }
         optimize_s_params(simulate, x0, output_path)
 

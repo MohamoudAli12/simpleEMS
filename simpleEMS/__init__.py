@@ -26,6 +26,7 @@ from .sim_tools import (
     SimTools,
     setup_simulation,
     optimize_s11,
+    optimize_s21,
     optimize_s_params,
     param_sweep,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "SimTools",
     "setup_simulation",
     "optimize_s11",
+    "optimize_s21",
     "optimize_s_params",
     "param_sweep",
 ]

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
+# IMPORTS
 from simpleEMS import (
     ProbeFedPatchParams,
     ProbeFedPatchAntenna,
     setup_simulation,
 )
+# IMPORTS
 
+# PARAMS
 params = ProbeFedPatchParams(
     resonant_freq=2.45e9,
     span_freq=0.5e9,
@@ -13,31 +16,55 @@ params = ProbeFedPatchParams(
     substrate_tand=0.001,
     charac_imp=50,
 )
+# PARAMS
 
+# SETUP
 CSX, FDTD, freqs = setup_simulation(params)
+# SETUP
 
+# BUILD
 patch = ProbeFedPatchAntenna(params, CSX, FDTD)
 patch.print_and_save_params(params)
-port, nf2ff = patch.build_probe_fed_patch_antenna()
+patch.create_probe_fed_patch()
+patch.create_substrate()
+patch.create_ground()
+port = patch.create_port()
+patch.create_mesh()
+nf2ff = patch.create_nf2ff(FDTD)
 patch.add_field_dump(CSX, params)
 patch.write_and_show_structure(FDTD)
+# BUILD
 
+# SIMULATE
 patch.run_simulation(FDTD)
+# SIMULATE
 
+# PPROCESS
 network_params = patch.compute_network_params(
     port,
     freqs,
     params.charac_imp,
 )
 nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
-patch.run_all_post_processing(
-    CSX,
+patch.plot_s_param(freqs, network_params.s11)
+patch.plot_smith_chart(freqs, network_params.s11)
+patch.plot_vswr(freqs, network_params.vswr)
+patch.plot_impedance(freqs, network_params.z11)
+patch.plot_2d_directivity(nf2ff, params.resonant_freq)
+patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq)
+patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq)
+patch.plot_3d_gain(nf2ff_3d_result, params.resonant_freq, network_params.input_power)
+patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq)
+patch.save_plots()
+patch.show_plots()
+# PPROCESS
+
+# EXPORT
+patch.export_stl()
+patch.export_touchstone(
     network_params.freqs,
     network_params.s11,
-    network_params.vswr,
-    network_params.z11,
-    network_params.input_power,
-    nf2ff,
-    nf2ff_3d_result,
-    params,
+    charac_imp=params.charac_imp,
 )
+patch.export_gerber(CSX)
+# EXPORT

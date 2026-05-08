@@ -42,6 +42,10 @@ class InsetFedPatchParams(SimParams):
 
     Parameters
     ----------
+    resonant_freq : float
+        Target resonant frequency of the antenna in Hz.
+    span_freq : float
+        Frequency span used to compute the simulation range around the resonant frequency in Hz.
     ang_length_deg : int, optional
         Electrical length (in degrees) used to compute the feed phase
         shift length. Default is 90.
@@ -81,6 +85,14 @@ class InsetFedPatchParams(SimParams):
 
     @property
     def freq_range(self):
+        """
+        Compute the simulation frequency range.
+        Returns
+        -------
+        tuple of (float, float)
+            A tuple containing (f_min, f_max) calculated as
+            (resonant_freq - span_freq, resonant_freq + span_freq).
+        """
         return (
             self.resonant_freq - self.span_freq,
             self.resonant_freq + self.span_freq,
@@ -88,6 +100,13 @@ class InsetFedPatchParams(SimParams):
 
     @property
     def main_freq(self):
+        """
+        Return the primary frequency of interest for post-processing.
+        Returns
+        -------
+        float
+            The resonant frequency of the antenna.
+        """
         return self.resonant_freq
 
     def __post_init__(self):
@@ -96,6 +115,15 @@ class InsetFedPatchParams(SimParams):
         self._create_simulation_box()
 
     def _compute_geometry(self):
+        """
+        Compute all derived geometric parameters for the inset-fed patch antenna.
+        This method calculates the feed line dimensions, patch width and length,
+        inset dimensions, and substrate size based on the resonant frequency,
+        substrate properties, and characteristic impedance.
+        Returns
+        -------
+        None
+        """
         self.feed_length_mm = phase_shift_length(
             self.ang_length_deg,
             self.substrate_eps_r,
@@ -129,6 +157,15 @@ class InsetFedPatchParams(SimParams):
         self._round_outputs()
 
     def _round_outputs(self):
+        """
+        Round all geometric parameters to the configured floating-point precision.
+        This method iterates over key geometric and mesh attributes and rounds
+        them to `self.fp_precision` decimal places for cleaner output and
+        consistent simulation behavior.
+        Returns
+        -------
+        None
+        """
         for attr in [
             "patch_width_mm",
             "patch_length_mm",
@@ -444,6 +481,19 @@ class InsetFedPatchAntenna(PatchAntenna):
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
 
     def build_inset_fed_patch_antenna(self):
+        """
+        Construct the complete inset-fed patch antenna geometry.
+        This method orchestrates the creation of all antenna components
+        including the patch with inset, feed line, substrate, ground plane,
+        excitation port, mesh, and NF2FF recording box.
+
+        Returns
+        -------
+        tuple
+            A tuple containing (port, nf2ff) where:
+            - port : LumpedPort object for S-parameter extraction.
+            - nf2ff : NF2FF object for far-field calculations.
+        """
         self.create_patch_with_inset()
         self.create_feed()
         self.create_substrate()
@@ -458,13 +508,15 @@ class InsetFedPatchAntenna(PatchAntenna):
 class ProbeFedPatchParams(SimParams):
     """
     Parameters for an probe-fed rectangular microstrip patch antenna.
-
     This class inherits from `SimParams` and computes derived geometric
     parameters required for antenna layout and simulation.
 
     Parameters
     ----------
-    None.
+    resonant_freq : float
+        Target resonant frequency of the antenna in Hz.
+    span_freq : float
+        Frequency span used to compute the simulation range around the resonant frequency in Hz.
 
     Attributes
     ----------
@@ -493,6 +545,15 @@ class ProbeFedPatchParams(SimParams):
 
     @property
     def freq_range(self):
+        """
+        Compute the simulation frequency range.
+
+        Returns
+        -------
+        tuple of (float, float)
+            A tuple containing (f_min, f_max) calculated as
+            (resonant_freq - span_freq, resonant_freq + span_freq).
+        """
         return (
             self.resonant_freq - self.span_freq,
             self.resonant_freq + self.span_freq,
@@ -500,6 +561,14 @@ class ProbeFedPatchParams(SimParams):
 
     @property
     def main_freq(self):
+        """
+        Return the primary frequency of interest for post-processing.
+
+        Returns
+        -------
+        float
+            The resonant frequency of the antenna.
+        """
         return self.resonant_freq
 
     def __post_init__(self):
@@ -519,6 +588,15 @@ class ProbeFedPatchParams(SimParams):
         self._create_simulation_box()
 
     def _compute_geometry(self):
+        """
+        Compute all derived geometric parameters for the probe-fed patch antenna.
+        This method calculates the patch dimensions, probe position, and
+        substrate size based on the resonant frequency and substrate properties.
+
+        Returns
+        -------
+        None
+        """
         dims = patch_dims(
             self.resonant_freq,
             self.substrate_eps_r,
@@ -534,6 +612,15 @@ class ProbeFedPatchParams(SimParams):
         self._round_outputs()
 
     def _round_outputs(self):
+        """
+        Round all geometric parameters to the configured floating-point precision.
+        This method iterates over key geometric and mesh attributes and rounds
+        them to `self.fp_precision` decimal places.
+
+        Returns
+        -------
+        None
+        """
         for attr in [
             "patch_width_mm",
             "patch_length_mm",
@@ -669,6 +756,19 @@ class ProbeFedPatchAntenna(PatchAntenna):
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
 
     def build_probe_fed_patch_antenna(self):
+        """
+        Construct the complete probe-fed patch antenna geometry.
+        This method orchestrates the creation of all antenna components
+        including the patch element, substrate, ground plane, excitation port,
+        mesh, and NF2FF recording box.
+
+        Returns
+        -------
+        tuple
+            A tuple containing (port, nf2ff) where:
+            - port : LumpedPort object for S-parameter extraction.
+            - nf2ff : NF2FF object for far-field calculations.
+        """
         self.create_probe_fed_patch()
         self.create_substrate()
         self.create_ground()
