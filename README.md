@@ -53,7 +53,6 @@ this library will enable you to design RF circuits easily.
 [This example](./examples/simple_inset_fed_patch_antenna.py) creates an inset fed patch antenna and simulates the created model.
 
 ```{literalinclude} ../../examples/simple_inset_fed_patch_antenna.py
-:language: python
 ```
 
 Below is a visualisation of the model created by the above code
