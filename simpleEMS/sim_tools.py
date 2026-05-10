@@ -13,6 +13,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+from __future__ import annotations
 
 import subprocess
 import sys
@@ -34,16 +35,22 @@ from pyvistaqt import BackgroundPlotter
 
 # ----------------------------
 import numpy as np
+from numpy.typing import NDArray
 from scipy.optimize import minimize
+from scipy.optimize import OptimizeResult
 from skrf import Network
 
 # ----------------------------
 from CSXCAD import AppCSXCAD_BIN, ContinuousStructure
 from openEMS.openEMS import openEMS
+from openEMS.ports import LumpedPort
+from openEMS.nf2ff import nf2ff
+from openEMS.nf2ff import nf2ff_results
 
 # ----------------------------
 from .console import console
 from .export_gerber import export_gerber
+from .sim_params import SimParams
 
 # ----------------------------
 # Public APIS
@@ -101,6 +108,10 @@ class DumpType(Enum):
     raw_data: tuple[int, str]
         raw data needed for SAR calculations (electric field FD, cell volume, conductivity and density)
 
+    Notes
+    -----
+    This class was adapted from pyems.
+
     """
 
     efield_time = (0, "Et")
@@ -117,14 +128,17 @@ class DumpType(Enum):
     raw_data = (29, "raw")
 
 
-def setup_simulation(params, boundary_cond: list[str] | None = None):
+def setup_simulation(
+    params: SimParams,
+    boundary_cond: list[str] | None = None,
+) -> tuple[ContinuousStructure, openEMS, NDArray]:
     """
     Sets up the openEMS simulation.
 
     Parameters
     ----------
 
-    params: object
+    params: SimParams
         parameter object that holds all simulation parameters.
     boundary_cond: list[str]
         boundary condition for the simulation.
@@ -246,7 +260,7 @@ class SimTools:
         FDTD.Run(output_path)
 
     @staticmethod
-    def create_nf2ff(FDTD: openEMS):
+    def create_nf2ff(FDTD: openEMS) -> nf2ff:
         """
         Creates near field to far field (NF2FF) recording box.
 
@@ -266,9 +280,9 @@ class SimTools:
 
     @staticmethod
     def compute_network_params(
-        port,
-        freqs,
-        charac_imp,
+        port: LumpedPort,
+        freqs: NDArray,
+        charac_imp: float,
         output_path: Path | None = None,
     ):
         """
@@ -343,9 +357,9 @@ class SimTools:
 
     @staticmethod
     def plot_s_param(
-        freqs: np.ndarray,
-        s11: np.ndarray,
-        s21=None,
+        freqs: NDArray,
+        s11: NDArray,
+        s21: NDArray | None = None,
         x_label: str = "Frequency",
         y_label: str = "S-parameter (dB)",
         title: str = "S-parameters vs Frequency",
@@ -418,13 +432,13 @@ class SimTools:
 
     @staticmethod
     def plot_vswr(
-        freqs: np.ndarray,
-        vswr: np.ndarray,
+        freqs: NDArray,
+        vswr: NDArray,
         x_label: str = "Frequency",
         y_label: str = "VSWR",
         label: str = "VSWR",
         title: str = "VSWR vs Frequency",
-    ):
+    ) -> None:
         """
         Plot the Voltage Standing Wave Ratio (VSWR) as a function of frequency.
 
@@ -476,12 +490,12 @@ class SimTools:
 
     @staticmethod
     def plot_impedance(
-        freqs: np.ndarray,
-        z11: np.ndarray,
+        freqs: NDArray,
+        z11: NDArray,
         x_label: str = "Frequency",
         y_label: str = "Z11",
         title: str = "Z11 vs Frequency",
-    ):
+    ) -> None:
         """
         Plot the input impedance (Z11) as a function of frequency.
 
@@ -543,7 +557,12 @@ class SimTools:
         plt.legend()
 
     @staticmethod
-    def plot_smith_chart(freqs, s11, label="", charac_imp=50):
+    def plot_smith_chart(
+        freqs: NDArray,
+        s11: NDArray,
+        label: str = "",
+        charac_imp: float = 50.0,
+    ) -> None:
         """
         Plot S11 data on a Smith chart.
 
@@ -599,7 +618,12 @@ class SimTools:
         plt.legend(loc="lower right", bbox_to_anchor=(1.5, 1.0))
 
     @staticmethod
-    def plot_2d_rad_pattern(nf2ff, freq, output_path: Path | None = None):
+    def plot_2d_rad_pattern(
+        nf2ff: nf2ff,
+        freq: float,
+        output_path: Path | None = None,
+        read_cached: bool = False,
+    ) -> None:
         """
         Plot the 2D efield radiation pattern at a specified frequency.
 
@@ -638,7 +662,7 @@ class SimTools:
             freq,
             theta,
             0,
-            read_cached=False,
+            read_cached=read_cached,
             outfile="nf2ff_xz.h5",
             verbose=0,
         )
@@ -677,7 +701,7 @@ class SimTools:
             freq,
             90,
             phi,
-            read_cached=False,
+            read_cached=read_cached,
             outfile="nf2ff_xy.h5",
         )
 
@@ -713,7 +737,12 @@ class SimTools:
         ax.legend()
 
     @staticmethod
-    def plot_2d_directivity(nf2ff, freq, output_path: Path | None = None):
+    def plot_2d_directivity(
+        nf2ff: nf2ff,
+        freq: float,
+        output_path: Path | None = None,
+        read_cached: bool = False,
+    ) -> None:
         """
         Plot the 2D directivity at a specified frequency.
 
@@ -751,7 +780,7 @@ class SimTools:
             freq,
             theta,
             0,
-            read_cached=False,
+            read_cached=read_cached,
             outfile="nf2ff_xz.h5",
             verbose=0,
         )
@@ -851,7 +880,12 @@ class SimTools:
         ax.legend()
 
     @staticmethod
-    def compute_nf2ff_3d(nf2ff, freq: float, output_path: Path | None = None) -> object:
+    def compute_nf2ff_3d(
+        nf2ff: nf2ff,
+        freq: float,
+        output_path: Path | None = None,
+        read_cached: bool = False,
+    ) -> nf2ff_results:
         """
         Compute the 3D far-field radiation pattern.
 
@@ -891,14 +925,18 @@ class SimTools:
             freq,
             theta,
             phi,
-            read_cached=False,
+            read_cached=read_cached,
             outfile="nf2ff_3d.h5",
             verbose=0,
         )
         return nf2ff_3d_result
 
     @staticmethod
-    def plot_3d_directivity(nf2ff_3d_result, freq, output_path: Path | None = None):
+    def plot_3d_directivity(
+        nf2ff_3d_result: nf2ff_results,
+        freq: float,
+        output_path: Path | None = None,
+    ) -> None:
         """
         Plot the 3D directivity pattern of an antenna at a specified frequency.
 
@@ -972,7 +1010,7 @@ class SimTools:
 
     @staticmethod
     def plot_3d_gain(
-        nf2ff_3d_result,
+        nf2ff_3d_result: nf2ff_results,
         freq: float,
         input_power: float,
         output_path: Path | None = None,
@@ -1044,7 +1082,9 @@ class SimTools:
 
     @staticmethod
     def plot_3d_power(
-        nf2ff_3d_result, freq: float, output_path: Path | None = None
+        nf2ff_3d_result: nf2ff_results,
+        freq: float,
+        output_path: Path | None = None,
     ) -> None:
         """
         Plot the 3D power pattern of an antenna at a specified frequency.
@@ -1151,7 +1191,7 @@ class SimTools:
     @staticmethod
     def add_field_dump(
         CSX: ContinuousStructure,
-        params,
+        params: SimParams,
         output_path: Path | None = None,
         dump_type: DumpType = DumpType.efield_time,
     ) -> None:
@@ -1205,14 +1245,14 @@ class SimTools:
 
     @staticmethod
     def export_touchstone(
-        freqs,
-        s11,
+        freqs: NDArray,
+        s11: NDArray,
         *,
-        s21=None,
+        s21: NDArray | None = None,
         charac_imp: float = 50.0,
         output_path: Path | None = None,
-        filename="s_param",
-    ):
+        filename: str = "s_param",
+    ) -> None:
         """
         Export  S-parameters to a Touchstone file.
 
@@ -1268,7 +1308,7 @@ class SimTools:
         CSX: ContinuousStructure,
         output_path: Path | None = None,
         options: dict[str, list] | None = None,
-    ):
+    ) -> None:
         """
         Export CSXCAD geometry to Gerber format.
 
@@ -1328,7 +1368,10 @@ class SimTools:
         plt.show()
 
     @staticmethod
-    def print_and_save_params(params, output_path: Path | None = None) -> None:
+    def print_and_save_params(
+        params: SimParams,
+        output_path: Path | None = None,
+    ) -> None:
         """
         Print and save the simulation parameters.
         This method prints the simulation paramaters to the terminal and saves them to text file.
@@ -1366,17 +1409,17 @@ class SimTools:
     @staticmethod
     def run_all_post_processing(
         CSX: ContinuousStructure,
-        freqs,
-        s11,
-        vswr,
-        z11,
-        input_power,
-        nf2ff,
-        nf2ff_3d_result,
-        params,
-        s21=None,
-        output_path=None,
-    ):
+        freqs: NDArray,
+        s11: NDArray,
+        vswr: NDArray,
+        z11: NDArray,
+        input_power: float,
+        nf2ff: nf2ff,
+        nf2ff_3d_result: nf2ff_results,
+        params: SimParams,
+        s21: NDArray | None = None,
+        output_path: Path | None = None,
+    ) -> None:
         """
         Run all post-processing steps for a completed simulation.
         This convenience method executes the full suite of post-processing
@@ -1448,13 +1491,13 @@ class SimTools:
 
 
 def optimize_s11(
-    freqs,
-    s11,
-    target_freq=None,
-    freq_band=None,
-    mode="worst",
-    threshold=-15,
-):
+    freqs: NDArray,
+    s11: NDArray,
+    target_freq: float | None = None,
+    freq_band: tuple[float, float] | None = None,
+    mode: str = "worst",
+    threshold: float = -15,
+) -> np.floating:
     """
     Objective for S11 (reflection). Lower is better.
 
@@ -1496,12 +1539,12 @@ def optimize_s11(
 
 
 def optimize_s21(
-    freqs,
-    s21,
-    target_freq=None,
-    freq_band=None,
-    mode="mean",
-):
+    freqs: NDArray,
+    s21: NDArray,
+    target_freq: float | None = None,
+    freq_band: tuple[float, float] | None = None,
+    mode: str = "mean",
+) -> np.floating:
     """
     Objective function for S21 (transmission) optimization. Higher S21 is better.
     This function computes a scalar cost from S21 data for use in
@@ -1558,7 +1601,7 @@ def optimize_s_params(
     simulate_fn: Callable,
     x0: dict[str, float],
     output_path: Path,
-    bounds=None,
+    bounds: tuple | None = None,
 ) -> None:
     """
     This function optimizes the S11 parameter utilizing Scipy's minimize function.
@@ -1591,11 +1634,11 @@ def optimize_s_params(
     x0_values = list(x0.values())
     x0_keys = list(x0.keys())
 
-    def make_callback(tol=1e-4, patience=5):
+    def make_callback(tol: float = 1e-4, patience: int = 5) -> Callable:
         prev_x = None
         stall = 0
 
-        def callback(xk):
+        def callback(xk: OptimizeResult) -> None:
             nonlocal prev_x, stall
             if prev_x is not None:
                 if np.linalg.norm(xk - prev_x) < tol:
@@ -1611,7 +1654,7 @@ def optimize_s_params(
 
     callback = make_callback()
 
-    def optimize_fun(x):
+    def optimize_fun(x: NDArray) -> float:
         return simulate_fn(output_path=output_path, optimize=True, optimize_val=x)
 
     try:
@@ -1683,7 +1726,7 @@ def param_sweep(
         SimTools.plot_s_param(
             network_params.freqs,
             network_params.s11,
-            label=label,
+            label_s11=label,
         )
     SimTools.show_plots()
     return network_params

@@ -22,6 +22,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "myst-parser==5.0.0",
+    "prek==0.3.13",
     "pydata-sphinx-theme==0.16.1",
     "ruff==0.15.12",
     "sphinx==9.1.0",
