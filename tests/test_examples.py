@@ -2,6 +2,7 @@
 import subprocess
 from tqdm import tqdm  # Import tqdm for the progress bar
 
+
 def run_script(script_name):
     try:
         # Run the script using subprocess
@@ -16,6 +17,7 @@ def run_script(script_name):
     except Exception as e:
         print(f"ERROR: Failed to run {script_name}. Exception: {e}")
 
+
 def run_examples(scripts):
     # Wrap the script list with tqdm to show progress
     for script in tqdm(scripts, desc="Running Scripts", unit="script"):
@@ -29,4 +31,3 @@ if __name__ == "__main__":
         "../examples/ProbeFedPatch_2_45GHz.py",
     ]
     run_examples(scripts_to_run)
-

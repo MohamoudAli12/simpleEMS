@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 from pathlib import Path
+
 from simpleEMS import (
-    InsetFedPatchParams,
     InsetFedPatchAntenna,
-    setup_simulation,
+    InsetFedPatchParams,
     optimize_s11,
     optimize_s_params,
     param_sweep,
+    setup_simulation,
 )
 
 
@@ -75,8 +76,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             mode="threshold",
         )
 
-
-
     if not (sweep or optimize):
         patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
@@ -106,7 +105,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.save_plots(output_path)
         patch.show_plots()
         patch.export_touchstone(
-            freqs = network_params.freqs,
+            freqs=network_params.freqs,
             s11=network_params.s11,
             charac_imp=params.charac_imp,
             output_path=output_path,

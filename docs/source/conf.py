@@ -13,8 +13,8 @@ release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 
 def setup(app):

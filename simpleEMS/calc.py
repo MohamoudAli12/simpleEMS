@@ -14,10 +14,12 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from openEMS.physical_constants import C0
-import numpy as np
-from scipy.integrate import quad
 from typing import NamedTuple
+
+import numpy as np
+from openEMS.physical_constants import C0
+from scipy.integrate import quad
+
 from .sim_tools import m_to_mm, mm_to_m
 
 
@@ -84,7 +86,7 @@ def microstrip_width_from_impedance(
 
     Returns
     -------
-    width: float 
+    width: float
         width of trace for given characteristic impedance
 
     Notes
@@ -209,7 +211,7 @@ def inset_depth(
     patch_width: float,
     patch_length: float,
     frequency: float,
-)->tuple[float,float]:
+) -> tuple[float, float]:
     """
     Compute the inset feed depth of an inset fed patch antenna and probe position of probe fed patch antenna.
 
@@ -248,6 +250,14 @@ def inset_depth(
     return inset_length, probe_pos
 
 
+class PatchDims(NamedTuple):
+    patch_width_mm: float
+    patch_length_mm: float
+    inset_length_mm: float
+    inset_width_mm: float
+    probe_pos_mm: float
+
+
 def patch_dims(
     frequency_hz: float,
     subst_eps_r: float,
@@ -279,23 +289,13 @@ def patch_dims(
                 Width of the patch antenna in direction of x in mm.
             patch_length_mm: float
                 Length of the patch antenna in direction of y in mm
-            inset_length_mm: float 
+            inset_length_mm: float
                 Inset length of the patch in direction of y in mm
-            inset_width_mm: float 
+            inset_width_mm: float
                 Inset width of the patch in the direction of x in mm
-            probe_pos_mm: float 
+            probe_pos_mm: float
                 The feed position of probe fed patch antenna in direction of y in mm
     """
-    PatchDims = NamedTuple(
-        "PatchDims",
-        [
-            ("patch_width_mm", float),
-            ("patch_length_mm", float),
-            ("inset_length_mm", float),
-            ("inset_width_mm", float),
-            ("probe_pos_mm", float),
-        ],
-    )
 
     patch_width = C0 / (2 * frequency_hz) * np.sqrt(2 / (subst_eps_r + 1))
     patch_width_mm = m_to_mm(patch_width)

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 from pathlib import Path
+
 from simpleEMS import (
-    InsetFedPatchParams,
     InsetFedPatchAntenna,
-    setup_simulation,
+    InsetFedPatchParams,
     optimize_s11,
     optimize_s_params,
     param_sweep,
+    setup_simulation,
 )
 
 

@@ -15,7 +15,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from dataclasses import dataclass, field
+
 import numpy as np
+
 from .calc import microstrip_width_from_impedance, phase_shift_length
 from .sim_params import SimParams
 from .sim_tools import SimTools

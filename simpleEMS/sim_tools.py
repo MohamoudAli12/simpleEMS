@@ -14,18 +14,23 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
 import subprocess
-from pathlib import Path
+import sys
 from collections import namedtuple
 from collections.abc import Callable
 from dataclasses import fields
 from enum import Enum
 from itertools import product
+from pathlib import Path
 
 # ----------------------------
-from .console import console
-from .export_gerber import export_gerber
+import matplotlib.pyplot as plt
+import mplcursors
+import pyvista as pv
+from matplotlib.ticker import EngFormatter
+from PyQt6.QtCore import QCoreApplication
+from pysmithchart import S_PARAMETER
+from pyvistaqt import BackgroundPlotter
 
 # ----------------------------
 import numpy as np
@@ -33,20 +38,12 @@ from scipy.optimize import minimize
 from skrf import Network
 
 # ----------------------------
-import matplotlib.pyplot as plt
-from matplotlib.ticker import EngFormatter
-import mplcursors
-import pyvista as pv
-from pyvistaqt import BackgroundPlotter
-from pysmithchart import S_PARAMETER
-
-# ----------------------------
+from CSXCAD import AppCSXCAD_BIN, ContinuousStructure
 from openEMS.openEMS import openEMS
-from CSXCAD import ContinuousStructure
-from CSXCAD import AppCSXCAD_BIN
 
 # ----------------------------
-from PyQt6.QtCore import QCoreApplication
+from .console import console
+from .export_gerber import export_gerber
 
 # ----------------------------
 # Public APIS
@@ -120,10 +117,7 @@ class DumpType(Enum):
     raw_data = (29, "raw")
 
 
-def setup_simulation(
-    params,
-    boundary_cond: list[str] = ["PML_8", "PML_8", "PML_8", "PML_8", "PML_8", "PML_8"],
-):
+def setup_simulation(params, boundary_cond: list[str] | None = None):
     """
     Sets up the openEMS simulation.
 
@@ -144,6 +138,15 @@ def setup_simulation(
     freqs:ndarray
         a list of frequencies that will be used in the simulation and post-processing.
     """
+    if boundary_cond is None:
+        boundary_cond = [
+            "PML_8",
+            "PML_8",
+            "PML_8",
+            "PML_8",
+            "PML_8",
+            "PML_8",
+        ]
     CSX = ContinuousStructure()
     FDTD = openEMS(NrTS=params.timestep, EndCriteria=params.end_criteria)
 
@@ -346,6 +349,8 @@ class SimTools:
         x_label: str = "Frequency",
         y_label: str = "S-parameter (dB)",
         title: str = "S-parameters vs Frequency",
+        label_s11: str | None = None,
+        label_s21: str | None = None,
     ) -> None:
         """
         Plot the S11 parameter (reflection coefficient) against frequency.
@@ -375,27 +380,34 @@ class SimTools:
             This method does not return any value. It directly displays the plot.
         """
         if s21 is not None:
-            s21 = np.log10(np.abs(s21))
-            s21_lines = plt.plot(freqs, s21, label="S21")
-            cursor = mplcursors.cursor(s21_lines, multiple=True)
+            if label_s21 is None:
+                label_s21 = "S21"
 
-            @cursor.connect("add")
-            def on_add(sel):
-                sel.annotation.set_text(
-                    f"Freq={freq_formatter(sel.target[0])}\nS21={sel.target[1]:.2f} dB"
-                )
+            s21 = np.log10(np.abs(s21))
+            s21_lines = plt.plot(freqs, s21, label=label_s21)
+            cursor_s21 = mplcursors.cursor(s21_lines, multiple=True)
+
+            cursor_s21.connect(
+                "add",
+                lambda sel: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\nS11={sel.target[1]:.2f} dB"
+                ),
+            )
+        if label_s11 is None:
+            label_s11 = "S11"
 
         s11 = 20.0 * np.log10(np.abs(s11))
 
-        s11_lines = plt.plot(freqs, s11, label="S11")
+        s11_lines = plt.plot(freqs, s11, label=label_s11)
 
-        cursor = mplcursors.cursor(s11_lines, multiple=True)
+        cursor_s11 = mplcursors.cursor(s11_lines, multiple=True)
 
-        @cursor.connect("add")
-        def on_add(sel):
-            sel.annotation.set_text(
+        cursor_s11.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
                 f"Freq={freq_formatter(sel.target[0])}\nS11={sel.target[1]:.2f} dB"
-            )
+            ),
+        )
 
         plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
         plt.xlabel(x_label)
@@ -448,11 +460,12 @@ class SimTools:
         lines = plt.plot(freqs, vswr, label=label)
         cursor = mplcursors.cursor(lines, multiple=True)
 
-        @cursor.connect("add")
-        def on_add(sel):
-            sel.annotation.set_text(
+        cursor.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
                 f"Freq={freq_formatter(sel.target[0])}\nVSWR={sel.target[1]:.2f}"
-            )
+            ),
+        )
 
         plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
         plt.xlabel(x_label)
@@ -502,23 +515,25 @@ class SimTools:
         z11_real = np.real(z11)
         z11_imag = np.imag(z11)
         plt.figure()
-        lines_real = plt.plot(freqs, z11_real, label=f"Real Z11")
+        lines_real = plt.plot(freqs, z11_real, label="Real Z11")
         cursor_real = mplcursors.cursor(lines_real, multiple=True)
 
-        @cursor_real.connect("add")
-        def on_add(sel):
-            sel.annotation.set_text(
+        cursor_real.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
                 f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
-            )
+            ),
+        )
 
-        lines_imag = plt.plot(freqs, z11_imag, label=f"Imag Z11")
+        lines_imag = plt.plot(freqs, z11_imag, label="Imag Z11")
         cursor_imag = mplcursors.cursor(lines_imag, multiple=True)
 
-        @cursor_imag.connect("add")
-        def on_add(sel):
-            sel.annotation.set_text(
+        cursor_imag.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
                 f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
-            )
+            ),
+        )
 
         plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
         plt.xlabel(x_label)
@@ -643,12 +658,12 @@ class SimTools:
         )
 
         cursor = mplcursors.cursor(lines, multiple=True)
-
-        @cursor.connect("add")
-        def on_add(sel):
-            sel.annotation.set_text(
+        cursor.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
                 f"theta={np.rad2deg(sel.target[0]):.2f}°\ne_field = {sel.target[1]:.2f} dB"
-            )
+            ),
+        )
 
         ax.grid(True)
         ax.set_xlabel("theta (deg)")
@@ -680,12 +695,12 @@ class SimTools:
         )
 
         cursor = mplcursors.cursor(lines, multiple=True)
-
-        @cursor.connect("add")
-        def on_add(sel):
-            sel.annotation.set_text(
+        cursor.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
                 f"phi={np.rad2deg(sel.target[0]):.2f}°\n efield= {sel.target[1]:.2f} dB"
-            )
+            ),
+        )
 
         ax.grid(True)
         ax.set_xlabel("phi (deg)")
@@ -822,12 +837,12 @@ class SimTools:
         )
 
         cursor = mplcursors.cursor(lines, multiple=True)
-
-        @cursor.connect("add")
-        def on_add(sel):
-            sel.annotation.set_text(
+        cursor.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
                 f"theta={np.rad2deg(sel.target[0]):.2f}°\nDirectivity = {sel.target[1]:.2f} dBi"
-            )
+            ),
+        )
 
         ax.grid(True)
         ax.set_xlabel("theta (deg)")
@@ -1252,7 +1267,7 @@ class SimTools:
     def export_gerber(
         CSX: ContinuousStructure,
         output_path: Path | None = None,
-        options: dict[str, list] = {"ignore": []},
+        options: dict[str, list] | None = None,
     ):
         """
         Export CSXCAD geometry to Gerber format.
@@ -1280,6 +1295,9 @@ class SimTools:
         Layers should be exported separately by specifying ignore options. i.e. to export only top metal layer ignore the ground.
 
         """
+        if options is None:
+            options = {"ignore": ["ground"]}
+
         if output_path is None:
             output_path = Path.cwd()
 
@@ -1655,7 +1673,7 @@ def param_sweep(
     network_params = None
 
     for values in cartesian_sweep:
-        kv_pairs = list(zip(sweep_values.keys(), values))
+        kv_pairs = list(zip(sweep_values.keys(), values, strict=True))
         key_value = "_".join(f"{k}_{v}" for k, v in kv_pairs)
         label = ", ".join(f"{k}={v}" for k, v in kv_pairs)
         sweep_path = output_path / "sweep" / key_value

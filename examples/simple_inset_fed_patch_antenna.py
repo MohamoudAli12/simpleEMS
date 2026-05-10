@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # IMPORTS
 from simpleEMS import (
-    InsetFedPatchParams,
     InsetFedPatchAntenna,
+    InsetFedPatchParams,
     setup_simulation,
 )
+
 # IMPORTS
 
 # PARAMS
@@ -69,5 +70,3 @@ patch.export_touchstone(
 )
 patch.export_gerber(CSX)
 # EXPORT
-
-

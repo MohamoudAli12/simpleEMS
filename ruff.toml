@@ -1,0 +1,17 @@
+line-length = 88
+target-version = "py312"
+
+[lint]
+select = [
+  # "E",    # pycodestyle errors (PEP8 style issues)
+  "F",    # Pyflakes (real bugs, unused imports, undefined names)
+  "B",    # flake8-bugbear (bug-prone patterns and bad practices)
+  "UP",   # pyupgrade (modernize Python syntax)
+  "SIM",  # flake8-simplify (simpler and cleaner logic)
+  # "N",    # pep8-naming (naming convention checks)
+  # "ANN",  # flake8-annotations (require type annotations)
+]
+ignore = []
+
+[format]
+quote-style = "double"

@@ -16,6 +16,7 @@
 
 
 from dataclasses import dataclass, field
+
 import numpy as np
 from openEMS.physical_constants import C0, EPS0
 

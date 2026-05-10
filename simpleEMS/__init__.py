@@ -14,25 +14,24 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from .microstrip_line import (
+    MicrostripLine,
+    MicrostripLineParams,
+)
 from .patch_antenna import (
     InsetFedPatchAntenna,
-    ProbeFedPatchAntenna,
     InsetFedPatchParams,
+    ProbeFedPatchAntenna,
     ProbeFedPatchParams,
 )
-
 from .sim_tools import (
     DumpType,
     SimTools,
-    setup_simulation,
     optimize_s11,
     optimize_s21,
     optimize_s_params,
     param_sweep,
-)
-from .microstrip_line import (
-    MicrostripLineParams,
-    MicrostripLine,
+    setup_simulation,
 )
 
 __all__ = [

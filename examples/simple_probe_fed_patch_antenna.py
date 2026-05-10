@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # IMPORTS
 from simpleEMS import (
-    ProbeFedPatchParams,
     ProbeFedPatchAntenna,
+    ProbeFedPatchParams,
     setup_simulation,
 )
+
 # IMPORTS
 
 # PARAMS

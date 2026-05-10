@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 from pathlib import Path
+
 from simpleEMS import (
-    ProbeFedPatchParams,
     ProbeFedPatchAntenna,
-    setup_simulation,
-    optimize_s_params,
+    ProbeFedPatchParams,
     optimize_s11,
+    optimize_s_params,
     param_sweep,
+    setup_simulation,
 )
 
 
@@ -102,7 +103,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.show_plots()
         patch.export_stl(output_path)
         patch.export_touchstone(
-            freqs = network_params.freqs,
+            freqs=network_params.freqs,
             s11=network_params.s11,
             charac_imp=params.charac_imp,
             output_path=output_path,

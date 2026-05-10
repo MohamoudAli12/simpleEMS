@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="simpleEMS",
@@ -8,7 +8,6 @@ setup(
     description="simpleEMS is a framework built on top of openEMS for ease of design of antennas and other microwave structures",
     license="AGPL-v3-or-later",
     packages=find_packages(),
-    install_requires=[
-    ],
+    install_requires=[],
     url="",
 )

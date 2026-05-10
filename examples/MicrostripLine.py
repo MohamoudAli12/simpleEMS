@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from simpleEMS import (
-    MicrostripLineParams,
     MicrostripLine,
+    MicrostripLineParams,
     setup_simulation,
 )
 

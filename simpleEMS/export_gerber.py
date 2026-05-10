@@ -16,7 +16,6 @@
 
 # TODO: only box and polygon primitives are working. add support of all primitives.
 
-import numpy as np
 from .console import console
 
 
@@ -114,7 +113,7 @@ def primitive_polygon(file, poly):
     file.write(gerber_coord((x0[0], x1[0])) + "D02*\n")
 
     # Draw edges
-    for x, y in zip(x0[1:], x1[1:]):
+    for x, y in zip(x0[1:], x1[1:], strict=True):
         file.write(gerber_coord((x, y)) + "D01*\n")
 
     # Close polygon explicitly
@@ -171,9 +170,7 @@ def process_primitives(file, prop_list, options):
 
             if cls == "CSPrimBox":
                 primitive_box(file, prim)
-            elif cls == "CSPrimPoly":
-                primitive_polygon(file, prim)
-            elif cls == "CSPrimLinPoly":
+            elif cls == "CSPrimPoly" or cls == "CSPrimLinPoly":
                 primitive_polygon(file, prim)
 
 
@@ -202,10 +199,10 @@ def export_gerber(CSX, output_path, options=None):
     console.print("-------------------------------------------", style="info")
     console.print("Exporting Geometry to Gerber", style="info")
     console.print("-------------------------------------------", style="info")
-    grid = CSX.GetGrid()
+    # grid = CSX.GetGrid()
 
-    drawing_unit = grid.GetDeltaUnit()
-    coord_system = grid.GetMeshType()
+    # drawing_unit = grid.GetDeltaUnit()
+    # coord_system = grid.GetMeshType()
     filename = output_path / "gerber_layout.gbr"
 
     with open(filename, "w") as file:
