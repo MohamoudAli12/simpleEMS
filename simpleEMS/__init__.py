@@ -24,7 +24,7 @@ from .patch_antenna import (
     ProbeFedPatchAntenna,
     ProbeFedPatchParams,
 )
-from .quarterwave_stub_filter import QuarterWaveFilterParams, QuarterWaveFilter
+from .quarterwave_stub_filter import QuarterWaveFilterParams, BandStopQuarterWaveFilter
 from .sim_tools import (
     DumpType,
     SimTools,
@@ -43,7 +43,7 @@ __all__ = [
     "ProbeFedPatchParams",
     "MicrostripLineParams",
     "QuarterWaveFilterParams",
-    "QuarterWaveFilter",
+    "BandStopQuarterWaveFilter",
     "DumpType",
     "SimTools",
     "setup_simulation",

@@ -117,9 +117,12 @@ class QuarterWaveFilterParams(SimParams):
             self.shunt_line_width_mm.append(width_shunt)
 
         self.substrate_width_mm = (
-            2 * self.filter_order * self.line_length_mm + 2 * self.lambda0
+            self.filter_order + 1
+        ) * self.line_length_mm + self.lambda0 / 2
+
+        self.substrate_length_mm = (
+            self.series_line_width_mm + self.line_length_mm + self.lambda0 / 2
         )
-        self.substrate_length_mm = self.substrate_width_mm
 
         self._round_outputs()
 
@@ -172,13 +175,13 @@ class QuarterWaveFilter(SimTools):
         )
         substrate.SetColor("#0F8A00", 100)
         substrate_start = [
-            -self.params.substrate_width_mm / 2,
+            -self.params.substrate_width_mm / 4,
             -self.params.substrate_length_mm / 2,
             0,
         ]
         substrate_stop = [
-            self.params.substrate_width_mm / 2,
-            self.params.substrate_length_mm / 2,
+            self.params.substrate_width_mm * 1.2,
+            self.params.substrate_length_mm,
             self.params.substrate_thickness_mm,
         ]
         substrate.AddBox(priority=0, start=substrate_start, stop=substrate_stop)
@@ -202,13 +205,66 @@ class QuarterWaveFilter(SimTools):
         ground = self.CSX.AddMetal("ground")
         ground.SetColor("#B87333", 255)
         ground_start = [
-            -self.params.substrate_width_mm / 2,
+            -self.params.substrate_width_mm / 4,
             -self.params.substrate_length_mm / 2,
             0,
         ]
         ground_stop = [
-            self.params.substrate_width_mm / 2,
-            self.params.substrate_length_mm / 2,
+            self.params.substrate_width_mm * 1.2,
+            self.params.substrate_length_mm,
             -self.params.copper_thickness_mm,
         ]
         ground.AddBox(priority=2, start=ground_start, stop=ground_stop)
+
+
+class BandStopQuarterWaveFilter(QuarterWaveFilter):
+    """
+    class
+    """
+
+    def _get_total_length(self):
+        total_length = (self.params.filter_order + 1) * self.params.line_length_mm
+        for i in range(self.params.filter_order):
+            total_length += self.params.shunt_line_width_mm[i]
+        return total_length
+
+    def create_series_line(self):
+        series_line = self.CSX.AddMetal("series_line")
+        series_line.SetColor("#B87333", 255)
+        total_length = self._get_total_length()
+        line_start = [
+            0,
+            0,
+            self.params.substrate_thickness_mm,
+        ]
+        line_stop = [
+            total_length,
+            self.params.series_line_width_mm,
+            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+        ]
+        series_line.AddBox(
+            priority=1,
+            start=line_start,
+            stop=line_stop,
+        )
+
+    def create_shunt_line(self):
+        for i in range(self.params.filter_order):
+            shunt_line = self.CSX.AddMetal(f"shunt_line_{i + 1}")
+            shunt_line.SetColor("#B87333", 255)
+            line_start = [
+                (i + 1) * self.params.line_length_mm,
+                self.params.series_line_width_mm,
+                self.params.substrate_thickness_mm,
+            ]
+            line_stop = [
+                (i + 1) * self.params.line_length_mm
+                + self.params.shunt_line_width_mm[i],
+                self.params.series_line_width_mm + self.params.line_length_mm,
+                self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+            ]
+            shunt_line.AddBox(
+                priority=1,
+                start=line_start,
+                stop=line_stop,
+            )

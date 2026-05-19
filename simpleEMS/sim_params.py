@@ -170,14 +170,17 @@ class SimParams:
         -------
         None
         """
-        fmin, fmax = self.freq_range
-        f_ref = fmax
 
         self.substrate_kappa = (
-            self.substrate_tand * 2 * np.pi * f_ref * EPS0 * self.substrate_eps_r
+            self.substrate_tand
+            * 2
+            * np.pi
+            * self.main_freq
+            * EPS0
+            * self.substrate_eps_r
         )
 
-        self.lambda0 = C0 / (f_ref * np.sqrt(self.substrate_eps_r) * self.unit)
+        self.lambda0 = C0 / (self.main_freq * np.sqrt(self.substrate_eps_r) * self.unit)
 
         self.mesh_resolution = self.lambda0 / self.mesh_resolution_factor
         self.metal_mesh_resolution = self.lambda0 / self.metal_mesh_resolution_factor

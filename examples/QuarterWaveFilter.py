@@ -1,4 +1,4 @@
-from simpleEMS import QuarterWaveFilterParams, QuarterWaveFilter
+from simpleEMS import QuarterWaveFilterParams, BandStopQuarterWaveFilter
 from simpleEMS import setup_simulation
 
 params = QuarterWaveFilterParams(
@@ -11,11 +11,13 @@ params = QuarterWaveFilterParams(
     bandwidth_freq=1e9,
     filter_type="bandstop",
     filter_response="butterworth",
-    filter_order=5,
+    filter_order=3,
 )
 CSX, FDTD, freqs = setup_simulation(params)
-filter = QuarterWaveFilter(params, CSX, FDTD)
+filter = BandStopQuarterWaveFilter(params, CSX, FDTD)
 filter.print_and_save_params(params)
 filter.create_substrate()
 filter.create_ground()
+filter.create_series_line()
+filter.create_shunt_line()
 filter.write_and_show_structure(FDTD)
