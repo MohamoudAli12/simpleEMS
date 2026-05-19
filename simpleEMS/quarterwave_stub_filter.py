@@ -116,13 +116,11 @@ class QuarterWaveFilterParams(SimParams):
             width_shunt = self._get_shunt_width(i)
             self.shunt_line_width_mm.append(width_shunt)
 
-        self.substrate_width_mm = (
-            self.filter_order + 1
-        ) * self.line_length_mm + self.lambda0 / 2
-
-        self.substrate_length_mm = (
-            self.series_line_width_mm + self.line_length_mm + self.lambda0 / 2
+        self.substrate_width_mm = (self.filter_order + 1) * self.line_length_mm + sum(
+            self.shunt_line_width_mm
         )
+
+        self.substrate_length_mm = self.series_line_width_mm + self.line_length_mm
 
         self._round_outputs()
 
@@ -175,13 +173,13 @@ class QuarterWaveFilter(SimTools):
         )
         substrate.SetColor("#0F8A00", 100)
         substrate_start = [
-            -self.params.substrate_width_mm / 4,
-            -self.params.substrate_length_mm / 2,
+            -self.params.lambda0 / 4,
+            -self.params.lambda0 / 4,
             0,
         ]
         substrate_stop = [
-            self.params.substrate_width_mm * 1.2,
-            self.params.substrate_length_mm,
+            self.params.substrate_width_mm + self.params.lambda0 / 4,
+            self.params.substrate_length_mm + self.params.lambda0 / 4,
             self.params.substrate_thickness_mm,
         ]
         substrate.AddBox(priority=0, start=substrate_start, stop=substrate_stop)
@@ -205,13 +203,13 @@ class QuarterWaveFilter(SimTools):
         ground = self.CSX.AddMetal("ground")
         ground.SetColor("#B87333", 255)
         ground_start = [
-            -self.params.substrate_width_mm / 4,
-            -self.params.substrate_length_mm / 2,
+            -self.params.lambda0 / 4,
+            -self.params.lambda0 / 4,
             0,
         ]
         ground_stop = [
-            self.params.substrate_width_mm * 1.2,
-            self.params.substrate_length_mm,
+            self.params.substrate_width_mm + self.params.lambda0 / 4,
+            self.params.substrate_length_mm + self.params.lambda0 / 4,
             -self.params.copper_thickness_mm,
         ]
         ground.AddBox(priority=2, start=ground_start, stop=ground_stop)
