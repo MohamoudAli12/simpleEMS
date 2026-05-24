@@ -111,10 +111,25 @@ class InsetFedPatchParams(SimParams):
         """
         return self.resonant_freq
 
+    @property
+    def substrate_length_mm(self):
+        return self.patch_length_mm + 2 * self.lambda0
+
+    @property
+    def substrate_width_mm(self):
+        return self.patch_width_mm + 2 * self.lambda0
+
+    @property
+    def simulation_box(self):
+        return self._create_simulation_box(
+            self.substrate_width_mm + self.lambda0,
+            self.substrate_length_mm + self.lambda0,
+            self.lambda0 * 2,
+        )
+
     def __post_init__(self):
         super().__post_init__()
         self._compute_geometry()
-        self._create_simulation_box()
 
     def _compute_geometry(self):
         """
@@ -153,9 +168,6 @@ class InsetFedPatchParams(SimParams):
         self.inset_width_mm = dims.inset_width_mm / 2
         self.inset_length_mm = dims.inset_length_mm
 
-        self.substrate_width_mm = self.patch_width_mm + 2 * self.lambda0
-        self.substrate_length_mm = self.patch_length_mm + 2 * self.lambda0
-
         self._round_outputs()
 
     def _round_outputs(self):
@@ -175,8 +187,6 @@ class InsetFedPatchParams(SimParams):
             "inset_length_mm",
             "feed_width_mm",
             "feed_length_mm",
-            "substrate_width_mm",
-            "substrate_length_mm",
             "lambda0",
             "mesh_resolution",
             "thirds_rule",
@@ -573,6 +583,22 @@ class ProbeFedPatchParams(SimParams):
         """
         return self.resonant_freq
 
+    @property
+    def substrate_length_mm(self):
+        return self.patch_length_mm + 2 * self.lambda0
+
+    @property
+    def substrate_width_mm(self):
+        return self.patch_width_mm + 2 * self.lambda0
+
+    @property
+    def simulation_box(self):
+        return self._create_simulation_box(
+            self.substrate_width_mm + self.lambda0,
+            self.substrate_length_mm + self.lambda0,
+            self.lambda0 * 2,
+        )
+
     def __post_init__(self):
         """
         Perform geometric calculations after data class initialization.
@@ -587,7 +613,6 @@ class ProbeFedPatchParams(SimParams):
 
         super().__post_init__()
         self._compute_geometry()
-        self._create_simulation_box()
 
     def _compute_geometry(self):
         """
@@ -609,8 +634,6 @@ class ProbeFedPatchParams(SimParams):
         self.patch_width_mm = dims.patch_width_mm
         self.patch_length_mm = dims.patch_length_mm
         self.probe_pos_mm = dims.probe_pos_mm
-        self.substrate_width_mm = self.patch_width_mm + 2 * self.lambda0
-        self.substrate_length_mm = self.patch_length_mm + 2 * self.lambda0
         self._round_outputs()
 
     def _round_outputs(self):
@@ -627,8 +650,6 @@ class ProbeFedPatchParams(SimParams):
             "patch_width_mm",
             "patch_length_mm",
             "probe_pos_mm",
-            "substrate_width_mm",
-            "substrate_length_mm",
             "lambda0",
             "mesh_resolution",
             "thirds_rule",

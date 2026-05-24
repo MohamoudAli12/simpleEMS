@@ -23,6 +23,13 @@ from .calc import microstrip_width_from_impedance, phase_shift_length
 from .filter_coefficient import get_filter_coefficient
 
 
+def _get_total_length(filter_order, line_length_mm, shunt_line_width_mm):
+    total_length = (filter_order + 1) * line_length_mm
+    for i in range(filter_order):
+        total_length += shunt_line_width_mm[i]
+    return total_length
+
+
 @dataclass
 class QuarterWaveFilterParams(SimParams):
     min_freq: float
@@ -61,14 +68,34 @@ class QuarterWaveFilterParams(SimParams):
         """
         return self.centre_freq
 
+    @property
+    def substrate_length_mm(self):
+        return _get_total_length(
+            self.filter_order,
+            self.line_length_mm,
+            self.shunt_line_width_mm,
+        )
+
+    @property
+    def substrate_width_mm(self):
+        return self.series_line_width_mm + self.line_length_mm
+
+    @property
+    def simulation_box(self):
+        return self._create_simulation_box(
+            self.substrate_length_mm,
+            self.substrate_width_mm,
+            self.lambda0,
+        )
+
     def __post_init__(self):
         super().__post_init__()
         if self.filter_type not in ("bandpass", "bandstop"):
             raise ValueError(f"Quarter-wave filter does not support {self.filter_type}")
 
         self.frac_bandwidth = self.bandwidth_freq / self.centre_freq
+
         self._compute_geometry()
-        self._create_simulation_box()
 
     def _get_shunt_width(self, idx):
         g = get_filter_coefficient(
@@ -116,12 +143,6 @@ class QuarterWaveFilterParams(SimParams):
             width_shunt = self._get_shunt_width(i)
             self.shunt_line_width_mm.append(width_shunt)
 
-        self.substrate_width_mm = (self.filter_order + 1) * self.line_length_mm + sum(
-            self.shunt_line_width_mm
-        )
-
-        self.substrate_length_mm = self.series_line_width_mm + self.line_length_mm
-
         self._round_outputs()
 
     def _round_outputs(self):
@@ -138,8 +159,6 @@ class QuarterWaveFilterParams(SimParams):
             "series_line_width_mm",
             "shunt_line_width_mm",
             "frac_bandwidth",
-            "substrate_width_mm",
-            "substrate_length_mm",
             "lambda0",
             "mesh_resolution",
             "metal_mesh_resolution",
@@ -173,13 +192,13 @@ class QuarterWaveFilter(SimTools):
         )
         substrate.SetColor("#0F8A00", 100)
         substrate_start = [
-            -self.params.lambda0 / 4,
+            -self.params.substrate_length_mm / 2,
             -self.params.lambda0 / 4,
             0,
         ]
         substrate_stop = [
+            self.params.substrate_length_mm + self.params.substrate_length_mm / 2,
             self.params.substrate_width_mm + self.params.lambda0 / 4,
-            self.params.substrate_length_mm + self.params.lambda0 / 4,
             self.params.substrate_thickness_mm,
         ]
         substrate.AddBox(priority=0, start=substrate_start, stop=substrate_stop)
@@ -203,13 +222,13 @@ class QuarterWaveFilter(SimTools):
         ground = self.CSX.AddMetal("ground")
         ground.SetColor("#B87333", 255)
         ground_start = [
-            -self.params.lambda0 / 4,
+            -self.params.substrate_length_mm / 2,
             -self.params.lambda0 / 4,
             0,
         ]
         ground_stop = [
+            self.params.substrate_length_mm + self.params.substrate_length_mm / 2,
             self.params.substrate_width_mm + self.params.lambda0 / 4,
-            self.params.substrate_length_mm + self.params.lambda0 / 4,
             -self.params.copper_thickness_mm,
         ]
         ground.AddBox(priority=2, start=ground_start, stop=ground_stop)
@@ -220,44 +239,73 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
     class
     """
 
-    def _get_total_length(self):
-        total_length = (self.params.filter_order + 1) * self.params.line_length_mm
-        for i in range(self.params.filter_order):
-            total_length += self.params.shunt_line_width_mm[i]
-        return total_length
-
     def create_series_line(self):
-        series_line = self.CSX.AddMetal("series_line")
-        series_line.SetColor("#B87333", 255)
-        total_length = self._get_total_length()
-        line_start = [
-            0,
-            0,
-            self.params.substrate_thickness_mm,
-        ]
-        line_stop = [
-            total_length,
+        first_series_line = self.CSX.AddMetal("series_line_1")
+        first_series_line.SetColor("#B87333", 255)
+        f_line_start = [0, 0, self.params.substrate_thickness_mm]
+        f_line_stop = [
+            self.params.line_length_mm,
             self.params.series_line_width_mm,
             self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
         ]
-        series_line.AddBox(
+        first_series_line.AddBox(
             priority=1,
-            start=line_start,
-            stop=line_stop,
+            start=f_line_start,
+            stop=f_line_stop,
         )
-
-    def create_shunt_line(self):
         for i in range(self.params.filter_order):
-            shunt_line = self.CSX.AddMetal(f"shunt_line_{i + 1}")
-            shunt_line.SetColor("#B87333", 255)
+            remaining_series_line = self.CSX.AddMetal(f"series_line_{i + 2}")
+            remaining_series_line.SetColor("#B87333", 255)
             line_start = [
-                (i + 1) * self.params.line_length_mm,
-                self.params.series_line_width_mm,
+                (i + 1) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1]),
+                0,
                 self.params.substrate_thickness_mm,
             ]
             line_stop = [
-                (i + 1) * self.params.line_length_mm
-                + self.params.shunt_line_width_mm[i],
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1]),
+                self.params.series_line_width_mm,
+                self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+            ]
+            remaining_series_line.AddBox(
+                priority=1,
+                start=line_start,
+                stop=line_stop,
+            )
+
+    def create_shunt_line(self):
+        first_shunt_line = self.CSX.AddMetal("shunt_line_1")
+        first_shunt_line.SetColor("#B87333", 255)
+        f_line_start = [
+            self.params.line_length_mm,
+            0,
+            self.params.substrate_thickness_mm,
+        ]
+        f_line_stop = [
+            self.params.line_length_mm + self.params.shunt_line_width_mm[0],
+            self.params.line_length_mm + self.params.series_line_width_mm,
+            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+        ]
+        first_shunt_line.AddBox(
+            priority=1,
+            start=f_line_start,
+            stop=f_line_stop,
+        )
+
+        for i in range(self.params.filter_order - 1):
+            shunt_line = self.CSX.AddMetal(f"shunt_line_{i + 2}")
+            shunt_line.SetColor("#B87333", 255)
+            line_start = [
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1]),
+                0,
+                self.params.substrate_thickness_mm,
+            ]
+            line_stop = [
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1])
+                + self.params.shunt_line_width_mm[i + 1],
                 self.params.series_line_width_mm + self.params.line_length_mm,
                 self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
             ]
@@ -269,7 +317,11 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
 
     def create_ports(self):
         port = [None, None]
-        total_length = self._get_total_length()
+        total_length = _get_total_length(
+            self.params.filter_order,
+            self.params.line_length_mm,
+            self.params.shunt_line_width_mm,
+        )
         port_1_start = [
             0,
             0,
@@ -316,9 +368,19 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
     def create_mesh(self):
         mesh = self.CSX.GetGrid()
         mesh.SetDeltaUnit(self.params.unit)
-        total_length = self._get_total_length()
+        total_length = _get_total_length(
+            self.params.filter_order,
+            self.params.line_length_mm,
+            self.params.shunt_line_width_mm,
+        )
 
-        mesh.AddLine("x", self.params.simulation_box[0])
+        mesh.AddLine(
+            "x",
+            [
+                -self.params.simulation_box[0],
+                self.params.simulation_box[0] + self.params.lambda0,
+            ],
+        )
         mesh.AddLine(
             "y", [-self.params.simulation_box[1], self.params.simulation_box[1]]
         )
@@ -329,16 +391,36 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         # Add mesh lines for substrate
         mesh.AddLine(
             "x",
-            [-self.params.substrate_width_mm / 2, self.params.substrate_width_mm / 2],
+            [
+                -self.params.substrate_width_mm / 3,
+                self.params.substrate_width_mm * 2 / 3,
+            ],
         )
         mesh.AddLine(
             "y",
-            [-self.params.substrate_length_mm / 2, self.params.substrate_length_mm / 2],
+            [
+                -self.params.substrate_length_mm / 3,
+                self.params.substrate_length_mm * 2 / 3,
+            ],
         )
         mesh.AddLine("x", 0)
         mesh.AddLine("x", total_length)
-        mesh.AddLine("y", -self.params.series_line_width_mm - self.params.thirds_rule)
-        mesh.AddLine("y", self.params.series_line_width_mm + self.params.thirds_rule)
+        mesh.AddLine(
+            "y",
+            np.linspace(
+                (self.params.series_line_width_mm + self.params.line_length_mm) + 1,
+                (self.params.series_line_width_mm + self.params.line_length_mm) - 1,
+                6,
+            ),
+        )
+        mesh.AddLine(
+            "y",
+            np.linspace(
+                0,
+                self.params.series_line_width_mm,
+                6,
+            ),
+        )
 
         mesh.AddLine(
             "z",
@@ -349,5 +431,16 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 self.params.substrate_cells,
             ),
         )
+
+        for i in range(self.params.filter_order):
+            mesh.AddLine("x", ((i + 1) * self.params.line_length_mm * 8) / 8)
+            mesh.AddLine(
+                "x",
+                (
+                    (i + 1) * self.params.line_length_mm * 8
+                    + self.params.shunt_line_width_mm[i]
+                )
+                / 8,
+            )
 
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)

@@ -28,7 +28,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     params.inset_length_mm = 1.075
     params.inset_width_mm = 0.475
     params.feed_width_mm = 0.275
-    params.substrate_width_mm = 10
+    # params.substrate_width_mm = 10
     if sweep:
         params.inset_length_mm = sweep_val[0]
         params.inset_width_mm = sweep_val[1]

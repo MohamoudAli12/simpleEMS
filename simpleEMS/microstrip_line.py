@@ -90,10 +90,25 @@ class MicrostripLineParams(SimParams):
         """
         return self.target_freq
 
+    @property
+    def substrate_length_mm(self):
+        return self.microstrip_length_mm + 2 * self.lambda0
+
+    @property
+    def substrate_width_mm(self):
+        return self.microstrip_width_mm + 2 * self.lambda0
+
+    @property
+    def simulation_box(self):
+        return self._create_simulation_box(
+            self.substrate_width_mm + self.lambda0,
+            self.substrate_length_mm + self.lambda0,
+            self.lambda0 * 2,
+        )
+
     def __post_init__(self):
         super().__post_init__()
         self._compute_geometry()
-        self._create_simulation_box()
 
     def _compute_geometry(self):
         """
@@ -119,9 +134,6 @@ class MicrostripLineParams(SimParams):
             self.main_freq,
         )
 
-        self.substrate_width_mm = self.microstrip_width_mm + 2 * self.lambda0
-        self.substrate_length_mm = self.microstrip_length_mm + 2 * self.lambda0
-
         self._round_outputs()
 
     def _round_outputs(self):
@@ -136,8 +148,6 @@ class MicrostripLineParams(SimParams):
         for attr in [
             "microstrip_width_mm",
             "microstrip_length_mm",
-            "substrate_width_mm",
-            "substrate_length_mm",
             "lambda0",
             "mesh_resolution",
             "metal_mesh_resolution",

@@ -101,8 +101,6 @@ class SimParams:
     substrate_thickness_mm: float
     substrate_kappa: float = field(init=False)
 
-    substrate_width_mm: float = 100
-    substrate_length_mm: float = 100
     substrate_cells: int = 4
 
     unit: float = 1e-3  # mm
@@ -119,7 +117,6 @@ class SimParams:
     mesh_resolution: float = field(init=False)
 
     lambda0: float = field(init=False)
-    simulation_box: np.ndarray = field(init=False)
     thirds_rule: np.ndarray = field(init=False)
 
     @property
@@ -156,6 +153,18 @@ class SimParams:
         """
         raise NotImplementedError("Subclasses must define main_freq")
 
+    @property
+    def simulation_box(self):
+        raise NotImplementedError("subclasses must define simulation_box")
+
+    @property
+    def substrate_width_mm(self):
+        raise NotImplementedError("subclasses must define substrate width")
+
+    @property
+    def substrate_length_mm(self):
+        raise NotImplementedError("subclasses must define substrate length")
+
     def __post_init__(self):
         self._compute_common()
 
@@ -189,7 +198,7 @@ class SimParams:
             np.array([2 * self.mesh_resolution / 3, -self.mesh_resolution / 3]) / 4
         )
 
-    def _create_simulation_box(self):
+    def _create_simulation_box(self, x_dir, y_dir, z_dir):
         """
         Compute the 3D simulation bounding box from substrate dimensions
         and lambda0 padding.
@@ -201,13 +210,14 @@ class SimParams:
         -------
         None
         """
-        self.simulation_box = np.round(
+        simulation_box = np.round(
             np.array(
                 [
-                    self.substrate_width_mm + self.lambda0,
-                    self.substrate_length_mm + self.lambda0,
-                    self.lambda0 * 2,
+                    x_dir,
+                    y_dir,
+                    z_dir,
                 ]
             ),
             self.fp_precision,
         )
+        return simulation_box
