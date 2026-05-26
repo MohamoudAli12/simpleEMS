@@ -34,6 +34,7 @@ from .sim_tools import (
     param_sweep,
     setup_simulation,
 )
+from .mesh import Mesh
 
 __all__ = [
     "InsetFedPatchAntenna",
@@ -51,6 +52,7 @@ __all__ = [
     "optimize_s21",
     "optimize_s_params",
     "param_sweep",
+    "Mesh",
 ]
 
 __version__ = "0.1.0"
