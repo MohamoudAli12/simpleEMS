@@ -19,9 +19,9 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_eps_r=3.00,
         substrate_tand=0.001,
         charac_imp=50.0,
-        end_criteria=1e-5,
+        end_criteria=1e-4,
         mesh_resolution_factor=20,
-        metal_mesh_resolution_factor=50,
+        metal_mesh_resolution_factor=70,
     )
 
     # parameters values after optimization
@@ -40,7 +40,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.patch_length_mm = optimize_val[2]
         params.patch_width_mm = optimize_val[3]
 
-    CSX, FDTD, freqs = setup_simulation(params, boundary_cond=["MUR"] * 6)
+    CSX, FDTD, freqs = setup_simulation(params)
 
     patch = InsetFedPatchAntenna(params, CSX, FDTD)
     patch.print_and_save_params(params, output_path)

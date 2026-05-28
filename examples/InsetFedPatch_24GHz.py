@@ -22,8 +22,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_tand=0.0037,
         charac_imp=50.0,
         end_criteria=1e-5,
-        metal_mesh_resolution_factor=30,
-        mesh_resolution_factor=20,
     )
 
     params.patch_length_mm = 3.15
@@ -31,7 +29,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     params.inset_length_mm = 1.075
     params.inset_width_mm = 0.475
     params.feed_width_mm = 0.275
-    # params.substrate_width_mm = 10
+
     if sweep:
         params.inset_length_mm = sweep_val[0]
         params.inset_width_mm = sweep_val[1]
@@ -51,8 +49,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_patch_with_inset()
     patch.create_feed()
     port = patch.create_port()
-    # patch.create_mesh()
-    Mesh(CSX, params)
+    patch.create_mesh()
+    # Mesh(CSX, params)
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
     patch.write_and_show_structure(FDTD, output_path)

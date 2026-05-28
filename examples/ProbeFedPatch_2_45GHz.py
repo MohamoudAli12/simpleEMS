@@ -30,10 +30,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.patch_width_mm = optimize_val[1]
         params.patch_length_mm = optimize_val[2]
 
-    # params.probe_pos_mm = np.round(params.probe_pos_mm - 7, params.fp_precision)
-    # params.patch_length_mm = np.round(
-    #     params.patch_length_mm - 1.14, params.fp_precision
-    # )
+    params.probe_pos_mm = round(params.probe_pos_mm - 7, params.fp_precision)
+    params.patch_length_mm = round(params.patch_length_mm - 1.14, params.fp_precision)
 
     CSX, FDTD, freqs = setup_simulation(params)
     patch = ProbeFedPatchAntenna(params, CSX, FDTD)
@@ -116,7 +114,7 @@ def main():
     output_path = Path(__file__).with_suffix("")
     output_path.mkdir(parents=True, exist_ok=True)
 
-    optimize = True
+    optimize = False
     if optimize:
         x0 = {
             "probe_pos_mm": 11.501,
