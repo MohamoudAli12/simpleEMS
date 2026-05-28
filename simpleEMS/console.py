@@ -14,6 +14,13 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+Console output configuration using the Rich library.
+
+Defines a colour theme and a shared Console instance used across
+all simpleEMS modules for consistent terminal output.
+"""
+
 from rich.console import Console
 from rich.theme import Theme
 

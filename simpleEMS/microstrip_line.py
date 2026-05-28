@@ -14,6 +14,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+Microstrip transmission line design and simulation.
+
+Provides `MicrostripLineParams` for defining the geometric and
+material properties of a microstrip line, and `MicrostripLine`
+for constructing the full simulation structure (substrate, ground,
+trace, ports, and mesh) using openEMS.
+"""
+
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -92,14 +101,38 @@ class MicrostripLineParams(SimParams):
 
     @property
     def substrate_length_mm(self):
+        """
+        Return the substrate length including lambda0 padding.
+
+        Returns
+        -------
+        float
+            Substrate length in mm.
+        """
         return self.microstrip_length_mm + 2 * self.lambda0
 
     @property
     def substrate_width_mm(self):
+        """
+        Return the substrate width including lambda0 padding.
+
+        Returns
+        -------
+        float
+            Substrate width in mm.
+        """
         return self.microstrip_width_mm + 2 * self.lambda0
 
     @property
     def simulation_box(self):
+        """
+        Return the 3D simulation bounding box dimensions.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (3,) with [x, y, z] dimensions in mm.
+        """
         return self._create_simulation_box(
             self.substrate_width_mm + self.lambda0,
             self.substrate_length_mm + self.lambda0,
@@ -107,6 +140,7 @@ class MicrostripLineParams(SimParams):
         )
 
     def __post_init__(self):
+        """Perform geometric calculations after dataclass initialisation."""
         super().__post_init__()
         self._compute_geometry()
 
@@ -173,7 +207,7 @@ class MicrostripLine(SimTools):
     """
 
     def __init__(self, params, CSX, FDTD) -> None:
-
+        """Initialise the MicrostripLine with parameters and simulation objects."""
         self.params = params
         self.CSX = CSX
         self.FDTD = FDTD
@@ -218,9 +252,6 @@ class MicrostripLine(SimTools):
         -------
         None
 
-        Notes
-        -----
-        The ground plane is assigned a higher priority (2).
         """
         ground = self.CSX.AddMetal("ground")
         ground.SetColor("#B87333", 255)

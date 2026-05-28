@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Inset-fed patch antenna design at 24.125 GHz with sweep and optimisation."""
+
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +11,6 @@ from simpleEMS import (
     optimize_s_params,
     param_sweep,
     setup_simulation,
-    Mesh,
 )
 
 

@@ -14,6 +14,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+simpleEMS — A Python library built on openEMS for simplified antenna
+and RF structure design, simulation, optimisation, and visualisation.
+"""
+
 from .microstrip_line import (
     MicrostripLine,
     MicrostripLineParams,

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Microstrip transmission line design example at 1.7 GHz."""
+
 from simpleEMS import (
     MicrostripLine,
     MicrostripLineParams,

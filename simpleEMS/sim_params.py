@@ -14,6 +14,14 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+Base simulation parameter definitions for openEMS structures.
+
+Defines the `SimParams` dataclass which serves as the base class
+for all structure-specific parameter classes. Handles common
+attributes such as substrate properties, frequency range, mesh
+resolution, and simulation box computation.
+"""
 
 from dataclasses import dataclass, field
 
@@ -155,17 +163,63 @@ class SimParams:
 
     @property
     def simulation_box(self):
+        """
+        Return the 3D simulation bounding box.
+
+        Must be implemented by subclasses.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (3,) with [x, y, z] dimensions in mm.
+
+        Raises
+        ------
+        NotImplementedError
+            If the subclass does not define this property.
+        """
         raise NotImplementedError("subclasses must define simulation_box")
 
     @property
     def substrate_width_mm(self):
+        """
+        Return the substrate width in mm.
+
+        Must be implemented by subclasses.
+
+        Returns
+        -------
+        float
+            Substrate width in mm.
+
+        Raises
+        ------
+        NotImplementedError
+            If the subclass does not define this property.
+        """
         raise NotImplementedError("subclasses must define substrate width")
 
     @property
     def substrate_length_mm(self):
+        """
+        Return the substrate length in mm.
+
+        Must be implemented by subclasses.
+
+        Returns
+        -------
+        float
+            Substrate length in mm.
+
+        Raises
+        ------
+        NotImplementedError
+            If the subclass does not define this property.
+        """
         raise NotImplementedError("subclasses must define substrate length")
 
     def __post_init__(self):
+        """Perform common parameter computations after dataclass initialisation."""
         self._compute_common()
 
     def _compute_common(self):
@@ -202,13 +256,21 @@ class SimParams:
         """
         Compute the 3D simulation bounding box from substrate dimensions
         and lambda0 padding.
-        This method sets the simulation_box attribute as a numpy array
-        of shape (3,) containing [x, y, z] dimensions that enclose the
-        antenna structure with lambda0 air padding on all sides. Must be
-        called after substrate dimensions are defined.
+
+        Parameters
+        ----------
+        x_dir : float
+            X-direction extent of the simulation box in mm.
+        y_dir : float
+            Y-direction extent of the simulation box in mm.
+        z_dir : float
+            Z-direction extent of the simulation box in mm.
+
         Returns
         -------
-        None
+        np.ndarray
+            A numpy array of shape (3,) containing the [x, y, z]
+            simulation box dimensions in mm, rounded to fp_precision.
         """
         simulation_box = np.round(
             np.array(

@@ -1,3 +1,12 @@
+"""
+Filter coefficient generation for standard filter responses.
+
+Provides functions to compute normalised g-values for Bessel,
+Butterworth, and Chebyshev (equal-ripple) prototype
+filters. These coefficients are used in the design of quarter-wave
+stub filters and other distributed-element filters.
+"""
+
 import math
 
 # Bessel filter g-values (orders 2-19)
@@ -250,6 +259,21 @@ BESSEL_COEFFICIENT = [
 
 
 def bessel_value(index: int, order: int) -> float:
+    """
+    Return the g-value for a Bessel filter prototype.
+
+    Parameters
+    ----------
+    index : int
+        Element index (0-based).
+    order : int
+        Filter order (2 to 19).
+
+    Returns
+    -------
+    float
+        The normalised Bessel g-value. Returns 1.0 for index out of range.
+    """
     if order < 2 or order > 19:
         raise ValueError(f"Bessel filter order {order} is not supported ")
     if index < 0 or index >= order:
@@ -258,12 +282,44 @@ def bessel_value(index: int, order: int) -> float:
 
 
 def butterworth_value(index: int, order: int) -> float:
+    """
+    Return the g-value for a Butterworth filter prototype.
+
+    Parameters
+    ----------
+    index : int
+        Element index (0-based).
+    order : int
+        Filter order.
+
+    Returns
+    -------
+    float
+        The normalised Butterworth g-value. Returns 1.0 for index out of range.
+    """
     if index < 0 or index >= order:
         return 1.0
     return 2.0 * math.sin((2.0 * index + 1.0) / (2.0 * order) * math.pi)
 
 
 def chebyshev_value(index: int, order: int, ripple_db: float) -> float:
+    """
+    Return the g-value for a Chebyshev (equal-ripple) filter prototype.
+
+    Parameters
+    ----------
+    index : int
+        Element index (0-based).
+    order : int
+        Filter order (must be odd for passive realisation).
+    ripple_db : float
+        Passband ripple in dB.
+
+    Returns
+    -------
+    float
+        The normalised Chebyshev g-value. Returns 1.0 for index out of range.
+    """
     if index < 0 or index >= order:
         return 1.0
     if order % 2 == 0:
@@ -291,6 +347,33 @@ def get_filter_coefficient(
     filter_order: int,
     ripple_db: float | None,
 ) -> float:
+    """
+    Return the normalised g-value for a given filter response.
+
+    Dispatches to the appropriate function (Bessel, Butterworth, or
+    Chebyshev) based on the filter_response string.
+
+    Parameters
+    ----------
+    index : int
+        Element index (0-based).
+    filter_response : str
+        Filter response type: ``"bessel"``, ``"butterworth"``, or ``"chebyshev"``.
+    filter_order : int
+        Filter order.
+    ripple_db : float or None
+        Passband ripple in dB (required for Chebyshev, ignored otherwise).
+
+    Returns
+    -------
+    float
+        The normalised g-value for the specified filter element.
+
+    Raises
+    ------
+    ValueError
+        If filter_response is not one of the supported types.
+    """
     if ripple_db is None:
         ripple_db = 3
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Simpler inset-fed patch antenna example at 60 GHz using high-level helper methods."""
+
 from pathlib import Path
 
 import numpy as np

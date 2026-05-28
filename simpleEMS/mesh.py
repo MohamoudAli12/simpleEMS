@@ -1,3 +1,12 @@
+"""
+Auto-generated FDTD mesh from CSXCAD primitives and lumped ports.
+
+The Mesh class scans all geometry and port elements, places mesh
+lines at every boundary, applies sub-cell refinement near metal
+edges and inside port regions, then calls SmoothMeshLines for a
+stable grid transition.
+"""
+
 import numpy as np
 
 
@@ -20,6 +29,7 @@ class Mesh:
     """
 
     def __init__(self, csx, params, smooth_ratio=1.5):
+        """Initialise the Mesh generator and automatically generate the grid."""
         self._csx = csx
         self._mesh_res = float(params.mesh_resolution)
         self._metal_res = float(params.metal_mesh_resolution)
@@ -32,6 +42,7 @@ class Mesh:
 
     @staticmethod
     def _dedup(coords, min_spacing=None):
+        """Remove duplicate coordinates within a minimum spacing threshold."""
         s = sorted(coords)
         if not s:
             return s
@@ -42,6 +53,7 @@ class Mesh:
         return out
 
     def _generate(self):
+        """Generate the FDTD mesh by scanning all primitives and adding grid lines."""
         grid = self._csx.GetGrid()
         grid.SetDeltaUnit(self._unit)
 

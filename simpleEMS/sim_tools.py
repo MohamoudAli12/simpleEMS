@@ -13,6 +13,18 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""
+Simulation orchestration, post-processing, and utility tools.
+
+Provides the `SimTools` class (namespace for static methods) and
+standalone functions for setting up openEMS simulations, running
+optimisation, parameter sweeps, plotting (S-parameters, VSWR,
+Smith chart, radiation patterns, 3D patterns), NF2FF computation,
+field dumps, and exports (Touchstone, Gerber, STL). Also includes
+unit conversion helpers.
+"""
+
 from __future__ import annotations
 
 import subprocess
@@ -1029,6 +1041,9 @@ class SimTools:
         freq : float
             The frequency (in Hz) at which the 3D directivity pattern is evaluated.
 
+        input_power : float
+            Input power at the port used for gain normalisation.
+
         output_path : Path
             Path to the directory where the simulation result is saved.
 
@@ -1499,17 +1514,37 @@ def optimize_s11(
     threshold: float = -15,
 ) -> np.floating:
     """
-    Objective for S11 (reflection). Lower is better.
+    Objective function for S11 (reflection) optimisation. Lower is better.
 
-    Parameters:
-        freqs : array
-        s11   : complex array
-        target_freq : float, optional
-        freq_band  : tuple (f_min, f_max), optional
-        mode  : "worst", "mean", or "threshold"
+    Parameters
+    ----------
+    freqs : ndarray
+        Array of frequencies in Hz.
+    s11 : ndarray
+        Complex S11 parameter array across the frequency range.
+    target_freq : float, optional
+        Specific frequency at which to evaluate S11.
+    freq_band : tuple of (float, float), optional
+        Frequency band (f_min, f_max) over which to evaluate S11.
+    mode : str, optional
+        Evaluation mode within the frequency band.
+        - "worst" : Returns the maximum S11 (worst-case reflection).
+        - "mean" : Returns the mean S11 across the band.
+        - "threshold" : Sum of S11 exceeding the threshold value.
+        Default is "worst".
+    threshold : float, optional
+        S11 threshold in dB for the "threshold" mode. Default is -15.
 
-    Returns:
-        scalar cost
+    Returns
+    -------
+    float
+        Scalar cost value (S11 in dB).
+
+    Raises
+    ------
+    ValueError
+        If mode is not "mean", "worst", or "threshold", or if neither
+        target_freq nor freq_band is provided.
     """
 
     s11_db = 20.0 * np.log10(np.abs(s11))
@@ -1635,10 +1670,12 @@ def optimize_s_params(
     x0_keys = list(x0.keys())
 
     def make_callback(tol: float = 1e-4, patience: int = 5) -> Callable:
+        """Create a callback that stops optimisation when parameters stall."""
         prev_x = None
         stall = 0
 
         def callback(xk: OptimizeResult) -> None:
+            """StopIteration callback: raises StopIteration if parameters stall."""
             nonlocal prev_x, stall
             if prev_x is not None:
                 if np.linalg.norm(xk - prev_x) < tol:
@@ -1655,6 +1692,7 @@ def optimize_s_params(
     callback = make_callback()
 
     def optimize_fun(x: NDArray) -> float:
+        """Wrapper function that calls the simulation with the current parameter values."""
         return simulate_fn(output_path=output_path, optimize=True, optimize_val=x)
 
     try:
@@ -1759,7 +1797,7 @@ def m_to_mm(m: float) -> float:
     m: float
         Value in meters
     Returns
-    ------
+    -------
     Value in millimeters
 
     """

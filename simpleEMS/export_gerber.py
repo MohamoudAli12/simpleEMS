@@ -14,6 +14,14 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+Gerber RS-274X export utilities for CSXCAD geometries.
+
+Provides functions to convert openEMS CSXCAD structures into Gerber
+format for PCB fabrication. Currently supports box and polygon
+primitives in the XY-plane.
+"""
+
 # TODO: only box and polygon primitives are working. add support of all primitives.
 
 from .console import console
@@ -21,9 +29,18 @@ from .console import console
 
 def gerber_coord(vertices_xy_pos):
     """
-    Convert a 2D or cylindrical coordinate into Gerber RS-274X format.
-    Uses global drawingunit and CoordSystem.
-    Returns a string like 'X+000001234567Y+000005678901'.
+    Convert a 2D coordinate into Gerber RS-274X format.
+
+    Parameters
+    ----------
+    vertices_xy_pos : tuple of (float, float)
+        The (x, y) position to convert.
+
+    Returns
+    -------
+    str
+        A Gerber coordinate string in the format
+        'X+000001234567Y+000005678901'.
     """
     x = vertices_xy_pos[0]
     y = vertices_xy_pos[1]

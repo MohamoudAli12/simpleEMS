@@ -88,7 +88,7 @@ The visualisation includes plotting S11, VSWR, Complex Impedance, Radiation Patt
 ```
 
 ## External Export
-You can export the model to various format for further processsing/visualisation and exporting to other CAD software.
+You can export the model to various format for further processing/visualisation and exporting to other CAD software.
 
 ```{literalinclude} ../../../examples/simple_probe_fed_patch_antenna.py
 :language: python
@@ -98,7 +98,7 @@ You can export the model to various format for further processsing/visualisation
 
 ## Complete script
 
-Below is the compelete script to design, simulate and post-process the inset fed patch antenna.
+Below is the complete script to design, simulate and post-process the probe fed patch antenna.
 
 ```{literalinclude} ../../../examples/simple_probe_fed_patch_antenna.py
 :language: python

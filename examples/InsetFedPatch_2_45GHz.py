@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Inset-fed patch antenna design at 2.45 GHz with parameter sweep and optimisation."""
+
 from pathlib import Path
 
 from simpleEMS import (

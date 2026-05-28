@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Simple probe-fed patch antenna example at 2.45 GHz."""
+
 # IMPORTS
 from simpleEMS import (
     ProbeFedPatchAntenna,

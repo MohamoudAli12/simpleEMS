@@ -14,6 +14,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+Patch antenna design and simulation for inset-fed and probe-fed variants.
+
+Provides parameter dataclasses (`InsetFedPatchParams`,
+`ProbeFedPatchParams`) and antenna classes (`InsetFedPatchAntenna`,
+`ProbeFedPatchAntenna`) for constructing rectangular microstrip
+patch antenna geometries in openEMS.
+"""
+
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -113,14 +122,38 @@ class InsetFedPatchParams(SimParams):
 
     @property
     def substrate_length_mm(self):
+        """
+        Return the substrate length including lambda0 padding.
+
+        Returns
+        -------
+        float
+            Substrate length in mm.
+        """
         return self.patch_length_mm + 2 * self.lambda0
 
     @property
     def substrate_width_mm(self):
+        """
+        Return the substrate width including lambda0 padding.
+
+        Returns
+        -------
+        float
+            Substrate width in mm.
+        """
         return self.patch_width_mm + 2 * self.lambda0
 
     @property
     def simulation_box(self):
+        """
+        Return the 3D simulation bounding box dimensions.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (3,) with [x, y, z] dimensions in mm.
+        """
         return self._create_simulation_box(
             self.substrate_width_mm + self.lambda0,
             self.substrate_length_mm + self.lambda0,
@@ -128,6 +161,7 @@ class InsetFedPatchParams(SimParams):
         )
 
     def __post_init__(self):
+        """Perform geometric calculations after dataclass initialisation."""
         super().__post_init__()
         self._compute_geometry()
 
@@ -229,6 +263,7 @@ class PatchAntenna(SimTools):
     """
 
     def __init__(self, params, CSX, FDTD):
+        """Initialise the PatchAntenna with parameters and simulation objects."""
         self.params = params
         self.CSX = CSX
         self.FDTD = FDTD
@@ -353,7 +388,10 @@ class InsetFedPatchAntenna(PatchAntenna):
         ]
 
         patch_inset.AddLinPoly(
-            pp, "z", self.params.substrate_thickness_mm, self.params.copper_thickness_mm
+            pp,
+            "z",
+            self.params.substrate_thickness_mm,
+            self.params.copper_thickness_mm,
         )
         self.FDTD.AddEdges2Grid(
             dirs="xy",
@@ -585,14 +623,38 @@ class ProbeFedPatchParams(SimParams):
 
     @property
     def substrate_length_mm(self):
+        """
+        Return the substrate length including lambda0 padding.
+
+        Returns
+        -------
+        float
+            Substrate length in mm.
+        """
         return self.patch_length_mm + 2 * self.lambda0
 
     @property
     def substrate_width_mm(self):
+        """
+        Return the substrate width including lambda0 padding.
+
+        Returns
+        -------
+        float
+            Substrate width in mm.
+        """
         return self.patch_width_mm + 2 * self.lambda0
 
     @property
     def simulation_box(self):
+        """
+        Return the 3D simulation bounding box dimensions.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (3,) with [x, y, z] dimensions in mm.
+        """
         return self._create_simulation_box(
             self.substrate_width_mm + self.lambda0,
             self.substrate_length_mm + self.lambda0,
@@ -600,17 +662,7 @@ class ProbeFedPatchParams(SimParams):
         )
 
     def __post_init__(self):
-        """
-        Perform geometric calculations after data class initialization.
-
-        This method triggers the calculation of all physical dimensions
-        based on the frequency and material parameters provided.
-
-        Returns
-        -------
-        None
-        """
-
+        """Perform geometric calculations after dataclass initialisation."""
         super().__post_init__()
         self._compute_geometry()
 

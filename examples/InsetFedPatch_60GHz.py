@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Inset-fed patch antenna design at 60 GHz with parameter sweep and optimisation."""
+
 from pathlib import Path
 
 from simpleEMS import (
@@ -81,7 +83,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
 
     if not (sweep or optimize):
-        patch.run_simulation(FDTD, output_path)
+        # patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
             freqs,

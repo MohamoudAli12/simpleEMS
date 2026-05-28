@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+
+"""Quarter-wave band-stop stub filter design example at 2.45 GHz."""
+
 from simpleEMS import QuarterWaveFilterParams, BandStopQuarterWaveFilter
 from simpleEMS import setup_simulation
 

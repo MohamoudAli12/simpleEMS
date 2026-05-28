@@ -14,6 +14,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+Calculation utilities for microstrip patch antenna design.
+
+Provides functions for computing patch dimensions, microstrip line
+width from target impedance, phase shift lengths, conductance, and
+inset depths. All formulas follow standard references (Balanis,
+Hammerstad-Jensen).
+"""
+
 from typing import NamedTuple
 
 import numpy as np
@@ -98,6 +107,8 @@ def microstrip_width_from_impedance(
     """
 
     def get_Z_at_freq(w, h, t, er, f_hz):
+        """Calculate microstrip characteristic impedance at a given
+        frequency using Hammerstad-Jensen equations."""
         # Constants
         eta0 = 376.730313668
         mue0 = 4 * np.pi * 1e-7
@@ -196,6 +207,7 @@ def conductance_G1(patch_width: float, frequency: float) -> float:
     k0 = 2 * np.pi / lambda0
 
     def integrand(theta):
+        """Integrand for conductance calculation using the cavity model."""
         ct = np.cos(theta)
         if abs(ct) < 1e-5:
             return 0.0
@@ -213,7 +225,8 @@ def inset_depth(
     frequency: float,
 ) -> tuple[float, float]:
     """
-    Compute the inset feed depth of an inset fed patch antenna and probe position of probe fed patch antenna.
+    Compute the inset feed depth of an inset fed patch antenna
+    and probe position of probe fed patch antenna.
 
     Parameters
     ----------
@@ -223,7 +236,7 @@ def inset_depth(
         patch antenna width in meters.
     patch_length: float
         patch antenna length in meters.
-    frequency: flaot
+    frequency: float
         frequency in Hz.
 
     Returns
@@ -251,6 +264,23 @@ def inset_depth(
 
 
 class PatchDims(NamedTuple):
+    """
+    Named tuple holding all rectangular patch antenna dimensions.
+
+    Attributes
+    ----------
+    patch_width_mm : float
+        Width of the patch in the x-direction in mm.
+    patch_length_mm : float
+        Length of the patch in the y-direction in mm.
+    inset_length_mm : float
+        Inset depth of the patch in mm.
+    inset_width_mm : float
+        Inset gap width of the patch in mm.
+    probe_pos_mm : float
+        Feed position for probe-fed patch in the y-direction in mm.
+    """
+
     patch_width_mm: float
     patch_length_mm: float
     inset_length_mm: float
@@ -322,9 +352,17 @@ def patch_dims(
     probe_pos_mm = m_to_mm(probe_pos)
 
     inset_width_mm = microstrip_width_from_impedance(
-        charac_imp, m_to_mm(subst_height), copper_thickness, subst_eps_r, frequency_hz
+        charac_imp,
+        m_to_mm(subst_height),
+        copper_thickness,
+        subst_eps_r,
+        frequency_hz,
     )
 
     return PatchDims(
-        patch_width_mm, patch_length_mm, inset_length_mm, inset_width_mm, probe_pos_mm
+        patch_width_mm,
+        patch_length_mm,
+        inset_length_mm,
+        inset_width_mm,
+        probe_pos_mm,
     )
