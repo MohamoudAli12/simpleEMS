@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Microstrip transmission line design example at 1.7 GHz."""
 
+# IMPORTS
 from simpleEMS import (
     MicrostripLine,
     MicrostripLineParams,
     setup_simulation,
 )
 
+# IMPORTS
+
+# PARAMS
 params = MicrostripLineParams(
     min_freq=1e9,
     max_freq=2e9,
@@ -17,9 +21,13 @@ params = MicrostripLineParams(
     charac_imp=50,
     metal_mesh_resolution_factor=30,
 )
+# PARAMS
 
+# SETUP
 CSX, FDTD, freqs = setup_simulation(params)
+# SETUP
 
+# BUILD
 microstrip = MicrostripLine(params, CSX, FDTD)
 microstrip.print_and_save_params(params)
 microstrip.create_substrate()
@@ -30,9 +38,13 @@ microstrip.create_mesh()
 nf2ff = microstrip.create_nf2ff(FDTD)
 microstrip.add_field_dump(CSX, params)
 microstrip.write_and_show_structure(FDTD)
+# BUILD
 
+# SIMULATE
 microstrip.run_simulation(FDTD)
+# SIMULATE
 
+# PPROCESS
 network_params = microstrip.compute_network_params(
     port,
     freqs,
@@ -52,3 +64,14 @@ microstrip.run_all_post_processing(
     params,
     network_params.s21,
 )
+# PPROCESS
+
+# EXPORT
+microstrip.export_gerber(CSX)
+microstrip.export_stl()
+microstrip.export_touchstone(
+    network_params.freqs,
+    network_params.s11,
+    charac_imp=params.charac_imp,
+)
+# EXPORT
