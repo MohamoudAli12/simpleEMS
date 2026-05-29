@@ -106,7 +106,13 @@ def microstrip_width_from_impedance(
     `<https://ieeexplore.ieee.org/document/1124303>`_.
     """
 
-    def get_Z_at_freq(w, h, t, er, f_hz):
+    def get_Z_at_freq(
+        w: float,
+        h: float,
+        t: float,
+        er: float,
+        f_hz: float,
+    ) -> float:
         """Calculate microstrip characteristic impedance at a given
         frequency using Hammerstad-Jensen equations."""
         # Constants
@@ -206,7 +212,7 @@ def conductance_G1(patch_width: float, frequency: float) -> float:
     lambda0 = C0 / frequency
     k0 = 2 * np.pi / lambda0
 
-    def integrand(theta):
+    def integrand(theta: float) -> float:
         """Integrand for conductance calculation using the cavity model."""
         ct = np.cos(theta)
         if abs(ct) < 1e-5:
@@ -294,7 +300,7 @@ def patch_dims(
     subst_height: float,
     charac_imp: float,
     copper_thickness: float,
-):
+) -> PatchDims:
     """
     Calculate rectangular microstrip patch dimensions.
 

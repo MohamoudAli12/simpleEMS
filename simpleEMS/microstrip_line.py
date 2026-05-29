@@ -26,6 +26,11 @@ trace, ports, and mesh) using openEMS.
 from dataclasses import dataclass, field
 
 import numpy as np
+from numpy.typing import NDArray
+
+from CSXCAD import ContinuousStructure
+from openEMS.openEMS import openEMS
+from openEMS.ports import LumpedPort
 
 from .calc import microstrip_width_from_impedance, phase_shift_length
 from .sim_params import SimParams
@@ -78,7 +83,7 @@ class MicrostripLineParams(SimParams):
     microstrip_width_mm: float = field(init=False)
 
     @property
-    def freq_range(self):
+    def freq_range(self) -> tuple[float, float]:
         """
         Return the simulation frequency range.
         Returns
@@ -89,7 +94,7 @@ class MicrostripLineParams(SimParams):
         return self.min_freq, self.max_freq
 
     @property
-    def main_freq(self):
+    def main_freq(self) -> float:
         """
         Return the primary frequency of interest for analysis.
         Returns
@@ -100,7 +105,7 @@ class MicrostripLineParams(SimParams):
         return self.target_freq
 
     @property
-    def substrate_length_mm(self):
+    def substrate_length_mm(self) -> float:
         """
         Return the substrate length including lambda0 padding.
 
@@ -112,7 +117,7 @@ class MicrostripLineParams(SimParams):
         return self.microstrip_length_mm + 2 * self.lambda0
 
     @property
-    def substrate_width_mm(self):
+    def substrate_width_mm(self) -> float:
         """
         Return the substrate width including lambda0 padding.
 
@@ -124,13 +129,13 @@ class MicrostripLineParams(SimParams):
         return self.microstrip_width_mm + 2 * self.lambda0
 
     @property
-    def simulation_box(self):
+    def simulation_box(self) -> NDArray:
         """
         Return the 3D simulation bounding box dimensions.
 
         Returns
         -------
-        np.ndarray
+        NDArray
             Array of shape (3,) with [x, y, z] dimensions in mm.
         """
         return self._create_simulation_box(
@@ -139,12 +144,12 @@ class MicrostripLineParams(SimParams):
             self.lambda0 * 2,
         )
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Perform geometric calculations after dataclass initialisation."""
         super().__post_init__()
         self._compute_geometry()
 
-    def _compute_geometry(self):
+    def _compute_geometry(self) -> None:
         """
         Compute all derived geometric parameters for the microstrip line.
         This method calculates the microstrip width and length based on
@@ -170,7 +175,7 @@ class MicrostripLineParams(SimParams):
 
         self._round_outputs()
 
-    def _round_outputs(self):
+    def _round_outputs(self) -> None:
         """
         Round all geometric parameters to the configured floating-point precision.
         This method iterates over key geometric and mesh attributes and rounds
@@ -206,13 +211,18 @@ class MicrostripLine(SimTools):
         The FDTD simulation engine object.
     """
 
-    def __init__(self, params, CSX, FDTD) -> None:
+    def __init__(
+        self,
+        params: MicrostripLineParams,
+        CSX: ContinuousStructure,
+        FDTD: openEMS,
+    ) -> None:
         """Initialise the MicrostripLine with parameters and simulation objects."""
         self.params = params
         self.CSX = CSX
         self.FDTD = FDTD
 
-    def create_substrate(self):
+    def create_substrate(self) -> None:
         """
         Define and add the dielectric substrate to the simulation.
         This method creates a material using the permittivity and
@@ -240,7 +250,7 @@ class MicrostripLine(SimTools):
         ]
         substrate.AddBox(priority=0, start=substrate_start, stop=substrate_stop)
 
-    def create_ground(self):
+    def create_ground(self) -> None:
         """
         Define and add the copper ground plane to the geometry.
 
@@ -267,7 +277,7 @@ class MicrostripLine(SimTools):
         ]
         ground.AddBox(priority=2, start=ground_start, stop=ground_stop)
 
-    def create_microstrip_line(self):
+    def create_microstrip_line(self) -> None:
         """
         Create the microstrip trace element.
         Adds a rectangular metal box representing the microstrip
@@ -297,7 +307,7 @@ class MicrostripLine(SimTools):
             metal_edge_res=self.params.metal_mesh_resolution,
         )
 
-    def create_ports(self):
+    def create_ports(self) -> list[LumpedPort]:
         """
         Define the excitation lumped ports at both ends of the microstrip line.
         Creates two ports: Port 1 (excited) at one end and Port 2
@@ -353,7 +363,7 @@ class MicrostripLine(SimTools):
 
         return port
 
-    def create_mesh(self):
+    def create_mesh(self) -> None:
         """
         Generate an FDTD mesh for the microstrip line simulation domain.
         This method defines mesh lines for the x, y, and z directions

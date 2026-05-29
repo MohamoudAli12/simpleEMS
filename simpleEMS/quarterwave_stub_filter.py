@@ -25,7 +25,12 @@ definition and `BandStopQuarterWaveFilter` for structure construction.
 
 import math
 import numpy as np
+from numpy.typing import NDArray
 from dataclasses import dataclass, field
+
+from CSXCAD import ContinuousStructure
+from openEMS.openEMS import openEMS
+from openEMS.ports import LumpedPort
 
 from simpleEMS.sim_tools import SimTools
 from .sim_params import SimParams
@@ -33,7 +38,9 @@ from .calc import microstrip_width_from_impedance, phase_shift_length
 from .filter_coefficient import get_filter_coefficient
 
 
-def _get_total_length(filter_order, line_length_mm, shunt_line_width_mm):
+def _get_total_length(
+    filter_order: int, line_length_mm: float, shunt_line_width_mm: list[float]
+) -> float:
     """Compute total physical length of the filter structure."""
     total_length = (filter_order + 1) * line_length_mm
     for i in range(filter_order):
@@ -99,7 +106,7 @@ class QuarterWaveFilterParams(SimParams):
     line_length_mm: float = field(init=False)
 
     @property
-    def freq_range(self):
+    def freq_range(self) -> tuple[float, float]:
         """
         Return the simulation frequency range.
         Returns
@@ -110,7 +117,7 @@ class QuarterWaveFilterParams(SimParams):
         return self.min_freq, self.max_freq
 
     @property
-    def main_freq(self):
+    def main_freq(self) -> float:
         """
         Return the primary frequency of interest for analysis.
         Returns
@@ -121,7 +128,7 @@ class QuarterWaveFilterParams(SimParams):
         return self.centre_freq
 
     @property
-    def substrate_length_mm(self):
+    def substrate_length_mm(self) -> float:
         """
         Return the total substrate length based on filter geometry.
 
@@ -137,7 +144,7 @@ class QuarterWaveFilterParams(SimParams):
         )
 
     @property
-    def substrate_width_mm(self):
+    def substrate_width_mm(self) -> float:
         """
         Return the substrate width based on filter geometry.
 
@@ -149,13 +156,13 @@ class QuarterWaveFilterParams(SimParams):
         return self.series_line_width_mm + self.line_length_mm
 
     @property
-    def simulation_box(self):
+    def simulation_box(self) -> NDArray:
         """
         Return the 3D simulation bounding box dimensions.
 
         Returns
         -------
-        np.ndarray
+        NDArray
             Array of shape (3,) with [x, y, z] dimensions in mm.
         """
         return self._create_simulation_box(
@@ -164,8 +171,8 @@ class QuarterWaveFilterParams(SimParams):
             self.lambda0,
         )
 
-    def __post_init__(self):
-        """Perform geometric calculations and validate filter type after initialisation."""
+    def __post_init__(self) -> None:
+        """Compute geometry and validate filter type after init."""
         super().__post_init__()
         if self.filter_type not in ("bandpass", "bandstop"):
             raise ValueError(f"Quarter-wave filter does not support {self.filter_type}")
@@ -174,7 +181,7 @@ class QuarterWaveFilterParams(SimParams):
 
         self._compute_geometry()
 
-    def _get_shunt_width(self, idx):
+    def _get_shunt_width(self, idx: int) -> float:
         """Calculate the width of a single shunt stub for the given index."""
         g = get_filter_coefficient(
             idx, self.filter_response, self.filter_order, self.ripple_db
@@ -193,7 +200,7 @@ class QuarterWaveFilterParams(SimParams):
         )
         return width_shunt_mm
 
-    def _compute_geometry(self):
+    def _compute_geometry(self) -> None:
         """
         Compute all derived geometric parameters for the quarter-wave stub filter.
         This method calculates the series line width, shunt line widths,
@@ -224,7 +231,7 @@ class QuarterWaveFilterParams(SimParams):
 
         self._round_outputs()
 
-    def _round_outputs(self):
+    def _round_outputs(self) -> None:
         """
         Round all geometric parameters to the configured floating-point precision.
         This method iterates over key geometric and mesh attributes and rounds
@@ -254,13 +261,18 @@ class QuarterWaveFilter(SimTools):
     by all quarter-wave stub filter variants.
     """
 
-    def __init__(self, params, CSX, FDTD):
+    def __init__(
+        self,
+        params: QuarterWaveFilterParams,
+        CSX: ContinuousStructure,
+        FDTD: openEMS,
+    ) -> None:
         """Initialise the QuarterWaveFilter with parameters and simulation objects."""
         self.params = params
         self.CSX = CSX
         self.FDTD = FDTD
 
-    def create_substrate(self):
+    def create_substrate(self) -> None:
         """
         Define and add the dielectric substrate to the simulation.
 
@@ -289,7 +301,7 @@ class QuarterWaveFilter(SimTools):
         ]
         substrate.AddBox(priority=0, start=substrate_start, stop=substrate_stop)
 
-    def create_ground(self):
+    def create_ground(self) -> None:
         """
         Define and add the copper ground plane to the geometry.
 
@@ -327,7 +339,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
     FDTD mesh.
     """
 
-    def create_series_line(self):
+    def create_series_line(self) -> None:
         """
         Create the series transmission line sections.
 
@@ -372,7 +384,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 stop=line_stop,
             )
 
-    def create_shunt_line(self):
+    def create_shunt_line(self) -> None:
         """
         Create the shunt stub line sections.
 
@@ -423,7 +435,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 stop=line_stop,
             )
 
-    def create_ports(self):
+    def create_ports(self) -> list[LumpedPort] | list[None]:
         """
         Define the excitation lumped ports at both ends of the filter.
 
@@ -484,7 +496,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
 
         return port
 
-    def create_mesh(self):
+    def create_mesh(self) -> None:
         """
         Generate an FDTD mesh for the band-stop filter simulation domain.
 

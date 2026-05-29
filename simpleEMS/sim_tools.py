@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from collections import namedtuple
+from typing import NamedTuple
 from collections.abc import Callable
 from dataclasses import fields
 from enum import Enum
@@ -74,6 +74,7 @@ __all__ = [
     "optimize_s_params",
     "optimize_s11",
     "optimize_s21",
+    "NetworkParams",
     "param_sweep",
     "mm_to_m",
     "m_to_mm",
@@ -118,7 +119,8 @@ class DumpType(Enum):
     average_sar_frequency_10g: tuple[int, str]
         10g averaging SAR frequency-domain dump
     raw_data: tuple[int, str]
-        raw data needed for SAR calculations (electric field FD, cell volume, conductivity and density)
+        raw data needed for SAR calculations
+        (electric field FD, cell volume, conductivity and density)
 
     Notes
     -----
@@ -138,6 +140,33 @@ class DumpType(Enum):
     average_sar_frequency_1g = (21, "SAR_1g_f")
     average_sar_frequency_10g = (22, "SAR_10g_f")
     raw_data = (29, "raw")
+
+
+class NetworkParams(NamedTuple):
+    """Named tuple holding network/s-parameter results.
+
+    Attributes
+    ----------
+    freqs : NDArray
+        Frequency points used in post-processing.
+    s11 : NDArray
+        Complex S11 values across the frequency range.
+    s21 : NDArray | None
+        Complex S21 values (None if single-port).
+    z11 : NDArray
+        Complex Z11 values across the frequency range.
+    vswr : NDArray
+        VSWR values across the frequency range.
+    input_power : float
+        Calculated input power at the port.
+    """
+
+    freqs: NDArray
+    s11: NDArray
+    s21: NDArray | None
+    z11: NDArray
+    vswr: NDArray
+    input_power: float
 
 
 def setup_simulation(
@@ -161,7 +190,7 @@ def setup_simulation(
         CSXCAD geometry object.
     FDTD: openEMS
         openEMS FDTD object.
-    freqs:ndarray
+    freqs:NDArray
         a list of frequencies that will be used in the simulation and post-processing.
     """
     if boundary_cond is None:
@@ -241,7 +270,8 @@ class SimTools:
         structure_3d = output_path / "structure.xml"
         if not structure_3d.exists():
             raise ValueError(
-                "3D Structure does not exist. Make sure to call write_and_show_structure method before exporting STL"
+                "3D Structure does not exist. Make sure to call "
+                "write_and_show_structure before exporting STL"
             )
         stl_path = output_path / "stl"
         stl_path.mkdir(parents=True, exist_ok=True)
@@ -292,23 +322,25 @@ class SimTools:
 
     @staticmethod
     def compute_network_params(
-        port: LumpedPort,
+        port: LumpedPort | list[LumpedPort],
         freqs: NDArray,
         charac_imp: float,
         output_path: Path | None = None,
-    ):
+    ) -> NetworkParams:
         """
-        Computes several network parameters for plotting and post-processing of simulation results.
+        Compute several network parameters for plotting and
+        post-processing of simulation results.
 
-        This method calculates various network parameters such as S11, Z11, VSWR, and input power
-        based on the simulation results. It uses the provided port and simulation parameters to
-        extract the necessary data, processes it, and prepares it for further analysis and plotting.
+        This method calculates network parameters such as S11, Z11,
+        VSWR, and input power based on the simulation results. It uses
+        the provided port and simulation parameters to extract the
+        necessary data for further analysis and plotting.
 
         Parameters
         ----------
         port : object
             The openEMS port object representing the simulation port.
-        freqs: ndarray
+        freqs: NDArray
             takes list of frequencies that was used for the simulation.
         charac_imp: float
             characteristic impedance of the input port.
@@ -320,20 +352,20 @@ class SimTools:
         NetworkParams
             A named tuple containing the following attributes:
 
-            - freqs : ndarray
+            - freqs : NDArray
                 A numpy array of frequencies used for post-processing.
 
-            - s11 : ndarray
-                A numpy array of calculated complex S11 values across the entire frequency range.
+            - s11 : NDArray
+                Complex S11 values across the frequency range.
 
-            - s21 : ndarray
-                A numpy array of calculated complex S21 values across the entire frequency range.
+            - s21 : NDArray
+                Complex S21 values across the frequency range.
 
-            - z11 : ndarray
-                A numpy array of calculated complex Z11 values across the entire frequency range.
+            - z11 : NDArray
+                Complex Z11 values across the frequency range.
 
-            - vswr : ndarray
-                A numpy array of calculated VSWR values across the entire frequency range.
+            - vswr : NDArray
+                VSWR values across the frequency range.
 
             - input_power : float
                 The calculated input power at the port.
@@ -342,9 +374,6 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd()
 
-        NetworkParams = namedtuple(
-            "NetworkParams", ["freqs", "s11", "s21", "z11", "vswr", "input_power"]
-        )
         if isinstance(port, list):
             for p in port:
                 p.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
@@ -381,14 +410,15 @@ class SimTools:
         """
         Plot the S11 parameter (reflection coefficient) against frequency.
 
-        This method generates a 2D plot of the S11 parameter (in dB) as a function of frequency.
+        Generate a 2D plot of the S11 parameter (in dB) as a function
+        of frequency.
 
         Parameters
         ----------
-        freqs : np.ndarray
+        freqs : NDArray
             A 1D array of frequencies (in Hz) to plot on the x-axis.
 
-        s11 : np.ndarray
+        s11 : NDArray
             A 1D array of the corresponding S11 values (in dB) to plot on the y-axis.
 
         x_label : str, optional
@@ -454,15 +484,15 @@ class SimTools:
         """
         Plot the Voltage Standing Wave Ratio (VSWR) as a function of frequency.
 
-        This method generates a 2D plot of VSWR values over the specified frequency range,
-        which is used to evaluate impedance matching performance.
+        Generate a 2D plot of VSWR values over the specified frequency
+        range, used to evaluate impedance matching performance.
 
         Parameters
         ----------
-        freqs : np.ndarray
+        freqs : NDArray
             A 1D array of frequencies (in Hz) to be plotted on the x-axis.
 
-        vswr : np.ndarray
+        vswr : NDArray
             A 1D array of VSWR values corresponding to each frequency.
 
         x_label : str, optional
@@ -517,10 +547,10 @@ class SimTools:
 
         Parameters
         ----------
-        freqs : np.ndarray
+        freqs : NDArray
             A 1D array of frequencies (in Hz) to be plotted on the x-axis.
 
-        z11 : np.ndarray
+        z11 : NDArray
             A 1D array of complex input impedance values corresponding to each
             frequency.
 
@@ -583,10 +613,10 @@ class SimTools:
 
         Parameters
         ----------
-        freqs : np.ndarray
+        freqs : NDArray
             A 1D array of frequencies (in Hz) corresponding to the S11 data.
 
-        s11 : np.ndarray
+        s11 : NDArray
             A 1D array of complex S11 (reflection coefficient) values.
 
         label : str, optional
@@ -623,7 +653,7 @@ class SimTools:
             s11[tar_idx],
             color="black",
             datatype=S_PARAMETER,
-            label=f"S11 is {s11[tar_idx]:.2f} at target frequency {freq_formatter(freqs[tar_idx])}",
+            label=(f"S11 is {s11[tar_idx]:.2f} at {freq_formatter(freqs[tar_idx])}"),
         )
 
         plt.title("Smith Chart - S11")
@@ -664,7 +694,8 @@ class SimTools:
 
         if not np.isscalar(freq):
             raise TypeError(
-                "Please specify only one frequency and not array for radiation pattern calculation"
+                "Please specify only one frequency, not an array, "
+                "for radiation pattern calculation"
             )
 
         theta = np.arange(-180.0, 181.0, 2.0)
@@ -697,7 +728,8 @@ class SimTools:
         cursor.connect(
             "add",
             lambda sel: sel.annotation.set_text(
-                f"theta={np.rad2deg(sel.target[0]):.2f}°\ne_field = {sel.target[1]:.2f} dB"
+                f"theta={np.rad2deg(sel.target[0]):.2f}°"
+                f"\ne_field = {sel.target[1]:.2f} dB"
             ),
         )
 
@@ -782,7 +814,8 @@ class SimTools:
 
         if not np.isscalar(freq):
             raise TypeError(
-                "Please specify only one frequency and not array for directivity calculation"
+                "Please specify only one frequency, not an array, "
+                "for directivity calculation"
             )
 
         theta = np.arange(-180.0, 181.0, 0.1)
@@ -865,7 +898,9 @@ class SimTools:
         ax.text(
             1.0,
             0.1,
-            f"HPBW (3dB) = {hpbw:.2f}°\nMain Lobe Direction = {peak_theta:.2f}°\nMain Lobe Magnitude ={main_lobe_mag:.2f}dBi",
+            f"HPBW (3dB) = {hpbw:.2f}°"
+            f"\nMain Lobe Direction = {peak_theta:.2f}°"
+            f"\nMain Lobe Magnitude = {main_lobe_mag:.2f} dBi",
             transform=ax.transAxes,
             fontsize=12,
             color="black",
@@ -881,7 +916,8 @@ class SimTools:
         cursor.connect(
             "add",
             lambda sel: sel.annotation.set_text(
-                f"theta={np.rad2deg(sel.target[0]):.2f}°\nDirectivity = {sel.target[1]:.2f} dBi"
+                f"theta={np.rad2deg(sel.target[0]):.2f}°"
+                f"\nDirectivity = {sel.target[1]:.2f} dBi"
             ),
         )
 
@@ -901,8 +937,8 @@ class SimTools:
         """
         Compute the 3D far-field radiation pattern.
 
-        The resulting far-field data can be used for visualization, directivity analysis, and
-        post-processing of antenna performance.
+        The resulting far-field data can be used for visualization,
+        directivity analysis, and post-processing of antenna performance.
 
         Parameters
         ----------
@@ -925,7 +961,8 @@ class SimTools:
 
         if not np.isscalar(freq):
             raise TypeError(
-                "Please specify only one frequency and not array for 3D far-field calculation"
+                "Please specify only one frequency, not an array, "
+                "for 3D far-field calculation"
             )
 
         theta = np.arange(0, 181, 2)  # elevation
@@ -977,7 +1014,8 @@ class SimTools:
 
         if not np.isscalar(freq):
             raise TypeError(
-                "Please specify only one frequency and not array for directivity calculation"
+                "Please specify only one frequency, not an array, "
+                "for directivity calculation"
             )
 
         plots_3d_path = output_path / "3D_plots"
@@ -1184,8 +1222,9 @@ class SimTools:
         Notes
         -----
         #TODO : confirm below statement
-        This method must be called after ``show_plots`` while all matplotlib plots are open.
-        This will not save any annotations on the plots. use the manual `save` button to save annotations.
+        This method must be called after ``show_plots`` while all
+        matplotlib plots are open.  This will not save any annotations
+        on the plots; use the manual ``save`` button to save annotations.
         """
         if output_path is None:
             output_path = Path.cwd()
@@ -1276,12 +1315,12 @@ class SimTools:
 
         Parameters
         ----------
-        freqs:ndarray
+        freqs:NDArray
             List of frequencies to be exported.
-        s11:ndarray
+        s11:NDArray
             calculated S11 parameters over the frequency range.
 
-        s21:ndarray
+        s21:NDArray
             calculated S21 parameters over the frequency range.
 
         output_path : Path
@@ -1346,8 +1385,10 @@ class SimTools:
 
         Notes
         -----
-        The gerber export is currently limited and might not be able to export all geometries.
-        Layers should be exported separately by specifying ignore options. i.e. to export only top metal layer ignore the ground.
+        The gerber export is currently limited and might not be able
+        to export all geometries.  Layers should be exported separately
+        by specifying ignore options (e.g. to export only the top metal
+        layer, ignore the ground).
 
         """
         if options is None:
@@ -1389,7 +1430,8 @@ class SimTools:
     ) -> None:
         """
         Print and save the simulation parameters.
-        This method prints the simulation paramaters to the terminal and saves them to text file.
+        This method prints the simulation parameters to the terminal
+        and saves them to a text file.
 
         Parameters
         ----------
@@ -1397,7 +1439,8 @@ class SimTools:
         params: object
             parameter object that contains all simulation parmaters.
         output_path: Path
-            The path to the directory where simulation result is stored. default is `cwd`
+            The path to the directory where the simulation result
+            is stored. Default is ``cwd``.
 
         Returns
         -------
@@ -1446,13 +1489,13 @@ class SimTools:
         ----------
         CSX : ContinuousStructure
             The CSXCAD geometry object containing the simulation structure.
-        freqs : ndarray
+        freqs : NDArray
             Array of frequencies used in the simulation.
-        s11 : ndarray
+        s11 : NDArray
             Complex S11 parameter array across the frequency range.
-        vswr : ndarray
+        vswr : NDArray
             VSWR values across the frequency range.
-        z11 : ndarray
+        z11 : NDArray
             Complex input impedance values across the frequency range.
         input_power : float
             Input power at the port.
@@ -1462,7 +1505,7 @@ class SimTools:
             3D far-field result object from compute_nf2ff_3d.
         params : object
             Parameter object containing simulation settings.
-        s21 : ndarray, optional
+        s21 : NDArray, optional
             Complex S21 parameter array across the frequency range.
             Default is None for single-port structures.
         output_path : Path, optional
@@ -1518,9 +1561,9 @@ def optimize_s11(
 
     Parameters
     ----------
-    freqs : ndarray
+    freqs : NDArray
         Array of frequencies in Hz.
-    s11 : ndarray
+    s11 : NDArray
         Complex S11 parameter array across the frequency range.
     target_freq : float, optional
         Specific frequency at which to evaluate S11.
@@ -1587,9 +1630,9 @@ def optimize_s21(
     negated so that maximizing S21 corresponds to minimizing the cost.
     Parameters
     ----------
-    freqs : ndarray
+    freqs : NDArray
         Array of frequencies in Hz.
-    s21 : ndarray
+    s21 : NDArray
         Complex S21 parameter array across the frequency range.
     target_freq : float, optional
         Specific frequency at which to evaluate S21.
@@ -1646,7 +1689,9 @@ def optimize_s_params(
     ----------
     simulate_fn : callable
         Simulation function that is invoked during optimization.
-        the simulation function should return the S11 value at the resonant frequency. This return value will be used as a goal for the optimization.
+        The simulation function should return the S11 value at the
+        resonant frequency; this return value is used as the
+        optimisation goal.
 
     x0 : dict[str, float]
         Dictionary of initial parameter values used as the starting point for
@@ -1656,7 +1701,8 @@ def optimize_s_params(
         Path to the directory where simulation results is stored.
 
     bounds : optional
-        Bounds on the optimization parameters. bounds are optional and not utilized by Nelder-Mead algorithm.
+        Bounds on the optimisation parameters. Optional — not used
+        by Nelder-Mead algorithm.
 
     Returns
     -------
@@ -1692,7 +1738,7 @@ def optimize_s_params(
     callback = make_callback()
 
     def optimize_fun(x: NDArray) -> float:
-        """Wrapper function that calls the simulation with the current parameter values."""
+        """Call the simulation with the current parameter values."""
         return simulate_fn(output_path=output_path, optimize=True, optimize_val=x)
 
     try:
@@ -1717,11 +1763,11 @@ def param_sweep(
     output_path: Path,
     label: str = "",
     sweep: bool = True,
-) -> None:
+) -> NetworkParams | None:
     """
     Perform a parameter sweep using a simulation function.
-    The function supports multiple parameter sweeps. The parameter sweep performed is cartesian sweep
-    which can make the simulation take longer if supplied with multiple parameters.
+    The function supports multiple parameters; the sweep is a
+    Cartesian product which can be expensive with many parameters.
 
     Parameters
     ----------
@@ -1729,9 +1775,10 @@ def param_sweep(
         Simulation function to be invoked during the parameter sweep.
 
     sweep_vals : dict[str, tuple]
-        Dictionary defining the parameter sweep ranges. The sweep_vals should be a dictionary
-        where the keys represent the parameter name and values are a tuple of (min_value, max_value, num_points)
-        then numpy's linspace is used to generate the sweep values.
+        Dictionary defining the parameter sweep ranges. Keys are
+        parameter names; values are tuples of
+        ``(min_value, max_value, num_points)`` passed to
+        ``numpy.linspace``.
 
     output_path : Path
         Path to the directory where simulation result is saved.

@@ -7,7 +7,12 @@ edges and inside port regions, then calls SmoothMeshLines for a
 stable grid transition.
 """
 
+from collections.abc import Iterable
+
 import numpy as np
+from CSXCAD import ContinuousStructure
+
+from .sim_params import SimParams
 
 
 class Mesh:
@@ -28,7 +33,9 @@ class Mesh:
         Maximum ratio between adjacent cells (default 1.5).
     """
 
-    def __init__(self, csx, params, smooth_ratio=1.5):
+    def __init__(
+        self, csx: ContinuousStructure, params: SimParams, smooth_ratio: float = 1.5
+    ) -> None:
         """Initialise the Mesh generator and automatically generate the grid."""
         self._csx = csx
         self._mesh_res = float(params.mesh_resolution)
@@ -41,7 +48,9 @@ class Mesh:
         self._generate()
 
     @staticmethod
-    def _dedup(coords, min_spacing=None):
+    def _dedup(
+        coords: Iterable[float], min_spacing: float | None = None
+    ) -> list[float]:
         """Remove duplicate coordinates within a minimum spacing threshold."""
         s = sorted(coords)
         if not s:
@@ -52,7 +61,7 @@ class Mesh:
                 out.append(v)
         return out
 
-    def _generate(self):
+    def _generate(self) -> None:
         """Generate the FDTD mesh by scanning all primitives and adding grid lines."""
         grid = self._csx.GetGrid()
         grid.SetDeltaUnit(self._unit)

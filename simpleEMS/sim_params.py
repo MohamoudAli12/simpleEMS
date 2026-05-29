@@ -26,6 +26,7 @@ resolution, and simulation box computation.
 from dataclasses import dataclass, field
 
 import numpy as np
+from numpy.typing import NDArray
 from openEMS.physical_constants import C0, EPS0
 
 
@@ -91,15 +92,16 @@ class SimParams:
         Conductivity-equivalent dielectric loss term computed from
         loss tangent, frequency, and permittivity.
     lambda0 : float
-    Effective wavelength in the substrate, computed as C0 / (f_ref * sqrt(eps_r) * unit).
-    simulation_box : ndarray of shape (3,)
+    Effective wavelength in the substrate, computed as
+    ``C0 / (f_ref * sqrt(eps_r) * unit)``.
+    simulation_box : NDArray of shape (3,)
         Bounding box dimensions [x, y, z] for the FDTD domain in mm,
         including lambda0 air padding around the structure.
     mesh_resolution : float
         Computed global mesh resolution.
     metal_mesh_resolution : float
         Computed mesh resolution for metal primitives.
-    thirds_rule : ndarray
+    thirds_rule : NDArray
         Small mesh offsets (2/3 and -1/3 of mesh_resolution) applied
         near metal edges for accurate field resolution.
     """
@@ -125,10 +127,10 @@ class SimParams:
     mesh_resolution: float = field(init=False)
 
     lambda0: float = field(init=False)
-    thirds_rule: np.ndarray = field(init=False)
+    thirds_rule: NDArray = field(init=False)
 
     @property
-    def freq_range(self):
+    def freq_range(self) -> tuple[float, float]:
         """
         Return the simulation frequency range.
         This property must be implemented by subclasses to define the
@@ -145,7 +147,7 @@ class SimParams:
         raise NotImplementedError("Subclasses must define freq_range")
 
     @property
-    def main_freq(self):
+    def main_freq(self) -> float:
         """
         Return the primary frequency of interest.
         This property must be implemented by subclasses to define the
@@ -162,7 +164,7 @@ class SimParams:
         raise NotImplementedError("Subclasses must define main_freq")
 
     @property
-    def simulation_box(self):
+    def simulation_box(self) -> NDArray:
         """
         Return the 3D simulation bounding box.
 
@@ -170,7 +172,7 @@ class SimParams:
 
         Returns
         -------
-        np.ndarray
+        NDArray
             Array of shape (3,) with [x, y, z] dimensions in mm.
 
         Raises
@@ -181,7 +183,7 @@ class SimParams:
         raise NotImplementedError("subclasses must define simulation_box")
 
     @property
-    def substrate_width_mm(self):
+    def substrate_width_mm(self) -> float:
         """
         Return the substrate width in mm.
 
@@ -200,7 +202,7 @@ class SimParams:
         raise NotImplementedError("subclasses must define substrate width")
 
     @property
-    def substrate_length_mm(self):
+    def substrate_length_mm(self) -> float:
         """
         Return the substrate length in mm.
 
@@ -218,11 +220,11 @@ class SimParams:
         """
         raise NotImplementedError("subclasses must define substrate length")
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Perform common parameter computations after dataclass initialisation."""
         self._compute_common()
 
-    def _compute_common(self):
+    def _compute_common(self) -> None:
         """
         Compute common simulation parameters shared across all structure types.
         This method calculates the substrate kappa (dielectric loss),
@@ -252,7 +254,9 @@ class SimParams:
             np.array([2 * self.mesh_resolution / 3, -self.mesh_resolution / 3]) / 4
         )
 
-    def _create_simulation_box(self, x_dir, y_dir, z_dir):
+    def _create_simulation_box(
+        self, x_dir: float, y_dir: float, z_dir: float
+    ) -> NDArray:
         """
         Compute the 3D simulation bounding box from substrate dimensions
         and lambda0 padding.
@@ -268,7 +272,7 @@ class SimParams:
 
         Returns
         -------
-        np.ndarray
+        NDArray
             A numpy array of shape (3,) containing the [x, y, z]
             simulation box dimensions in mm, rounded to fp_precision.
         """

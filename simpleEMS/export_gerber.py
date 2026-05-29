@@ -24,10 +24,16 @@ primitives in the XY-plane.
 
 # TODO: only box and polygon primitives are working. add support of all primitives.
 
+from pathlib import Path
+from typing import Any, TextIO
+
+from CSXCAD import ContinuousStructure
+from CSXCAD.CSPrimitives import CSPrimBox, CSPrimLinPoly, CSPrimPolygon
+
 from .console import console
 
 
-def gerber_coord(vertices_xy_pos):
+def gerber_coord(vertices_xy_pos: tuple[float, float]) -> str:
     """
     Convert a 2D coordinate into Gerber RS-274X format.
 
@@ -66,7 +72,7 @@ def gerber_coord(vertices_xy_pos):
 # ---------------------------------------------------------------------
 # Primitive exporters
 # ---------------------------------------------------------------------
-def primitive_box(file, box):
+def primitive_box(file: TextIO, box: CSPrimBox) -> None:
     """
     Export a CSXCAD box primitive to Gerber RS-274X format.
     Writes a rectangular aperture as a closed polygon contour
@@ -98,7 +104,7 @@ def primitive_box(file, box):
     file.write("G37*\n")
 
 
-def primitive_polygon(file, poly):
+def primitive_polygon(file: TextIO, poly: CSPrimPolygon | CSPrimLinPoly) -> None:
     """
     Export a CSXCAD polygon primitive to Gerber RS-274X format.
     Only exports polygons with a +Z normal direction (XY-plane).
@@ -141,7 +147,9 @@ def primitive_polygon(file, poly):
 # ---------------------------------------------------------------------
 # Process CSX properties
 # ---------------------------------------------------------------------
-def process_primitives(file, prop_list, options):
+def process_primitives(
+    file: TextIO, prop_list: list[Any], options: dict[str, list[str]]
+) -> None:
     """
     Process and export CSXCAD property primitives to Gerber format.
     This function iterates through a list of CSXCAD properties, filters
@@ -194,7 +202,11 @@ def process_primitives(file, prop_list, options):
 # ---------------------------------------------------------------------
 # Main export function
 # ---------------------------------------------------------------------
-def export_gerber(CSX, output_path, options=None):
+def export_gerber(
+    CSX: ContinuousStructure,
+    output_path: Path,
+    options: dict[str, list[str]],
+) -> None:
     """
     Export openEMS CSX geometry to Gerber RS-274X format (XY-plane only).
     Extracts all metal properties from the CSXCAD structure and exports
