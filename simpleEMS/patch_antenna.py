@@ -27,6 +27,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from CSXCAD import ContinuousStructure
+from numpy.typing import NDArray
+from openEMS.nf2ff import nf2ff
+from openEMS.openEMS import openEMS
+from openEMS.ports import LumpedPort
+
 from .calc import microstrip_width_from_impedance, patch_dims, phase_shift_length
 from .console import console
 from .sim_params import SimParams
@@ -56,7 +62,8 @@ class InsetFedPatchParams(SimParams):
     resonant_freq : float
         Target resonant frequency of the antenna in Hz.
     span_freq : float
-        Frequency span used to compute the simulation range around the resonant frequency in Hz.
+        Frequency span used to compute the simulation range around
+        the resonant frequency in Hz.
     ang_length_deg : int, optional
         Electrical length (in degrees) used to compute the feed phase
         shift length. Default is 90.
@@ -79,7 +86,7 @@ class InsetFedPatchParams(SimParams):
         Substrate width including margin (lambda0 padding).
     substrate_length_mm : float
         Substrate length including margin (lambda0 padding).
-    simulation_box : ndarray
+    simulation_box : NDArray
         A 1D array of shape (3,) representing the 3D simulation domain
         size: ``[x_size_mm, y_size_mm, z_size_mm]``.
     """
@@ -95,7 +102,7 @@ class InsetFedPatchParams(SimParams):
     feed_length_mm: float = field(init=False)
 
     @property
-    def freq_range(self):
+    def freq_range(self) -> tuple[float, float]:
         """
         Compute the simulation frequency range.
         Returns
@@ -110,9 +117,10 @@ class InsetFedPatchParams(SimParams):
         )
 
     @property
-    def main_freq(self):
+    def main_freq(self) -> float:
         """
         Return the primary frequency of interest for post-processing.
+
         Returns
         -------
         float
@@ -121,7 +129,7 @@ class InsetFedPatchParams(SimParams):
         return self.resonant_freq
 
     @property
-    def substrate_length_mm(self):
+    def substrate_length_mm(self) -> float:
         """
         Return the substrate length including lambda0 padding.
 
@@ -133,7 +141,7 @@ class InsetFedPatchParams(SimParams):
         return self.patch_length_mm + 2 * self.lambda0
 
     @property
-    def substrate_width_mm(self):
+    def substrate_width_mm(self) -> float:
         """
         Return the substrate width including lambda0 padding.
 
@@ -145,13 +153,13 @@ class InsetFedPatchParams(SimParams):
         return self.patch_width_mm + 2 * self.lambda0
 
     @property
-    def simulation_box(self):
+    def simulation_box(self) -> NDArray:
         """
         Return the 3D simulation bounding box dimensions.
 
         Returns
         -------
-        np.ndarray
+        NDArray
             Array of shape (3,) with [x, y, z] dimensions in mm.
         """
         return self._create_simulation_box(
@@ -160,12 +168,12 @@ class InsetFedPatchParams(SimParams):
             self.lambda0 * 2,
         )
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Perform geometric calculations after dataclass initialisation."""
         super().__post_init__()
         self._compute_geometry()
 
-    def _compute_geometry(self):
+    def _compute_geometry(self) -> None:
         """
         Compute all derived geometric parameters for the inset-fed patch antenna.
         This method calculates the feed line dimensions, patch width and length,
@@ -204,7 +212,7 @@ class InsetFedPatchParams(SimParams):
 
         self._round_outputs()
 
-    def _round_outputs(self):
+    def _round_outputs(self) -> None:
         """
         Round all geometric parameters to the configured floating-point precision.
         This method iterates over key geometric and mesh attributes and rounds
@@ -244,7 +252,7 @@ class PatchAntenna(SimTools):
         (e.g., substrate thickness, permittivity, and dimensions).
     CSX : ContinuousStructure
         The CSXCAD geometry container used to define physical objects.
-    FDTD : FDTD
+    FDTD : openEMS
         The FDTD simulation engine object.
 
     Attributes
@@ -253,7 +261,7 @@ class PatchAntenna(SimTools):
         Stored reference to the simulation parameters.
     CSX : ContinuousStructure
         Stored reference to the geometry engine.
-    FDTD : FDTD
+    FDTD : openEMS
         Stored reference to the simulation engine.
 
     Notes
@@ -262,13 +270,18 @@ class PatchAntenna(SimTools):
     as defined in the `params` object.
     """
 
-    def __init__(self, params, CSX, FDTD):
+    def __init__(
+        self,
+        params,  # noqa: ANN001
+        CSX: ContinuousStructure,
+        FDTD: openEMS,
+    ) -> None:
         """Initialise the PatchAntenna with parameters and simulation objects."""
         self.params = params
         self.CSX = CSX
         self.FDTD = FDTD
 
-    def create_substrate(self):
+    def create_substrate(self) -> None:
         """
         Define and add the dielectric substrate to the simulation.
 
@@ -298,7 +311,7 @@ class PatchAntenna(SimTools):
         ]
         substrate.AddBox(priority=0, start=substrate_start, stop=substrate_stop)
 
-    def create_ground(self):
+    def create_ground(self) -> None:
         """
         Define and add the copper ground plane to the geometry.
 
@@ -338,7 +351,7 @@ class InsetFedPatchAntenna(PatchAntenna):
     by implementing the inset patch antenna element.
     """
 
-    def create_patch_with_inset(self):
+    def create_patch_with_inset(self) -> None:
         """
         Create the patch element with a notched inset for feed line.
 
@@ -361,7 +374,9 @@ class InsetFedPatchAntenna(PatchAntenna):
         patch_inset.SetColor("#B87333", 255)
         if self.params.inset_width_mm / 2 < 0.089:
             console.print(
-                f"WARNING: Inset Width {self.params.inset_width_mm / 2} is too small, check minimum trace spacing with your PCB manufacturer",
+                f"WARNING: Inset Width {self.params.inset_width_mm / 2}"
+                " is too small, check minimum trace spacing"
+                " with your PCB manufacturer",
                 style="warning",
             )
         pp = [
@@ -399,7 +414,7 @@ class InsetFedPatchAntenna(PatchAntenna):
             metal_edge_res=self.params.metal_mesh_resolution,
         )
 
-    def create_feed(self):
+    def create_feed(self) -> None:
         """
         Create the microstrip feed line.
 
@@ -419,7 +434,9 @@ class InsetFedPatchAntenna(PatchAntenna):
         feed.SetColor("#B87333", 255)
         if self.params.feed_width_mm < 0.1:
             console.print(
-                f"WARNING: Trace Width {self.params.feed_width_mm} is too small, check minimum trace width with your PCB manufacturer",
+                f"WARNING: Trace Width {self.params.feed_width_mm}"
+                " is too small, check minimum trace width"
+                " with your PCB manufacturer",
                 style="warning",
             )
         feed_start = [
@@ -437,7 +454,7 @@ class InsetFedPatchAntenna(PatchAntenna):
             dirs="xy", properties=feed, metal_edge_res=self.params.metal_mesh_resolution
         )
 
-    def create_port(self):
+    def create_port(self) -> LumpedPort:
         """
         Define the excitation lumped port at the end of the feed line.
 
@@ -469,7 +486,7 @@ class InsetFedPatchAntenna(PatchAntenna):
         )
         return port
 
-    def create_mesh(self):
+    def create_mesh(self) -> None:
         """
         Generate an FDTD mesh for the simulation domain.
 
@@ -530,7 +547,7 @@ class InsetFedPatchAntenna(PatchAntenna):
 
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
 
-    def build_inset_fed_patch_antenna(self):
+    def build_inset_fed_patch_antenna(self) -> tuple[LumpedPort, nf2ff]:
         """
         Construct the complete inset-fed patch antenna geometry.
         This method orchestrates the creation of all antenna components
@@ -566,7 +583,8 @@ class ProbeFedPatchParams(SimParams):
     resonant_freq : float
         Target resonant frequency of the antenna in Hz.
     span_freq : float
-        Frequency span used to compute the simulation range around the resonant frequency in Hz.
+        Frequency span used to compute the simulation range around
+        the resonant frequency in Hz.
 
     Attributes
     ----------
@@ -580,7 +598,7 @@ class ProbeFedPatchParams(SimParams):
         Substrate width including margin (lambda0 padding).
     substrate_length_mm : float
         Substrate length including margin (lambda0 padding).
-    simulation_box : np.ndarray
+    simulation_box : NDArray
         3D simulation domain size as:
             [x_size_mm, y_size_mm, z_size_mm]
             Includes lambda0 air padding around the antenna structure.
@@ -594,7 +612,7 @@ class ProbeFedPatchParams(SimParams):
     probe_pos_mm: float = field(init=False)
 
     @property
-    def freq_range(self):
+    def freq_range(self) -> tuple[float, float]:
         """
         Compute the simulation frequency range.
 
@@ -610,7 +628,7 @@ class ProbeFedPatchParams(SimParams):
         )
 
     @property
-    def main_freq(self):
+    def main_freq(self) -> float:
         """
         Return the primary frequency of interest for post-processing.
 
@@ -622,7 +640,7 @@ class ProbeFedPatchParams(SimParams):
         return self.resonant_freq
 
     @property
-    def substrate_length_mm(self):
+    def substrate_length_mm(self) -> float:
         """
         Return the substrate length including lambda0 padding.
 
@@ -634,7 +652,7 @@ class ProbeFedPatchParams(SimParams):
         return self.patch_length_mm + 2 * self.lambda0
 
     @property
-    def substrate_width_mm(self):
+    def substrate_width_mm(self) -> float:
         """
         Return the substrate width including lambda0 padding.
 
@@ -646,13 +664,13 @@ class ProbeFedPatchParams(SimParams):
         return self.patch_width_mm + 2 * self.lambda0
 
     @property
-    def simulation_box(self):
+    def simulation_box(self) -> NDArray:
         """
         Return the 3D simulation bounding box dimensions.
 
         Returns
         -------
-        np.ndarray
+        NDArray
             Array of shape (3,) with [x, y, z] dimensions in mm.
         """
         return self._create_simulation_box(
@@ -661,12 +679,12 @@ class ProbeFedPatchParams(SimParams):
             self.lambda0 * 2,
         )
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Perform geometric calculations after dataclass initialisation."""
         super().__post_init__()
         self._compute_geometry()
 
-    def _compute_geometry(self):
+    def _compute_geometry(self) -> None:
         """
         Compute all derived geometric parameters for the probe-fed patch antenna.
         This method calculates the patch dimensions, probe position, and
@@ -688,7 +706,7 @@ class ProbeFedPatchParams(SimParams):
         self.probe_pos_mm = dims.probe_pos_mm
         self._round_outputs()
 
-    def _round_outputs(self):
+    def _round_outputs(self) -> None:
         """
         Round all geometric parameters to the configured floating-point precision.
         This method iterates over key geometric and mesh attributes and rounds
@@ -718,7 +736,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
     by implementing the patch antenna element.
     """
 
-    def create_probe_fed_patch(self):
+    def create_probe_fed_patch(self) -> None:
         """
         Create the probe fed patch element.
 
@@ -751,7 +769,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
             metal_edge_res=self.params.metal_mesh_resolution,
         )
 
-    def create_port(self):
+    def create_port(self) -> LumpedPort:
         """
         Define the excitation lumped port at the probe position.
 
@@ -778,7 +796,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
         )
         return port
 
-    def create_mesh(self):
+    def create_mesh(self) -> None:
         """
         Generate an FDTD mesh for the simulation domain.
 
@@ -830,7 +848,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
 
         mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
 
-    def build_probe_fed_patch_antenna(self):
+    def build_probe_fed_patch_antenna(self) -> tuple[LumpedPort, nf2ff]:
         """
         Construct the complete probe-fed patch antenna geometry.
         This method orchestrates the creation of all antenna components

@@ -15,9 +15,10 @@ params = MicrostripLineParams(
     substrate_eps_r=4.4,
     substrate_tand=0.001,
     charac_imp=50,
+    metal_mesh_resolution_factor=30,
 )
 
-CSX, FDTD, freqs = setup_simulation(params, boundary_cond=["MUR"] * 6)
+CSX, FDTD, freqs = setup_simulation(params)
 
 microstrip = MicrostripLine(params, CSX, FDTD)
 microstrip.print_and_save_params(params)

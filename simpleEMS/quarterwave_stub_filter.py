@@ -435,7 +435,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 stop=line_stop,
             )
 
-    def create_ports(self) -> list[LumpedPort] | list[None]:
+    def create_ports(self) -> list[LumpedPort]:
         """
         Define the excitation lumped ports at both ends of the filter.
 
@@ -447,7 +447,6 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         list of LumpedPort
             A list of two LumpedPort objects [port1, port2].
         """
-        port = [None, None]
         total_length = _get_total_length(
             self.params.filter_order,
             self.params.line_length_mm,
@@ -463,7 +462,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
             self.params.series_line_width_mm,
             self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
         ]
-        port[0] = self.FDTD.AddLumpedPort(
+        port_1 = self.FDTD.AddLumpedPort(
             1,
             self.params.charac_imp,
             port_1_start,
@@ -483,7 +482,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
             self.params.series_line_width_mm,
             self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
         ]
-        port[1] = self.FDTD.AddLumpedPort(
+        port_2 = self.FDTD.AddLumpedPort(
             2,
             self.params.charac_imp,
             port_2_start,
@@ -494,7 +493,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
             edges2grid="y",
         )
 
-        return port
+        return [port_1, port_2]
 
     def create_mesh(self) -> None:
         """

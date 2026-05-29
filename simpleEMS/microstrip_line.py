@@ -319,7 +319,6 @@ class MicrostripLine(SimTools):
             A list of two LumpedPort objects [port1, port2] used to
             retrieve S-parameter and impedance results after the simulation.
         """
-        port = [None, None]
         port_1_start = [
             self.params.microstrip_width_mm / 2,
             -self.params.microstrip_length_mm / 2,
@@ -330,7 +329,7 @@ class MicrostripLine(SimTools):
             -self.params.microstrip_length_mm / 2,
             self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
         ]
-        port[0] = self.FDTD.AddLumpedPort(
+        port_1 = self.FDTD.AddLumpedPort(
             1,
             self.params.charac_imp,
             port_1_start,
@@ -350,7 +349,7 @@ class MicrostripLine(SimTools):
             self.params.microstrip_length_mm / 2,
             self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
         ]
-        port[1] = self.FDTD.AddLumpedPort(
+        port_2 = self.FDTD.AddLumpedPort(
             2,
             self.params.charac_imp,
             port_2_start,
@@ -361,7 +360,7 @@ class MicrostripLine(SimTools):
             edges2grid="y",
         )
 
-        return port
+        return [port_1, port_2]
 
     def create_mesh(self) -> None:
         """
