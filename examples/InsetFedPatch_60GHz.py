@@ -10,6 +10,7 @@ from simpleEMS import (
     optimize_s_params,
     param_sweep,
     setup_simulation,
+    Mesh,
 )
 
 
@@ -22,15 +23,13 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_tand=0.001,
         charac_imp=50.0,
         end_criteria=1e-4,
-        mesh_resolution_factor=20,
-        metal_mesh_resolution_factor=70,
     )
 
     # parameters values after optimization
-    params.inset_length_mm = 0.489096
-    params.inset_width_mm = 0.156097
-    params.patch_length_mm = 1.378419
-    params.patch_width_mm = 1.74283
+    params.inset_length_mm = 0.53445
+    params.inset_width_mm = 0.15269
+    params.patch_length_mm = 1.38461
+    params.patch_width_mm = 1.74446
 
     if sweep:
         params.inset_length_mm = sweep_val[0]
@@ -51,10 +50,11 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_patch_with_inset()
     patch.create_feed()
     port = patch.create_port()
-    patch.create_mesh()
+    # patch.create_mesh()
+    Mesh(CSX, params)
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    # patch.write_and_show_structure(FDTD, output_path)
+    patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:
@@ -83,7 +83,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
 
     if not (sweep or optimize):
-        # patch.run_simulation(FDTD, output_path)
+        patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
             freqs,

@@ -183,13 +183,8 @@ class InsetFedPatchParams(SimParams):
         -------
         None
         """
-        self.feed_length_mm = phase_shift_length(
-            self.ang_length_deg,
-            self.substrate_eps_r,
-            self.resonant_freq,
-        )
 
-        self.feed_width_mm = microstrip_width_from_impedance(
+        self.feed_width_mm, er_eff = microstrip_width_from_impedance(
             self.charac_imp,
             self.substrate_thickness_mm,
             self.copper_thickness_mm,
@@ -197,6 +192,11 @@ class InsetFedPatchParams(SimParams):
             self.resonant_freq,
         )
 
+        self.feed_length_mm = phase_shift_length(
+            self.ang_length_deg,
+            er_eff,
+            self.resonant_freq,
+        )
         dims = patch_dims(
             self.resonant_freq,
             self.substrate_eps_r,

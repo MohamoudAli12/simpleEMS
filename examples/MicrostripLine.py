@@ -6,6 +6,7 @@ from simpleEMS import (
     MicrostripLine,
     MicrostripLineParams,
     setup_simulation,
+    Mesh,
 )
 
 # IMPORTS
@@ -34,8 +35,8 @@ microstrip.create_substrate()
 microstrip.create_ground()
 microstrip.create_microstrip_line()
 port = microstrip.create_ports()
-microstrip.create_mesh()
-nf2ff = microstrip.create_nf2ff(FDTD)
+# microstrip.create_mesh()
+Mesh(CSX, params)
 microstrip.add_field_dump(CSX, params)
 microstrip.write_and_show_structure(FDTD)
 # BUILD
@@ -51,27 +52,7 @@ network_params = microstrip.compute_network_params(
     params.charac_imp,
 )
 
-nf2ff_3d_result = microstrip.compute_nf2ff_3d(nf2ff, params.target_freq)
-microstrip.run_all_post_processing(
-    CSX,
-    freqs,
-    network_params.s11,
-    network_params.vswr,
-    network_params.z11,
-    network_params.input_power,
-    nf2ff,
-    nf2ff_3d_result,
-    params,
-    network_params.s21,
-)
+microstrip.plot_s_param(freqs, network_params.s11, network_params.s21)
+microstrip.plot_impedance(freqs, network_params.z11)
+microstrip.show_plots()
 # PPROCESS
-
-# EXPORT
-microstrip.export_gerber(CSX)
-microstrip.export_stl()
-microstrip.export_touchstone(
-    network_params.freqs,
-    network_params.s11,
-    charac_imp=params.charac_imp,
-)
-# EXPORT

@@ -33,36 +33,40 @@ from .sim_tools import m_to_mm, mm_to_m
 
 
 def phase_shift_length(
-    phase_shift: float, subst_eps_r: float, frequency: float
+    phase_shift: float,
+    eps_eff: float,
+    frequency: float,
+    radians: bool = False,
 ) -> float:
     """
-    Compute the length (in mm) for a signal to undergo a given phase
-    shift.  When computing this value for a transmission line not
-    surrounded by a homogenous medium (e.g. a microstrip trace), make
-    sure to use the effective dielectric.
+    Compute transmission line length (mm) required to obtain
+    a specified phase shift at a given frequency.
 
     Parameters
     ----------
-
-    phase_shift: float
-        Phase shift in degrees.
-    subst_eps_r: float
-        Dielectric constant or effective dielectric constant.
-    frequency: float
-        frequency of signal in Hz.
+    phase_shift : float
+        Phase shift in degrees (default) or radians.
+    eps_eff : float
+        Effective dielectric constant.
+    frequency : float
+        Frequency in Hz.
+    radians : bool
+        If True, phase_shift is already in radians.
 
     Returns
     -------
-    length: float
-        phase shift length of microstrip in mm
-
-    Notes
-    -----
-    This function was adapted from pyems calc module
+    float
+        Required length in mm.
     """
-    rad = phase_shift * np.pi / 180
-    vac_lambda = 2 * np.pi * frequency / C0 / 1e3
-    return rad / (np.sqrt(subst_eps_r) * vac_lambda)
+    theta = phase_shift if radians else np.deg2rad(phase_shift)
+
+    # Guided phase constant (rad/m)
+    beta = 2 * np.pi * frequency * np.sqrt(eps_eff) / C0
+
+    # Length in meters
+    length_m = theta / beta
+
+    return length_m * 1e3
 
 
 def microstrip_width_from_impedance(
@@ -72,7 +76,7 @@ def microstrip_width_from_impedance(
     subst_eps_r: float,
     freq_hz: float,
     tolerance: float = 0.01,
-) -> float:
+) -> tuple[float, float]:
     """
     Calculates microstrip width for a target impedance including dispersion
     and thickness using Hammerstad-Jensen equations.
@@ -112,7 +116,7 @@ def microstrip_width_from_impedance(
         t: float,
         er: float,
         f_hz: float,
-    ) -> float:
+    ) -> tuple[float, float]:
         """Calculate microstrip characteristic impedance at a given
         frequency using Hammerstad-Jensen equations."""
         # Constants
@@ -166,14 +170,14 @@ def microstrip_width_from_impedance(
         # Frequency-dependent impedance
         Z_f = Z0 * ((er_eff_f - 1) / (er_eff_0 - 1)) * np.sqrt(er_eff_0 / er_eff_f)
 
-        return Z_f
+        return Z_f, er_eff_f
 
     # --- Binary Search for Width ---
     low, high = 0.001, 100
     mid_w = 0.0
     for _ in range(100):
         mid_w = (low + high) / 2
-        Z_curr = get_Z_at_freq(
+        Z_curr, _ = get_Z_at_freq(
             mid_w, subs_height, copper_thickness, subst_eps_r, freq_hz
         )
 
@@ -183,8 +187,11 @@ def microstrip_width_from_impedance(
             low = mid_w
         else:
             high = mid_w
+    _, er_eff = get_Z_at_freq(
+        mid_w, subs_height, copper_thickness, subst_eps_r, freq_hz
+    )
 
-    return mid_w
+    return mid_w, er_eff
 
 
 def conductance_G1(patch_width: float, frequency: float) -> float:
@@ -357,7 +364,7 @@ def patch_dims(
     inset_length_mm = m_to_mm(inset_length)
     probe_pos_mm = m_to_mm(probe_pos)
 
-    inset_width_mm = microstrip_width_from_impedance(
+    inset_width_mm, _ = microstrip_width_from_impedance(
         charac_imp,
         m_to_mm(subst_height),
         copper_thickness,

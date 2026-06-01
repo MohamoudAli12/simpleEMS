@@ -159,7 +159,7 @@ class MicrostripLineParams(SimParams):
         -------
         None
         """
-        self.microstrip_width_mm = microstrip_width_from_impedance(
+        self.microstrip_width_mm, er_eff = microstrip_width_from_impedance(
             self.charac_imp,
             self.substrate_thickness_mm,
             self.copper_thickness_mm,
@@ -169,7 +169,7 @@ class MicrostripLineParams(SimParams):
 
         self.microstrip_length_mm = phase_shift_length(
             self.ang_length_deg,
-            self.substrate_eps_r,
+            er_eff,
             self.main_freq,
         )
 
@@ -362,7 +362,7 @@ class MicrostripLine(SimTools):
 
         return [port_1, port_2]
 
-    def create_mesh(self) -> None:
+    def create_mesh(self, smooth_ratio: float = 1.5) -> None:
         """
         Generate an FDTD mesh for the microstrip line simulation domain.
         This method defines mesh lines for the x, y, and z directions
@@ -418,4 +418,4 @@ class MicrostripLine(SimTools):
             ),
         )
 
-        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+        mesh.SmoothMeshLines("all", self.params.mesh_resolution, smooth_ratio)

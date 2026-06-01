@@ -103,6 +103,7 @@ class QuarterWaveFilterParams(SimParams):
     frac_bandwidth: float = field(init=False)
     series_line_width_mm: float = field(init=False)
     shunt_line_width_mm: list[float] = field(init=False)
+    shunt_line_length_mm: list[float] = field(init=False)
     line_length_mm: float = field(init=False)
 
     @property
@@ -181,7 +182,7 @@ class QuarterWaveFilterParams(SimParams):
 
         self._compute_geometry()
 
-    def _get_shunt_width(self, idx: int) -> float:
+    def _get_shunt_width_and_length(self, idx: int) -> tuple[float, float]:
         """Calculate the width of a single shunt stub for the given index."""
         g = get_filter_coefficient(
             idx, self.filter_response, self.filter_order, self.ripple_db
@@ -191,14 +192,19 @@ class QuarterWaveFilterParams(SimParams):
             shunt_imped = (math.pi * self.charac_imp * self.frac_bandwidth) / (4 * g)
         if self.filter_type == "bandstop":
             shunt_imped = (4 * self.charac_imp) / (math.pi * self.frac_bandwidth * g)
-        width_shunt_mm = microstrip_width_from_impedance(
+        width_shunt_mm, er_eff_shunt = microstrip_width_from_impedance(
             shunt_imped,
             self.substrate_thickness_mm,
             self.copper_thickness_mm,
             self.substrate_eps_r,
             self.centre_freq,
         )
-        return width_shunt_mm
+        length_shunt_mm = phase_shift_length(
+            self.elec_length_deg,
+            er_eff_shunt,
+            self.centre_freq,
+        )
+        return width_shunt_mm, length_shunt_mm
 
     def _compute_geometry(self) -> None:
         """
@@ -211,7 +217,7 @@ class QuarterWaveFilterParams(SimParams):
         -------
         None
         """
-        self.series_line_width_mm = microstrip_width_from_impedance(
+        self.series_line_width_mm, er_eff = microstrip_width_from_impedance(
             self.charac_imp,
             self.substrate_thickness_mm,
             self.copper_thickness_mm,
@@ -221,13 +227,15 @@ class QuarterWaveFilterParams(SimParams):
 
         self.line_length_mm = phase_shift_length(
             self.elec_length_deg,
-            self.substrate_eps_r,
+            er_eff,
             self.main_freq,
         )
         self.shunt_line_width_mm = []
+        self.shunt_line_length_mm = []
         for i in range(self.filter_order):
-            width_shunt = self._get_shunt_width(i)
+            width_shunt, length_shunt = self._get_shunt_width_and_length(i)
             self.shunt_line_width_mm.append(width_shunt)
+            self.shunt_line_length_mm.append(length_shunt)
 
         self._round_outputs()
 
@@ -244,6 +252,7 @@ class QuarterWaveFilterParams(SimParams):
             "line_length_mm",
             "series_line_width_mm",
             "shunt_line_width_mm",
+            "shunt_line_length_mm",
             "frac_bandwidth",
             "lambda0",
             "mesh_resolution",
@@ -404,7 +413,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         ]
         f_line_stop = [
             self.params.line_length_mm + self.params.shunt_line_width_mm[0],
-            self.params.line_length_mm + self.params.series_line_width_mm,
+            self.params.shunt_line_length_mm[0] + self.params.series_line_width_mm,
             self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
         ]
         first_shunt_line.AddBox(
@@ -426,7 +435,8 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 (i + 2) * self.params.line_length_mm
                 + sum(self.params.shunt_line_width_mm[: i + 1])
                 + self.params.shunt_line_width_mm[i + 1],
-                self.params.series_line_width_mm + self.params.line_length_mm,
+                self.params.series_line_width_mm
+                + self.params.shunt_line_length_mm[i + 1],
                 self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
             ]
             shunt_line.AddBox(
@@ -470,7 +480,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
             "z",
             excite=1,
             priority=6,
-            edges2grid="y",
+            edges2grid="x",
         )
         port_2_start = [
             total_length,
@@ -490,7 +500,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
             "z",
             excite=0,
             priority=6,
-            edges2grid="y",
+            edges2grid="x",
         )
 
         return [port_1, port_2]
@@ -519,12 +529,16 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         mesh.AddLine(
             "x",
             [
-                -self.params.simulation_box[0],
+                -self.params.simulation_box[0] - self.params.lambda0 / 2,
                 self.params.simulation_box[0] + self.params.lambda0,
             ],
         )
         mesh.AddLine(
-            "y", [-self.params.simulation_box[1], self.params.simulation_box[1]]
+            "y",
+            [
+                -self.params.simulation_box[1] - self.params.lambda0 / 2,
+                self.params.simulation_box[1] + self.params.lambda0,
+            ],
         )
         mesh.AddLine(
             "z",
@@ -550,16 +564,20 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         mesh.AddLine(
             "y",
             np.linspace(
-                (self.params.series_line_width_mm + self.params.line_length_mm) + 1,
-                (self.params.series_line_width_mm + self.params.line_length_mm) - 1,
-                6,
+                (self.params.series_line_width_mm + self.params.line_length_mm)
+                + 1
+                - 0.3,
+                (self.params.series_line_width_mm + self.params.line_length_mm)
+                - 1
+                + 0.6,
+                8,
             ),
         )
         mesh.AddLine(
             "y",
             np.linspace(
-                0,
-                self.params.series_line_width_mm,
+                0 - 0.3,
+                self.params.series_line_width_mm + 0.6,
                 6,
             ),
         )
@@ -570,19 +588,23 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 -self.params.copper_thickness_mm / 2,
                 self.params.substrate_thickness_mm
                 + self.params.copper_thickness_mm / 2,
-                self.params.substrate_cells,
+                9,
             ),
         )
 
         for i in range(self.params.filter_order):
-            mesh.AddLine("x", ((i + 1) * self.params.line_length_mm * 8) / 8)
             mesh.AddLine(
                 "x",
-                (
-                    (i + 1) * self.params.line_length_mm * 8
+                np.linspace(
+                    (i + 1) * self.params.line_length_mm
+                    + sum(self.params.shunt_line_width_mm[:i])
+                    - 0.3,
+                    (i + 1) * self.params.line_length_mm
+                    + sum(self.params.shunt_line_width_mm[:i])
                     + self.params.shunt_line_width_mm[i]
-                )
-                / 8,
+                    + 0.6,
+                    6,
+                ),
             )
 
-        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2)
