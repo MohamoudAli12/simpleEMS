@@ -565,11 +565,11 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
             "y",
             np.linspace(
                 (self.params.series_line_width_mm + self.params.line_length_mm)
-                + 1
-                - 0.3,
+                + 2
+                - 0.03,
                 (self.params.series_line_width_mm + self.params.line_length_mm)
-                - 1
-                + 0.6,
+                - 2
+                + 0.06,
                 8,
             ),
         )
@@ -578,7 +578,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
             np.linspace(
                 0 - 0.3,
                 self.params.series_line_width_mm + 0.6,
-                6,
+                9,
             ),
         )
 
@@ -607,4 +607,4 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 ),
             )
 
-        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2)
+        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2.5)

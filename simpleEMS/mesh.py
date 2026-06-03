@@ -1,15 +1,18 @@
 """
-Auto-generated FDTD mesh from CSXCAD primitives.
+Simple FDTD mesh generator from CSXCAD primitives.
 
-Adapted from pyems mesh.py — uses geometric series for smooth grid
-transitions and the thirds rule at metal boundaries.
+Algorithm:
+  1. Discover geometry from all primitives (incl. LinPolygon vertices)
+  2. Classify regions between boundaries as metal/nonmetal/air
+  3. Generate mesh lines per region using np.linspace
+  4. Apply thirds rule at metal boundaries (mark as fixed)
+  5. Smooth between fixed lines via per-segment SmoothMeshLines
 """
 
 from enum import Enum
 from bisect import bisect_left, bisect_right, insort_left
 
 import numpy as np
-import scipy.optimize
 
 from CSXCAD import ContinuousStructure
 from CSXCAD.CSPrimitives import CSPrimitives
@@ -90,6 +93,37 @@ def _get_prim_bounds(prim: CSPrimitives) -> np.ndarray:
     return bounds
 
 
+def _is_linpoly(prim: CSPrimitives) -> bool:
+    cls = prim.__class__.__name__
+    return cls in ("CSPrimLinPoly", "CSPrimPolygon")
+
+
+def _get_linpoly_vertex_bounds(prim: CSPrimitives) -> list[list[float]]:
+    """Extract individual vertex positions from a LinPolygon."""
+    bounds: list[list[float]] = [[], [], []]
+    try:
+        coords = prim.GetCoords()
+        x_verts, y_verts = coords[0], coords[1]
+        elev = float(prim.GetElevation())
+        norm_dir = int(prim.GetNormDir())
+        tr = prim.GetTransform()
+        for x, y in zip(x_verts, y_verts, strict=True):
+            pt = [0.0, 0.0, 0.0]
+            if norm_dir == 0:
+                pt = [elev, float(x), float(y)]
+            elif norm_dir == 1:
+                pt = [float(x), elev, float(y)]
+            else:
+                pt = [float(x), float(y), elev]
+            if tr is not None:
+                pt = tr.Transform(pt)
+            for d in range(3):
+                bounds[d].append(float(pt[d]))
+    except Exception:
+        pass
+    return bounds
+
+
 def _physical_prims(prims: list[CSPrimitives]) -> list[CSPrimitives]:
     physical = []
     for prim in prims:
@@ -105,24 +139,30 @@ def _remove_dups(lst: list, fixed: list | None = None) -> list:
     last = None
     for elt in lst:
         if last is not None:
-            if elt == last or fp_equalp(elt, last) and elt not in fixed:
+            if elt == last or (fp_equalp(elt, last) and elt not in fixed):
                 continue
-            elif fp_equalp(elt, last) and elt in fixed:
+            if fp_equalp(elt, last) and elt in fixed:
                 del new_lst[-1]
         last = elt
         new_lst.append(elt)
     return new_lst
 
 
-def _bounds_from_prims(
+def _collect_all_bounds(
     prims: list[CSPrimitives], fixed: list[list[float]]
 ) -> list[list[float]]:
-    dim_bounds = [[], [], []]
+    """Collect boundary positions from all primitives, including LinPoly vertices."""
+    dim_bounds: list[list[float]] = [[], [], []]
     for prim in prims:
         prim_bounds = _get_prim_bounds(prim)
         for dim, bounds in enumerate(prim_bounds):
-            dim_bounds[dim].append(bounds[0])
-            dim_bounds[dim].append(bounds[1])
+            dim_bounds[dim].append(float(bounds[0]))
+            dim_bounds[dim].append(float(bounds[1]))
+        if _is_linpoly(prim):
+            vert_bounds = _get_linpoly_vertex_bounds(prim)
+            for dim in range(3):
+                for v in vert_bounds[dim]:
+                    dim_bounds[dim].append(v)
     for dim, bounds in enumerate(dim_bounds):
         dim_bounds[dim] = sorted(bounds)
         dim_bounds[dim] = _remove_dups(dim_bounds[dim], fixed[dim])
@@ -157,131 +197,10 @@ def _type_at_pos(prims: list[CSPrimitives], dim: int, pos: float) -> Type | None
 def _sort_bounded_types(
     bounded_types: list[list[BoundedType]],
 ) -> list[list[BoundedType]]:
-    new_bounded_types = [[], [], []]
+    new_bounded_types: list[list[BoundedType]] = [[], [], []]
     for dim, btype_list in enumerate(bounded_types):
         new_bounded_types[dim] = sorted(btype_list, key=lambda x: x.size())
     return new_bounded_types
-
-
-def _factor_for_num(num: int, smaller_spacing: float, dist: float) -> float:
-    roots = scipy.optimize.fsolve(
-        func=_geom_dist_zero, x0=1.5, args=(num, smaller_spacing, dist)
-    )
-    return roots[0]
-
-
-def _factor_ubound(num: int, ratio: float, max_factor: float) -> float:
-    return np.min([max_factor, np.power(ratio, 1 / (num - 1))])
-
-
-def _geom_dist(factor: float, num: int, smaller_spacing: float) -> float:
-    powers = np.arange(1, num, 1)
-    return smaller_spacing * np.sum(np.power(factor, powers))
-
-
-def _geom_dist_zero(
-    factor: float, num: int, smaller_spacing: float, dist: float
-) -> float:
-    return _geom_dist(factor, num, smaller_spacing) - dist
-
-
-def _num_for_factor(
-    factor: float, smaller_spacing: float, dist: float
-) -> tuple[float, int]:
-    dist = float(np.asarray(dist).flat[0])
-    num = int(
-        np.ceil(
-            np.log(1 - (((dist / smaller_spacing) + 1) * (1 - factor))) / np.log(factor)
-            + 1
-        )
-    )
-    factor = _factor_for_num(num, smaller_spacing, dist)
-    while factor < 1:
-        num -= 1
-        if num == 0:
-            raise RuntimeError("_num_for_factor failed. This is a bug.")
-        factor = _factor_for_num(num, smaller_spacing, dist)
-    return (factor, num)
-
-
-def _geom_series(
-    smaller_spacing: float,
-    larger_spacing: float,
-    dist: float,
-    min_num: int,
-    max_factor: float,
-) -> tuple[float, int]:
-    num = np.max([int(np.ceil(dist / larger_spacing)) + 1, min_num])
-    factor = _factor_for_num(num, smaller_spacing, dist)
-    while factor >= _factor_ubound(num, larger_spacing / smaller_spacing, max_factor):
-        num += 1
-        factor = _factor_for_num(num, smaller_spacing, dist)
-    return (factor, num)
-
-
-def _lines_const_factor_in_bounds(
-    lower: float,
-    upper: float,
-    lower_spacing: float,
-    upper_spacing: float,
-    dim: int,
-    min_lines: int,
-    smooth: float,
-) -> np.ndarray:
-    if np.isclose(lower_spacing, upper_spacing, rtol=1e-3, atol=0):
-        num_lines = int(np.ceil((upper - lower) / lower_spacing)) + 1
-        num_lines = int(np.max([num_lines, min_lines]))
-        return np.linspace(lower, upper, num_lines)
-
-    (factor, num_lines) = _geom_series(
-        smaller_spacing=np.min([lower_spacing, upper_spacing]),
-        larger_spacing=np.max([lower_spacing, upper_spacing]),
-        dist=upper - lower,
-        min_num=min_lines,
-        max_factor=smooth,
-    )
-
-    powers = np.arange(1, num_lines, 1)
-    if lower_spacing < upper_spacing:
-        spacings = lower_spacing * np.power(factor, powers)
-        lines = np.array(lower + np.cumsum(spacings))
-        lines = np.concatenate(([lower], lines))
-    else:
-        spacings = upper_spacing * np.power(factor, powers)
-        lines = np.array(upper - np.cumsum(spacings))
-        lines = np.concatenate(([upper], lines))
-        lines = np.flip(lines)
-
-    lines[-1] = upper
-    return lines
-
-
-def _spacing_at_dist(spacing: float, dist: float, max_factor: float) -> float:
-    factor, num = _num_for_factor(max_factor, spacing, dist)
-    return spacing * (factor ** (num - 1))
-
-
-def _spacings_at_dist_zero(
-    dist: float,
-    lower_spacing: float,
-    upper_spacing: float,
-    total_dist: float,
-    max_factor: float,
-) -> float:
-    spacing1 = _spacing_at_dist(lower_spacing, dist, max_factor)
-    spacing2 = _spacing_at_dist(upper_spacing, total_dist - dist, max_factor)
-    return spacing2 - spacing1
-
-
-def _dist_for_max_spacings(
-    lower_spacing: float, upper_spacing: float, dist: float, max_factor: float
-) -> float:
-    roots = scipy.optimize.fsolve(
-        func=_spacings_at_dist_zero,
-        x0=dist / 2,
-        args=(lower_spacing, upper_spacing, dist, max_factor),
-    )
-    return roots[0]
 
 
 def _dim_idx_to_desc(idx: int) -> str:
@@ -303,7 +222,7 @@ def _dim_idx_to_desc(idx: int) -> str:
 def _mesh_lines_in_box(
     mesh_lines: list[list[float]], box_lower: list[float], box_upper: list[float]
 ) -> list[list[float]]:
-    mesh_lines_inside = []
+    mesh_lines_inside: list[list[float]] = []
     for dim in range(3):
         lower_pos = box_lower[dim]
         upper_pos = box_upper[dim]
@@ -318,20 +237,21 @@ def _mesh_lines_in_box(
 class Mesh:
     """Auto-generates an FDTD mesh from CSXCAD primitives.
 
-    Adapts the pyems automatic mesh generation algorithm.  Scans all
-    physical primitives (metal and material), classifies regions by
-    type, generates mesh lines using geometric series for smooth
-    transitions, and applies the thirds rule at metal boundaries.
+    Scans all physical primitives (metal + material), classifies regions
+    by type, generates mesh lines using ``np.linspace``, applies the
+    thirds rule at metal boundaries, and smooths between fixed lines.
 
     Parameters
     ----------
     csx : ContinuousStructure
         CSXCAD structure with primitives already added.
     params : SimParams
-        Simulation parameters providing simulation_box, mesh_resolution,
-        metal_mesh_resolution, unit, and main_freq.
+        Simulation parameters providing *simulation_box*, *mesh_resolution*,
+        *metal_mesh_resolution*, *unit*, and *main_freq*.
     smooth_ratio : float
         Maximum ratio between adjacent cells (default 1.5).
+    min_lines : int
+        Minimum mesh lines per region (default 5).
     """
 
     def __init__(
@@ -346,31 +266,42 @@ class Mesh:
         self._metal_res = float(params.metal_mesh_resolution)
         self._smooth = (smooth_ratio, smooth_ratio, smooth_ratio)
         self._unit = float(params.unit)
+        self._lambda0 = float(params.lambda0)
         self._min_lines = min_lines
+        self._substrate_cells = int(params.substrate_cells)
         sb = params.simulation_box
         self._sim_box = tuple((float(-s / 2), float(s / 2)) for s in sb)
-        self.sim_bounds = [[], [], []]
-        self.ranges_meshed = [[], [], []]
-        self.metal_bounds = [[], [], []]
-        self.fixed_lines = [[], [], []]
+        self.sim_bounds: list[list[float]] = [[], [], []]
+        self.ranges_meshed: list[list[list[float]]] = [[], [], []]
+        self.metal_bounds: list[list[float]] = [[], [], []]
+        self.fixed_lines: list[list[float]] = [[], [], []]
         self.smallest_res = self._metal_res
-        self.mesh_lines = [[], [], []]
+        self.mesh_lines: list[list[float]] = [[], [], []]
         self.mesh = self._csx.GetGrid()
         self._generate()
+
+    # -----------------------------------------------------------------
+    #  Main generation pipeline
+    # -----------------------------------------------------------------
 
     def _generate(self) -> None:
         prims = self._csx.GetAllPrimitives()
         physical_prims = _physical_prims(prims)
         self._set_fixed_lines(physical_prims)
-        bounds = _bounds_from_prims(physical_prims, self.fixed_lines)
+        bounds = _collect_all_bounds(physical_prims, self.fixed_lines)
+        self._set_sim_bounds_from_geometry(bounds)
         bounded_types = self._bounded_types(bounds, physical_prims)
         bounded_types = self._set_expanded_bounds(bounded_types)
         self.bounded_types = bounded_types
         self._set_metal_bounds(bounded_types)
         size_ordered = _sort_bounded_types(bounded_types)
         self._gen_mesh_for_bounded_types(size_ordered)
+        self._smooth_non_fixed_segments()
         self._set_mesh_from_lines()
-        self.mesh.SmoothMeshLines("all", self._mesh_res, self._smooth[0])
+
+    # -----------------------------------------------------------------
+    #  Fixed lines (zero-thickness primitives)
+    # -----------------------------------------------------------------
 
     def _set_fixed_lines(self, prims: list[CSPrimitives]) -> None:
         for prim in prims:
@@ -385,29 +316,37 @@ class Mesh:
         self.fixed_lines[dim].append(pos)
         self.fixed_lines[dim].sort()
 
+    # -----------------------------------------------------------------
+    #  Region classification
+    # -----------------------------------------------------------------
+
     def _bounded_types(
         self, bounds: list[list[float]], prims: list[CSPrimitives]
     ) -> list[list[BoundedType]]:
-        bounded_types = [[], [], []]
+        bounded_types: list[list[BoundedType]] = [[], [], []]
         for dim, dim_bounds in enumerate(bounds):
             last_bound = None
             for bound in dim_bounds:
-                if bound in self.fixed_lines[dim]:
-                    if last_bound is not None:
-                        mid_pos = np.average([last_bound, bound])
-                        prop_type = _type_at_pos(prims, dim, mid_pos)
-                        btype = BoundedType(prop_type, last_bound, bound)
-                        bounded_types[dim].append(btype)
-                    prop_type = _type_at_pos(prims, dim, bound)
-                    btype = BoundedType(prop_type, bound, bound)
-                    bounded_types[dim].append(btype)
-                elif last_bound is not None:
+                if last_bound is not None:
                     mid_pos = np.average([last_bound, bound])
                     prop_type = _type_at_pos(prims, dim, mid_pos)
                     btype = BoundedType(prop_type, last_bound, bound)
                     bounded_types[dim].append(btype)
                 last_bound = bound
         return bounded_types
+
+    def _set_sim_bounds_from_geometry(self, dim_bounds: list[list[float]]) -> None:
+        new_sim_box = []
+        for dim in range(3):
+            if not dim_bounds[dim]:
+                new_sim_box.append(self._sim_box[dim])
+                continue
+            geo_min = dim_bounds[dim][0]
+            geo_max = dim_bounds[dim][-1]
+            span = geo_max - geo_min
+            padding = max(self._lambda0 / 2, span * 0.15)
+            new_sim_box.append((geo_min - padding, geo_max + padding))
+        self._sim_box = tuple(new_sim_box)
 
     def _set_expanded_bounds(
         self, bounded_types: list[list[BoundedType]]
@@ -442,6 +381,10 @@ class Mesh:
             ]
         return bounded_types
 
+    # -----------------------------------------------------------------
+    #  Metal boundaries
+    # -----------------------------------------------------------------
+
     def _set_metal_bounds(self, bounded_types: list[list[BoundedType]]) -> None:
         for dim, btypes in enumerate(bounded_types):
             for btype in btypes:
@@ -462,6 +405,15 @@ class Mesh:
 
     def _is_metal_bound(self, dim: int, pos: float) -> bool:
         return any(fp_equalp(mb, pos) for mb in self.metal_bounds[dim])
+
+    def _metal_thickness_at(self, dim: int, pos: float) -> float | None:
+        for bt in self.bounded_types[dim]:
+            if bt.get_type() != Type.metal:
+                continue
+            lower, upper = bt.get_bounds()
+            if fp_equalp(lower, pos) or fp_equalp(upper, pos):
+                return upper - lower
+        return None
 
     def _pos_meshed(self, dim: int, pos: float) -> bool:
         for rng in self.ranges_meshed[dim]:
@@ -496,6 +448,10 @@ class Mesh:
     def _add_to_ranges_meshed(self, dim: int, lower: float, upper: float) -> None:
         self.ranges_meshed[dim].append([lower, upper])
 
+    # -----------------------------------------------------------------
+    #  Mesh generation per bounded type  (np.linspace based)
+    # -----------------------------------------------------------------
+
     def _gen_mesh_for_bounded_types(
         self, bounded_types: list[list[BoundedType]]
     ) -> None:
@@ -503,11 +459,10 @@ class Mesh:
             for btype in btypes:
                 lower = btype.get_bounds()[0]
                 upper = btype.get_bounds()[1]
-                is_metal = btype.get_type() == Type.metal
                 _, line_below = self._line_below(dim, lower)
                 _, line_above = self._line_above(dim, upper)
                 self._gen_mesh_in_bounds(
-                    dim, lower, upper, line_below, line_above, is_metal
+                    dim, lower, upper, line_below, line_above, btype
                 )
                 self._add_to_ranges_meshed(dim, lower, upper)
 
@@ -557,126 +512,180 @@ class Mesh:
         upper: float,
         line_below: float | None,
         line_above: float | None,
-        is_metal: bool,
+        btype: BoundedType,
     ) -> None:
         dist = upper - lower
-        lower_spacing = self._lower_spacing(dim, lower, line_below, dist, is_metal)
-        upper_spacing = self._upper_spacing(dim, upper, line_above, dist, is_metal)
-        max_spacing = self._metal_res if is_metal else self._mesh_res
+        rtype = btype.get_type()
+        is_metal = rtype == Type.metal
+        is_air = rtype is None or rtype == Type.air
 
         if fp_equalp(lower, upper):
             self._add_lines_to_mesh([lower], dim)
-        else:
-            lines = self._gen_lines_in_bounds(
-                lower, upper, lower_spacing, upper_spacing, max_spacing, dim
-            )
+            return
 
-            if is_metal:
-                first_spacing = lines[1] - lines[0]
-                last_spacing = lines[-1] - lines[-2]
-                if not fp_equalp(
-                    lower, self.sim_bounds[dim][0]
-                ) and not self._is_fixed_line(dim, lower):
-                    if (
-                        self._pos_meshed(dim, lower)
-                        and self._type_below(dim, lower) == Type.metal
-                    ):
-                        adj = 2 * first_spacing / 3
-                    else:
-                        adj = first_spacing / 3
-                    lower += adj
-                if not fp_equalp(
-                    upper, self.sim_bounds[dim][1]
-                ) and not self._is_fixed_line(dim, upper):
-                    if (
-                        self._pos_meshed(dim, upper)
-                        and self._type_above(dim, upper) == Type.metal
-                    ):
-                        adj = 2 * last_spacing / 3
-                    else:
-                        adj = last_spacing / 3
-                    upper -= adj
-                lines = self._gen_lines_in_bounds(
-                    lower, upper, lower_spacing, upper_spacing, max_spacing, dim
+        # --- fixed offsets for thirds rule (based on mesh_res, not local spacing) ---
+        offset_in = self._mesh_res / 12.0  # 1/3 inside metal
+        offset_out = self._mesh_res / 6.0  # 2/3 outside metal
+        thirds_cell = offset_in + offset_out  # mesh_res / 4
+
+        # --- skip thirds rule for metal regions thinner than the boundary cell ---
+        skip_thirds = is_metal and dist < thirds_cell and dim == 2
+
+        # --- number of points based on region size ---
+        if dist < (2 * thirds_cell if dim == 1 else thirds_cell):
+            if is_metal and dim != 2:
+                ext_lower = lower - offset_out
+                ext_upper = upper + offset_out
+                total_span = ext_upper - ext_lower
+                num = max(4, int(np.ceil(total_span / (offset_out * 0.6))) + 1)
+                lines = np.linspace(ext_lower, ext_upper, num)
+                lines = np.array(
+                    [
+                        line
+                        for line in lines
+                        if not (fp_equalp(line, lower) or fp_equalp(line, upper))
+                    ]
                 )
+                self._add_lines_to_mesh(lines, dim)
+                return
             else:
-                rebuild_lines = False
-                if self._is_metal_bound(dim, lower):
-                    rebuild_lines = True
-                    first_spacing = lines[1] - lines[0]
-                    spacing = np.min([first_spacing, self._metal_res])
-                    lower += 2 * spacing / 3
-                if self._is_metal_bound(dim, upper):
-                    rebuild_lines = True
-                    last_spacing = lines[-1] - lines[-2]
-                    spacing = np.min([last_spacing, self._metal_res])
-                    upper -= 2 * spacing / 3
-                if rebuild_lines:
-                    lines = self._gen_lines_in_bounds(
-                        lower, upper, lower_spacing, upper_spacing, max_spacing, dim
-                    )
-
-            self._add_lines_to_mesh(lines, dim)
-
-    def _gen_lines_in_bounds(
-        self,
-        lower: float,
-        upper: float,
-        lower_spacing: float,
-        upper_spacing: float,
-        max_spacing: float,
-        dim: int,
-    ) -> np.ndarray:
-        dist = upper - lower
-        smaller_spacing = np.min([lower_spacing, upper_spacing])
-        larger_spacing = np.max([lower_spacing, upper_spacing])
-        num_lower = dist / larger_spacing
-
-        if (
-            num_lower < self._min_lines
-            or _spacing_at_dist(smaller_spacing, dist, self._smooth[dim])
-            < larger_spacing
-        ):
-            return _lines_const_factor_in_bounds(
-                lower,
-                upper,
-                lower_spacing,
-                upper_spacing,
-                dim,
-                self._min_lines,
-                self._smooth[dim],
+                num = 2
+        elif is_air:
+            air_spacing = max(
+                self._mesh_res * 3,
+                (self.sim_bounds[dim][1] - self.sim_bounds[dim][0]) / 10,
             )
+            num = max(int(np.ceil(dist / air_spacing)) + 1, self._min_lines)
+        elif is_metal:
+            num = max(self._min_lines, int(np.ceil(dist / (self._mesh_res * 5))) + 1)
+        else:
+            # nonmetal regions like substrate: finer initial density
+            num = max(self._min_lines, int(np.ceil(dist / (self._mesh_res / 4))) + 1)
+            if dim == 2:
+                num = max(self._substrate_cells + 1, num)
 
-        mid_spacing_dist = _dist_for_max_spacings(
-            lower_spacing, upper_spacing, dist, self._smooth[dim]
-        )
-        midpt = lower + mid_spacing_dist
-        lower_factor, lower_num = _num_for_factor(
-            self._smooth[dim], lower_spacing, midpt - lower
-        )
-        upper_factor, upper_num = _num_for_factor(
-            self._smooth[dim], upper_spacing, upper - midpt
-        )
-        mid_spacing = np.min(
-            [
-                max_spacing,
-                lower_spacing * (lower_factor**lower_num),
-                upper_spacing * (upper_factor**upper_num),
-            ]
-        )
+        lines = np.linspace(lower, upper, num)
+        if skip_thirds:
+            mid = fp_nearest((lower + upper) / 2.0)
+            self._add_lines_to_mesh(np.array([mid]), dim)
+            return
 
-        while lower_num + upper_num < self._min_lines:
-            lower_num += 1
-            upper_num += 1
+        orig_lower = lower
+        orig_upper = upper
 
-        lines_lower = _lines_const_factor_in_bounds(
-            lower, midpt, lower_spacing, mid_spacing, dim, lower_num, self._smooth[dim]
-        )
-        lines_upper = _lines_const_factor_in_bounds(
-            midpt, upper, mid_spacing, upper_spacing, dim, upper_num, self._smooth[dim]
-        )
-        lines = np.concatenate([lines_lower, lines_upper])
-        return _remove_dups(lines, self.fixed_lines[dim])
+        # --- thirds rule for metal regions ---
+        if is_metal:
+            # scale offsets for thin metals (dist < thirds_cell)
+            scale = min(1.0, dist / thirds_cell)
+            adj_in = offset_in * scale
+            adj_out = offset_out * scale
+
+            adj_lower = 0.0
+            adj_upper = 0.0
+            if not fp_equalp(
+                lower, self.sim_bounds[dim][0]
+            ) and not self._is_fixed_line(dim, lower):
+                adj_lower = adj_in
+                if (
+                    self._pos_meshed(dim, lower)
+                    and self._type_below(dim, lower) == Type.metal
+                ):
+                    adj_lower = adj_out
+                lower += adj_lower
+            if not fp_equalp(
+                upper, self.sim_bounds[dim][1]
+            ) and not self._is_fixed_line(dim, upper):
+                adj_upper = adj_in
+                if (
+                    self._pos_meshed(dim, upper)
+                    and self._type_above(dim, upper) == Type.metal
+                ):
+                    adj_upper = adj_out
+                upper -= adj_upper
+
+            if lower != orig_lower or upper != orig_upper:
+                new_dist = upper - lower
+                if new_dist > 0:
+                    lines = np.linspace(lower, upper, max(num, 2))
+
+            # add 2/3-outside lines in adjacent region
+            # only for metal-air boundaries; skip for metal-metal where the
+            # adjacent metal already provides mesh lines
+            is_lower_metal = (
+                self._pos_meshed(dim, orig_lower)
+                and self._type_below(dim, orig_lower) == Type.metal
+            )
+            if adj_lower > 0 and not is_lower_metal:
+                ol = fp_nearest(orig_lower - offset_out)
+                if fp_gep(ol, self.sim_bounds[dim][0]):
+                    self.add_fixed_line(dim, ol)
+                    self._add_mesh_line(dim, ol)
+            is_upper_metal = (
+                self._pos_meshed(dim, orig_upper)
+                and self._type_above(dim, orig_upper) == Type.metal
+            )
+            if adj_upper > 0 and not is_upper_metal:
+                ol = fp_nearest(orig_upper + offset_out)
+                if fp_lep(ol, self.sim_bounds[dim][1]):
+                    self.add_fixed_line(dim, ol)
+                    self._add_mesh_line(dim, ol)
+
+            # mark adjusted boundary lines as fixed
+            if adj_lower > 0 and len(lines) > 0:
+                self.add_fixed_line(dim, fp_nearest(lines[0]))
+            if adj_upper > 0 and len(lines) > 0:
+                self.add_fixed_line(dim, fp_nearest(lines[-1]))
+
+        # --- thirds rule for nonmetal regions adjacent to metal ---
+        else:
+            if self._is_metal_bound(dim, lower):
+                metal_t = self._metal_thickness_at(dim, lower)
+                if metal_t is not None and metal_t < thirds_cell:
+                    offset_adj = min(offset_out, max(offset_in, metal_t * 3))
+                else:
+                    offset_adj = offset_out
+                lower += offset_adj
+            if self._is_metal_bound(dim, upper):
+                metal_t = self._metal_thickness_at(dim, upper)
+                if metal_t is not None and metal_t < thirds_cell:
+                    offset_adj = min(offset_out, max(offset_in, metal_t * 3))
+                else:
+                    offset_adj = offset_out
+                upper -= offset_adj
+            if lower != orig_lower or upper != orig_upper:
+                new_dist = upper - lower
+                if new_dist > 0:
+                    lines = np.linspace(lower, upper, max(num, 2))
+
+        self._add_lines_to_mesh(lines, dim)
+
+    # -----------------------------------------------------------------
+    #  Smoothing  (preserves fixed lines)
+    # -----------------------------------------------------------------
+
+    def _smooth_non_fixed_segments(self) -> None:
+        """Smooth mesh globally using CSXCAD's ``SmoothMeshLines``.
+
+        ``SmoothMeshLines`` preserves all input points (including thirds-rule
+        lines) and only adds intermediate points where adjacent cell ratios
+        exceed the given limit.  Global smoothing ensures a smooth transition
+        from coarse air regions to fine metal-edge regions.
+        """
+        from CSXCAD.SmoothMeshLines import SmoothMeshLines
+
+        for dim in range(3):
+            all_lines = sorted(set(self.mesh_lines[dim]))
+            if len(all_lines) < 3:
+                continue
+            try:
+                smoothed = SmoothMeshLines(all_lines, self._mesh_res, self._smooth[dim])
+                self.mesh_lines[dim] = sorted(set(smoothed))
+            except Exception:
+                pass
+
+    # -----------------------------------------------------------------
+    #  Line management
+    # -----------------------------------------------------------------
 
     def _add_lines_to_mesh(self, lines: np.ndarray, dim: int) -> None:
         for line in lines:
@@ -688,6 +697,7 @@ class Mesh:
 
     def _set_mesh_from_lines(self) -> None:
         grid = self._csx.GetGrid()
+        grid.SetDeltaUnit(self._unit)
         for i in range(3):
             grid.ClearLines(i)
         for dim in range(3):
@@ -695,39 +705,42 @@ class Mesh:
                 ch = "xyz"[dim]
                 grid.AddLine(ch, fp_nearest(line))
 
+    # -----------------------------------------------------------------
+    #  Query helpers
+    # -----------------------------------------------------------------
+
     def nearest_mesh_line(
         self, dim: int, pos: float
     ) -> tuple[int | None, float | None]:
         lines = self.mesh_lines[dim]
         if not lines:
             return (None, None)
-        bisect_pos = bisect_left(self.mesh_lines[dim], pos)
-        if bisect_pos == 0:
+        bp = bisect_left(self.mesh_lines[dim], pos)
+        if bp == 0:
             return (0, lines[0])
-        elif bisect_pos == len(lines):
-            return (bisect_pos - 1, lines[bisect_pos - 1])
-        else:
-            lower = lines[bisect_pos - 1]
-            upper = lines[bisect_pos]
-            if pos - lower < upper - pos:
-                return (bisect_pos - 1, lower)
-            else:
-                return (bisect_pos, upper)
+        if bp == len(lines):
+            return (bp - 1, lines[bp - 1])
+        lower = lines[bp - 1]
+        upper = lines[bp]
+        if pos - lower < upper - pos:
+            return (bp - 1, lower)
+        return (bp, upper)
 
     def _line_below(self, dim: int, pos: float) -> tuple[int | None, float | None]:
         idx, act_pos = self.nearest_mesh_line(dim, pos)
         if act_pos is None:
             return (None, None)
         if fp_equalp(act_pos, pos):
+            idx = idx - 1 if idx is not None else None
+            if idx is not None and self._mesh_valid_index(dim, idx):
+                act_pos = self.mesh_lines[dim][idx]
+        if act_pos is not None and fp_ltp(act_pos, pos):
+            return (idx, act_pos)
+        if idx is not None:
             idx -= 1
             if self._mesh_valid_index(dim, idx):
                 act_pos = self.mesh_lines[dim][idx]
-        if fp_ltp(act_pos, pos):
-            return (idx, act_pos)
-        idx -= 1
-        if self._mesh_valid_index(dim, idx):
-            act_pos = self.mesh_lines[dim][idx]
-            return (idx, act_pos)
+                return (idx, act_pos)
         return (None, None)
 
     def _line_above(self, dim: int, pos: float) -> tuple[int | None, float | None]:
@@ -735,15 +748,16 @@ class Mesh:
         if act_pos is None:
             return (None, None)
         if fp_equalp(act_pos, pos):
+            idx = idx + 1 if idx is not None else None
+            if idx is not None and self._mesh_valid_index(dim, idx):
+                act_pos = self.mesh_lines[dim][idx]
+        if act_pos is not None and fp_gtp(act_pos, pos):
+            return (idx, act_pos)
+        if idx is not None:
             idx += 1
             if self._mesh_valid_index(dim, idx):
                 act_pos = self.mesh_lines[dim][idx]
-        if fp_gtp(act_pos, pos):
-            return (idx, act_pos)
-        idx += 1
-        if self._mesh_valid_index(dim, idx):
-            act_pos = self.mesh_lines[dim][idx]
-            return (idx, act_pos)
+                return (idx, act_pos)
         return (None, None)
 
     def _mesh_valid_index(self, dim: int, index: int) -> bool:

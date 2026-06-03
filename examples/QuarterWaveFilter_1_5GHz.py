@@ -3,16 +3,15 @@
 
 from pathlib import Path
 
-import numpy as np
 
 from simpleEMS import (
     BandStopQuarterWaveFilter,
     QuarterWaveFilterParams,
-    optimize_s11,
     optimize_s21,
     optimize_s_params,
     param_sweep,
     setup_simulation,
+    Mesh,
 )
 
 
@@ -29,21 +28,16 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         filter_response="butterworth",
         filter_order=3,
     )
-    # params.line_length_mm = 31.8297
-    # params.series_line_width_mm= 3.599
-    # params.shunt_line_width_mm = [0.988, 3.874, 0.988]
-    # params.shunt_line_length_mm = [31.412, 30.045, 31.412]
 
     if sweep:
         params.line_length_mm = sweep_val[0]
         params.series_line_width_mm = sweep_val[1]
 
     if optimize:
-        n_shunts = params.filter_order
         params.line_length_mm = optimize_val[0]
         params.series_line_width_mm = optimize_val[1]
-        params.shunt_line_width_mm = optimize_val[2 : 2 + n_shunts]
-        params.shunt_line_length_mm = optimize_val[2 + n_shunts :]
+        params.shunt_line_width_mm = optimize_val[2:5]
+        params.shunt_line_length_mm = optimize_val[5:]
 
     CSX, FDTD, freqs = setup_simulation(params)
 
@@ -54,7 +48,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     filter.create_series_line()
     filter.create_shunt_line()
     ports = filter.create_ports()
-    filter.create_mesh()
+    # filter.create_mesh()
+    Mesh(CSX, params)
     filter.write_and_show_structure(FDTD, output_path)
     network_params = None
 
@@ -78,32 +73,13 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             output_path,
         )
 
-        stopband_lo = params.centre_freq - params.bandwidth_freq / 2
-        stopband_hi = params.centre_freq + params.bandwidth_freq / 2
-
-        # s11_lower = optimize_s11(
-        #     network_params.freqs,
-        #     network_params.s11,
-        #     freq_band=(params.min_freq, stopband_lo),
-        # )
-        # s11_upper = optimize_s11(
-        #     network_params.freqs,
-        #     network_params.s11,
-        #     freq_band=(stopband_hi, params.max_freq),
-        # )
-        #
-        # lower_bw = stopband_lo - params.min_freq
-        # upper_bw = params.max_freq - stopband_hi
-        # s11_cost = (lower_bw * s11_lower + upper_bw * s11_upper) / (lower_bw + upper_bw)
-
-        s21_cost = -optimize_s21(
+        s21_cost = optimize_s21(
             network_params.freqs,
             network_params.s21,
-            # params.centre_freq,
-            freq_band=(stopband_lo, stopband_hi),
+            params.centre_freq,
         )
 
-        return s21_cost  # + s11_cost
+        return -s21_cost
 
     if not (sweep or optimize):
         filter.run_simulation(FDTD, output_path)
@@ -120,13 +96,19 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         filter.save_plots(output_path)
         filter.show_plots()
         filter.export_gerber(CSX, output_path)
+        filter.export_touchstone(
+            freqs=freqs,
+            s11=network_params.s11,
+            s21=network_params.s21,
+            output_path=output_path,
+        )
 
 
 def main():
     output_path = Path(__file__).with_suffix("")
     output_path.mkdir(parents=True, exist_ok=True)
 
-    optimize = False
+    optimize = True
     if optimize:
         x0 = {
             "line_length_mm": 30.314,

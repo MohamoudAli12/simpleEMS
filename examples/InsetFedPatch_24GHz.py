@@ -11,6 +11,7 @@ from simpleEMS import (
     optimize_s_params,
     param_sweep,
     setup_simulation,
+    Mesh,
 )
 
 
@@ -82,7 +83,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return s11[idx]
 
     if not (sweep or optimize):
-        patch.run_simulation(FDTD, output_path)
+        # patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
             freqs,

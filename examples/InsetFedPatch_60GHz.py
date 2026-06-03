@@ -28,7 +28,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     # parameters values after optimization
     params.inset_length_mm = 0.53445
     params.inset_width_mm = 0.15269
-    params.patch_length_mm = 1.38461
+    # params.patch_length_mm = 1.38461
     params.patch_width_mm = 1.74446
 
     if sweep:

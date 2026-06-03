@@ -439,14 +439,14 @@ class SimTools:
             if label_s21 is None:
                 label_s21 = "S21"
 
-            s21 = np.log10(np.abs(s21))
+            s21 = 20 * np.log10(np.abs(s21))
             s21_lines = plt.plot(freqs, s21, label=label_s21)
             cursor_s21 = mplcursors.cursor(s21_lines, multiple=True)
 
             cursor_s21.connect(
                 "add",
                 lambda sel: sel.annotation.set_text(
-                    f"Freq={freq_formatter(sel.target[0])}\nS11={sel.target[1]:.2f} dB"
+                    f"Freq={freq_formatter(sel.target[0])}\nS21={sel.target[1]:.2f} dB"
                 ),
             )
         if label_s11 is None:
@@ -1338,6 +1338,10 @@ class SimTools:
             This method does not return any value.
 
         """
+        console.print("-------------------------------------------", style="info")
+        console.print("Exporting S-Parameters to Touchstone file", style="info")
+        console.print("-------------------------------------------", style="info")
+
         if output_path is None:
             output_path = Path.cwd()
 
@@ -1621,7 +1625,7 @@ def optimize_s21(
     s21: NDArray,
     target_freq: float | None = None,
     freq_band: tuple[float, float] | None = None,
-    mode: str = "mean",
+    mode: str = "worst",
 ) -> np.floating:
     """
     Objective function for S21 (transmission) optimization. Higher S21 is better.
@@ -1642,7 +1646,7 @@ def optimize_s21(
         Evaluation mode within the frequency band.
         - "mean" : Returns negative mean of S21 in dB across the band.
         - "worst" : Returns negative minimum of S21 in dB across the band.
-        Default is "mean".
+        Default is "worst".
     Returns
     -------
     float
