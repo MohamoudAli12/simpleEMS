@@ -524,9 +524,9 @@ class Mesh:
             return
 
         # --- fixed offsets for thirds rule (based on mesh_res, not local spacing) ---
-        offset_in = self._mesh_res / 12.0  # 1/3 inside metal
-        offset_out = self._mesh_res / 6.0  # 2/3 outside metal
-        thirds_cell = offset_in + offset_out  # mesh_res / 4
+        offset_in = self._metal_res / 12.0  # 1/3 inside metal
+        offset_out = self._metal_res / 6.0  # 2/3 outside metal
+        thirds_cell = offset_in + offset_out  # metal_res / 4
 
         # --- skip thirds rule for metal regions thinner than the boundary cell ---
         skip_thirds = is_metal and dist < thirds_cell and dim == 2
@@ -557,7 +557,7 @@ class Mesh:
             )
             num = max(int(np.ceil(dist / air_spacing)) + 1, self._min_lines)
         elif is_metal:
-            num = max(self._min_lines, int(np.ceil(dist / (self._mesh_res * 5))) + 1)
+            num = max(self._min_lines, int(np.ceil(dist / (self._metal_res * 5))) + 1)
         else:
             # nonmetal regions like substrate: finer initial density
             num = max(self._min_lines, int(np.ceil(dist / (self._mesh_res / 4))) + 1)

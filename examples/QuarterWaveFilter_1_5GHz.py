@@ -27,6 +27,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         filter_type="bandstop",
         filter_response="butterworth",
         filter_order=3,
+        mesh_resolution_factor=10,
     )
 
     if sweep:
@@ -50,6 +51,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     ports = filter.create_ports()
     # filter.create_mesh()
     Mesh(CSX, params)
+    filter.add_field_dump(CSX, params, output_path)
     filter.write_and_show_structure(FDTD, output_path)
     network_params = None
 
@@ -108,7 +110,7 @@ def main():
     output_path = Path(__file__).with_suffix("")
     output_path.mkdir(parents=True, exist_ok=True)
 
-    optimize = True
+    optimize = False
     if optimize:
         x0 = {
             "line_length_mm": 30.314,

@@ -26,10 +26,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     )
 
     # parameters values after optimization
-    params.inset_length_mm = 0.53445
-    params.inset_width_mm = 0.15269
-    # params.patch_length_mm = 1.38461
-    params.patch_width_mm = 1.74446
+    # params.inset_length_mm = 0.53445
+    # params.inset_width_mm = 0.15269
+    # params.patch_length_mm = 1.38
+    # params.patch_width_mm = 1.74446
 
     if sweep:
         params.inset_length_mm = sweep_val[0]
@@ -40,6 +40,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.inset_width_mm = optimize_val[1]
         params.patch_length_mm = optimize_val[2]
         params.patch_width_mm = optimize_val[3]
+        params.feed_width_mm = optimize_val[4]
 
     CSX, FDTD, freqs = setup_simulation(params)
 
@@ -54,7 +55,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     Mesh(CSX, params)
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    patch.write_and_show_structure(FDTD, output_path)
+    # patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:
@@ -124,13 +125,14 @@ def main():
     output_path = Path(__file__).with_suffix("")
     output_path.mkdir(parents=True, exist_ok=True)
 
-    optimize = False
+    optimize = True
     if optimize:
         x0 = {
             "inset_length_mm": 0.533,
             "inset_width_mm": 0.148,
             "patch_length_mm": 1.389,
             "patch_width_mm": 1.767,
+            "feed_width_mm": 0.296,
         }
         optimize_s_params(simulate, x0, output_path)
 
