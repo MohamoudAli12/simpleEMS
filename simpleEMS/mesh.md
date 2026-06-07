@@ -1,421 +1,327 @@
-# Mesh Generation Algorithm
+# `mesh.py` — Deep Walkthrough
 
-## Overview
-
-The mesh generator discovers geometry from CSXCAD primitives, classifies regions
-between boundaries as metal/nonmetal/air, generates mesh lines per region, applies
-the thirds rule at metal boundaries, and globally smooths between fixed lines.
-
-```
-_prims_  →  collect bounds  →  classify regions  →  mesh per region  →  smooth  →  CSXCAD grid
-```
+A line-by-line explanation of the FDTD meshing algorithm. All numbers are in the project's geometry unit (default `unit = 1e-3`, i.e. **millimetres**).
 
 ---
 
-## Constants
+## 0. Goal (from the module docstring, lines 1-10)
 
-**`PREC = 10`** — floating-point precision for all comparisons. All positions are
-rounded to 10 decimal places (`fp_nearest`, `fp_equalp`, etc.). This prevents
-micro-errors from repeated arithmetic from creating near-duplicate lines or
-misidentifying boundaries.
+`Mesh` is an **auto-mesh generator** that turns a CSXCAD `ContinuousStructure` (already populated with primitives) into a Cartesian FDTD grid. The high-level pipeline is:
+
+```
+1. discover geometry from primitives (+ LinPolygon vertices)
+2. classify each inter-boundary region as metal / nonmetal / air
+3. seed each region with np.linspace lines
+4. apply the "thirds rule" near metal edges (mark lines as fixed)
+5. smooth between fixed lines using CSXCAD's SmoothMeshLines
+```
+
+The constructor (`Mesh.__init__`, lines 267-291) is small — it only copies parameters and calls `self._generate()`. All logic lives in `_generate()`.
 
 ---
 
-## Pipeline (`_generate`, line 287)
+## 1. Floating-point helpers (lines 22, 55-76)
 
-```
-1. GetAllPrimitives() from CSXCAD
-2. Filter to physical primitives (metal + material)
-3. Set fixed lines from zero-thickness primitives (sheets, 2D ports)
-4. Collect all unique boundary positions (box edges + LinPoly vertices)
-5. Set simulation bounds from geometry (geometry + λ₀/2 padding)
-6. Classify intervals between adjacent boundaries → BoundedType
-7. Expand bounds with air padding to fill the simulation box
-8. Record metal boundaries (for _is_metal_bound queries)
-9. Sort bounded types by size (smallest first)
-10. For each bounded type: generate mesh in bounds
-11. Smooth non-fixed segments globally via CSXCAD SmoothMeshLines
-12. Write mesh lines to CSXCAD grid
-```
+A constant `PREC = 10` rounds every comparison/sort coordinate to 10 decimal places. This is critical: CSXCAD returns floats, and `0.1 + 0.2 != 0.3`-style errors would otherwise produce duplicated mesh lines or missed boundary alignments. Every comparison goes through:
+
+| helper | meaning |
+|---|---|
+| `fp_nearest` | round to PREC |
+| `fp_equalp` | equal up to PREC |
+| `fp_gtp` / `fp_gep` | strictly greater / greater-or-equal |
+| `fp_ltp` / `fp_lep` | strictly less / less-or-equal |
+
+This means "two boundaries are the same" is defined as "they agree to 10 decimal places", which matches the geometry generation precision used elsewhere (`fp_precision` in `SimParams` is 3, but mesh comparisons round at 10 to be safer).
 
 ---
 
-## Key Data Structures
+## 2. Primitive classification (lines 79-90)
 
-### `Type` (line 25)
-```python
-metal = 0     # PEC / conductive
-nonmetal = 1  # dielectric (substrate)
-air = 2       # free space / unoccupied (also `None`)
-```
+Two predicates:
 
-### `BoundedType` (line 31)
-A region `[lower, upper]` in one dimension, classified by probing the
-midpoint with `_type_at_pos`. Each interval between adjacent primitive
-boundaries produces one `BoundedType`.
+- `_prim_metalp` → type string in `{"Metal", "ConductingSheet", "LumpedElement", "Excitation"}`
+- `_prim_materialp` → `"Material"`
 
-### `ranges_meshed[dim]` (line 275)
-Tracks which intervals have been meshed already. Used by the thirds rule
-to detect whether an adjacent region already exists (metal-metal boundaries
-need different treatment than metal-air boundaries).
+Only these two categories are considered *physical*. Excitation ports, lumped elements, and conducting sheets are treated as metals for meshing (they need sub-cell resolution at their edges).
 
-### `metal_bounds[dim]` (line 276)
-All positions that are edges of metal regions (populated before any mesh
-lines are generated). Used by `_is_metal_bound` to determine if a given
-coordinate is a metal/nonmetal interface.
+`Type` (lines 25-28) is the enum used per region: `metal=0`, `nonmetal=1`, `air=2`.
 
-### `fixed_lines[dim]` (line 277)
-Lines that must NOT be moved or removed during smoothing. Includes
-thirds-rule boundary lines and lines from zero-thickness primitives
-(sheets, ports). Fixed lines take priority in `_remove_dups`.
+`BoundedType` (lines 31-52) is a region descriptor: a `[lower, upper]` interval tagged with a `Type`. It also exposes `get_midpoint()` and `size()`.
 
 ---
 
-## Boundary Collection (`_collect_all_bounds`, line 151)
+## 3. Geometry discovery
 
-For each physical primitive:
-- Box primitives → add both box edges in each dimension
-- LinPoly primitives → add both extrusion bounds + every vertex coordinate
+### 3.1 Bounding boxes (lines 93-103)
+`_get_prim_bounds` returns the AABB in **world coordinates** by:
+1. asking CSXCAD for the local AABB (`prim.GetBoundBox()`),
+2. transforming the two corners through `prim.GetTransform()`,
+3. taking the min/max along each axis.
 
-All positions are merged, sorted, and deduplicated (`_remove_dups` with
-`fp_equalp` precision). Fixed lines are passed so that a fixed line and a
-geometric boundary at the same position are kept as one entry.
+Note: an axis-aligned primitive returns a degenerate box (lower==upper) on axes it doesn't extend along. This is how the algorithm later detects 2D primitives (see §4).
 
----
+### 3.2 LinPolygon vertex handling (lines 106-134)
+Standard `GetBoundBox` for a `CSPrimLinPoly`/`CSPrimPolygon` only gives the polygon's overall AABB, which loses individual vertex positions. `_get_linpoly_vertex_bounds`:
+- reads `(x_verts, y_verts)` from `prim.GetCoords()`,
+- folds the polygon's `Elevation` and `NormDir` into 3D points,
+- applies the primitive's transform,
+- returns per-axis lists of vertex coordinates.
 
-## Region Classification (`_type_at_pos`, line 180)
+These per-vertex points are added to the boundary pool (see §3.3) so that mesh lines land **on every polygon vertex** — important for conformal trace edges that have slanted sides.
 
-For a given position `pos` in dimension `dim`:
+### 3.3 Boundary pool (`_collect_all_bounds`, lines 161-179)
+For every physical primitive:
+- append `lower` and `upper` of the transformed AABB on each axis,
+- if it's a LinPolygon, also append every vertex coordinate.
 
-```
-For each primitive:
-  if pos falls inside the primitive's bounding box in dim:
-    dim_size = bounding box span in dim
-    if dim_size < smallest_dim_found:
-      → replace winner with this primitive's type
-    elif dim_size ≈ smallest_dim_found (within 1e-3 rtol):
-      → metal wins over nonmetal (tie-breaker)
-```
+Then sort each axis's list and de-duplicate (preferring `fixed` lines — see §4).
 
-The **smallest primitive in the given dimension** wins. This correctly
-handles overlapping structures: a thin copper trace on a thick substrate
-has a smaller z-extent than the substrate, so `_type_at_pos` returns
-`Type.metal` for z-positions inside the copper even though the substrate
-also contains that position.
+### 3.4 Region classification (`_bounded_types`, lines 333-346; `_type_at_pos`, lines 190-204)
+With sorted axis-wise boundaries `[b0, b1, b2, …]`, the algorithm walks consecutive pairs `(b_i, b_{i+1})` and asks `_type_at_pos(prims, dim, midpoint)`.
 
-**Important limitation**: `_type_at_pos` projects all primitives onto a
-single dimension. A stub at x=`[a,b]` with y-extent `[0, c]` will cause
-ALL y-positions in `[0, c]` to be classified as metal, even at x-positions
-far from the stub. This is a 1D projection — it cannot distinguish
-(x,y) locations. The mesh in each dimension is generated independently.
+`_type_at_pos` resolves overlapping primitives using a **smallest-volume wins** rule (lines 191-204):
+- for every primitive whose AABB contains the test point, compute its extent along `dim`,
+- the smallest-extent primitive wins,
+- ties (within `rtol=1e-3`) prefer **metal** — so a thin metal sheet inside a thick substrate is correctly classified as metal.
 
----
+This produces a `list[list[BoundedType]]` indexed by `[dim][region]`.
 
-## Simulation Bounds (`_set_sim_bounds_from_geometry`, line 338)
-
-```
-padding = max(λ₀ / 2, geometry_span * 0.15)
-sim_box = [geometry_min - padding, geometry_max + padding]
-```
-
-Pads the geometry by at least λ₀/2 on each side, ensuring the PML
-absorbs outgoing waves. The `λ₀/2` minimum guarantees the simulation
-box is electrically large enough.
+### 3.5 Type at adjacent regions (lines 434-456)
+`_type_below(dim, upper)` and `_type_above(dim, lower)` find the region whose upper/lower bound equals the given boundary. They're used later to detect metal↔nonmetal vs metal↔air vs metal↔metal adjacencies.
 
 ---
 
-## Metal Boundaries (`_set_metal_bounds`, line 390)
+## 4. Fixed lines (lines 316-327)
 
-Iterates all bounded types and records every interval endpoint where
-`type == metal`. The resulting `metal_bounds[dim]` list is used by
-`_is_metal_bound` (line 408) and `_metal_thickness_at` (line 411)
-which are called during the thirds rule.
+A **fixed line** is a mesh position that is locked in place and will not be moved by smoothing. They are added by `_set_fixed_lines`:
+- for every physical primitive, if the AABB is degenerate on an axis (`lower == upper` on that axis), that coordinate is added as a fixed line.
 
-This is a PURELY GEOMETRIC step — it runs before any mesh lines are
-generated, so it doesn't depend on mesh content.
+This handles:
+- **2D primitives** (`CSPrimBox` with zero thickness) → their plane becomes a hard mesh line,
+- **LinPolygons** → their vertex x/y/z positions are pinned,
+- **ports / sheets** → their plane is pinned.
 
----
-
-## Mesh Generation Order
-
-Bounded types are sorted BY SIZE ascending (smallest interval first).
-This ensures:
-
-1. **Thin metal regions** (copper traces, ground plane) are meshed first
-2. **Thicker metals** are meshed next
-3. **Nonmetal regions** (substrate, air) are meshed last
-
-The thirds-rule for metal regions uses `_pos_meshed` to detect whether an
-adjacent region has already been meshed. When it has, the boundary is
-treated as a metal-metal interface (shift outward by `offset_out`).
+`add_fixed_line` (lines 325-327) is also called during mesh generation to lock the thirds-rule offset lines (see §6.4).
 
 ---
 
-## Core: `_gen_mesh_in_bounds` (line 510)
+## 5. Simulation box & expansion (lines 348-392)
 
-This is the heart of the mesh generator. Every bounded type in every
-dimension is processed once.
-
-### Parameters
-
-- `lower`, `upper`: region boundaries
-- `line_below`, `line_above`: nearest already-meshed lines outside the region
-  (currently unused — vestigial from pyems)
-- `btype`: the `BoundedType` (metal/nonmetal/air)
-
-### Step 1: Thirds Rule Constants (line 528)
-
-```
-mesh_res = λ₀ / mesh_resolution_factor    (default 20)
-offset_in  = mesh_res / 12    # 1/3 of a boundary cell, inside metal
-offset_out = mesh_res / 6     # 2/3 of a boundary cell, outside metal
-thirds_cell = offset_in + offset_out = mesh_res / 4
-```
-
-The **thirds rule** shifts the first/last mesh line of a region away from
-a metal boundary so the FDTD cell at the interface is 1/3 inside the metal
-and 2/3 outside. This improves field accuracy at PEC boundaries.
-
-### Step 2: skip_thirds (line 534)
+The user supplies a `simulation_box`; the geometry is then allowed to push it outward:
 
 ```python
-skip_thirds = is_metal and dist < thirds_cell and dim == 2
+span = geo_max - geo_min
+padding = max(lambda0/2, span * 0.15)
+new_box = (geo_min - padding, geo_max + padding)
 ```
 
-For **z-dimension metal regions** thinner than `thirds_cell` (copper
-traces, ground planes — typically 0.035mm), the full thirds-rule
-machinery is skipped. Instead, a **single line at the midpoint** is
-added (line 564–566). This prevents spending mesh lines on features
-far below mesh resolution.
+So the sim box is the geometric bounding box plus **at least λ₀/2 air on every side** (or 15% of the span — whichever is bigger). The factor of λ₀/2 is standard for absorbing boundaries (PML needs room to ramp the field down).
 
-### Step 3: Determine Number of Points (lines 536–561)
+`_set_expanded_bounds` then:
+- prepends/appends `Type.air` regions to fill the gap between the sim box and the geometry,
+- **raises `ValueError`** if the user's sim box is *smaller* than the geometry (with a useful message naming the offending dimension and interval),
+- caches the result as `self.sim_bounds[dim]`.
 
-Five cases:
+After this step, every region from `sim_box.lower` to `sim_box.upper` along every axis is covered by a `BoundedType`.
 
-| Condition | Density |
-|-----------|---------|
-| `dist < threshold` (thin region) | `num = 2` (just boundaries) |
-| — extended linspace (metal, x/y) | see below |
-| Air | `air_spacing = max(mesh_res * 3, sim_box_span / 10)` |
-| Metal | `spacing = mesh_res * 5` (very coarse — thirds rule and SmoothMeshLines add detail) |
-| Nonmetal (substrate) | `spacing = mesh_res / 4`, forced to ≥ `substrate_cells + 1` in z |
+---
 
-#### Extended Linspace for Thin Metals (x/y dimension, line 538)
+## 6. Mesh generation per region (`_gen_mesh_for_bounded_types` → `_gen_mesh_in_bounds`)
 
-For metal regions narrower than the threshold that are NOT in the z-dimension,
-the standard metal-density + thirds-rule approach produces poor results
-(the thirds-rule shifts can overshoot or leave only 2 boundary lines).
-Instead:
+This is the heart of the file. It iterates regions sorted **by size, smallest first** (`_sort_bounded_types`, lines 207-213) — the idea is that small/thin regions are seeded first, then larger regions can be told "there's already a line nearby, don't go coarser than that".
+
+For each region it calls `_gen_mesh_in_bounds(dim, lower, upper, line_below, line_above, btype)` with the nearest already-placed line on each side (queried via `_line_below` / `_line_above` at lines 739-771 — they bisect `self.mesh_lines` and step past any line that coincides with the boundary).
+
+### 6.1 Min-spacing guard (line 479-480)
+`_min_spacing(dist) = dist / (min_lines - 1)` enforces at least `min_lines=5` cells across any region, no matter how big.
+
+### 6.2 Lower / upper spacing caps (lines 482-516)
+For each side, the per-region spacing is:
+```python
+spacing = min(target_res, min_spacing(dist))
+if neighbour_already_meshed:
+    spacing = min(spacing, factor * neighbour_cell_size)
+```
+- `target_res` is `_metal_res` for metal regions, `_mesh_res` otherwise.
+- The neighbour cap uses a **factor**:
+  - `1.0` by default,
+  - `1.5` if the boundary is a metal↔nonmetal interface and the line is **not** fixed (so the cell growth at dielectric edges is gentle),
+  - `3.0` if the boundary is a metal↔air or metal↔metal interface and the line is not fixed (air interfaces can grow much faster because there's no field singularity to resolve).
+
+This factor logic is computed in `_lower_spacing`/`_upper_spacing` but — as far as I can see in the file — the returned `lower_spacing` / `upper_spacing` values are *not actually consumed* in `_gen_mesh_in_bounds`. The seeding uses `np.linspace(lower, upper, num)` where `num` is decided heuristically (§6.3). This is likely a **latent helper** that is currently dormant; the neighbour-cap idea is implemented differently inside the per-region logic. Worth flagging — see §10.
+
+### 6.3 Number-of-points heuristic (lines 545-576)
+The branch on region size (`dist` = upper − lower):
+
+| Condition | Region type | Action |
+|---|---|---|
+| `dist < thirds_cell` (2D dim=1) | metal & not dim=2 | **extended seeding** (lines 547-560): expand `lower` and `upper` by `offset_out = metal_res/6`, linspace across the expanded span with `~offset_out * 0.6` cell size, then **drop the two original boundary lines** so the result contains only the new interior points. Used for ultra-thin metal lines. |
+| `dist < thirds_cell` (1D dim=1) | any other | `num = 2` → just the two endpoints. |
+| `dist < 2*thirds_cell` (dim=1) | metal | same as the first row (treats thin metals on the y-dim specially). |
+| else | **air** | `air_spacing = max(mesh_res*3, sim_box/10)`; `num = max(ceil(dist/air_spacing)+1, min_lines)` |
+| else | **metal** | `num = max(min_lines, ceil(dist/(metal_res*5))+1)` |
+| else | **nonmetal** (substrate) | `num = max(min_lines, ceil(dist/(mesh_res/4))+1)`, **and for z-axis**: `num = max(substrate_cells+1, num)` — this forces ≥ 5 cells through the substrate thickness by default. |
+
+Constants used:
+- `offset_in = metal_res / 12`
+- `offset_out = metal_res / 6`
+- `thirds_cell = offset_in + offset_out = metal_res / 4`
+
+For dim=2 (z), thin-metal regions are special-cased with `skip_thirds` (line 542) — when the metal is thinner than the thirds cell, the algorithm **does not** apply the offset logic, and instead emits a single midpoint line (line 580) so extremely thin foils (e.g. copper cladding) don't generate unnecessary inner lines.
+
+### 6.4 The "thirds rule" (lines 587-647)
+
+The thirds rule is the textbook openEMS trick: at a metal boundary, place mesh lines at
+- `+1/3 * cell_size` *inside* the metal, and
+- `+2/3 * cell_size` *outside* the metal,
+
+so the cell edges are **never on the conductor surface** and the field can be interpolated. Here it's implemented as **offsets from the metal boundary** rather than from a target cell size — the cell size becomes `offset_in + offset_out = metal_res/4`, which is the desired sub-cell size at the metal edge.
+
+For each metal region:
+
+1. **Scale offsets for thin metals** (lines 588-591):
+   ```python
+   scale = min(1.0, dist / thirds_cell)
+   adj_in  = offset_in  * scale
+   adj_out = offset_out * scale
+   ```
+   so for metals thinner than `metal_res/4`, the inner and outer thirds are scaled down proportionally.
+
+2. **Move the seeding bounds inward** (lines 595-614) for any non-fixed, non-sim-box boundary:
+   - default: `lower += adj_in` (1/3 inside),
+   - **but** if the region *below* this metal is also metal (back-to-back metals share a face, e.g. two substrates around a shared ground plane), use `adj_out` instead — there is no field to resolve on the other side, so the line can be placed farther out.
+
+3. **Re-linspace between the new bounds** if they moved (lines 616-619).
+
+4. **Drop a 2/3-outside fixed line into the adjacent region** (lines 622-641), unless the neighbour is also metal:
+   ```python
+   ol = orig_lower - offset_out   # 2/3 outside the metal, into the dielectric
+   add_fixed_line(dim, ol); add_mesh_line(dim, ol)
+   ```
+   This is how the **outer** thirds line gets placed when the metal's own region doesn't seed it. The check `is_lower_metal` prevents duplicating the line in the metal-on-both-sides case (where the neighbour metal has already provided the corresponding line on its own side).
+
+5. **Mark the adjusted `lines[0]` and `lines[-1]` as fixed** (lines 644-647) so smoothing won't move them.
+
+### 6.5 Thirds rule for nonmetal regions (lines 649-668)
+If the *nonmetal* region is adjacent to a metal boundary, push its seeding bounds *outward* by the outer offset:
+```python
+if is_metal_bound(lower): lower += offset_adj
+if is_metal_bound(upper): upper -= offset_adj
+```
+where `offset_adj`:
+- equals `offset_out` for normal metals,
+- for **thin metals** (`metal_t < thirds_cell`): `min(offset_out, max(offset_in, metal_t*3))` — so the offset never exceeds the half cell on the air side, and never undershoots the inner offset.
+
+Then re-linspace between the shrunk bounds and emit the new lines.
+
+### 6.6 Why both metal-side and nonmetal-side adjustments?
+After metal processing, the metal region's linspace sits *inside* `[lower+adj_in, upper-adj_in]` (or further out for metal-on-metal). The nonmetal region's linspace sits *outside* `[lower+offset_out, upper-offset_out]`. Together with the 2/3-outside fixed line dropped by the metal side (step 4), this yields the canonical four-line neighbourhood at a metal interface (1/3 in, 2/3 in, 2/3 out, …). The fixed-line tags guarantee smoothing keeps this structure.
+
+---
+
+## 7. Smoothing (`_smooth_non_fixed_segments`, lines 676-694)
+
+After every region is seeded, the code calls CSXCAD's `SmoothMeshLines`:
 
 ```python
-ext_lower = lower - offset_out
-ext_upper = upper + offset_out
-num = max(4, ceil(total_span / (offset_out * 0.6)) + 1)
-lines = np.linspace(ext_lower, ext_upper, num)
-# Remove any line that lands exactly on the metal boundary
-lines = filter(lambda l: not fp_equalp(l, lower) and not fp_equalp(l, upper), lines)
+smoothed = SmoothMeshLines(all_lines, mesh_res, smooth_ratio)
 ```
 
-This spans from `offset_out` outside one side to `offset_out` outside the
-other, producing a smooth transition from exterior → metal → exterior in a
-single linspace. Lines that would land exactly on the metal boundary are
-dropped (preserving the thirds rule constraint that no line is at the
-edge). The density `offset_out * 0.6` provides ~5-7 points across the span
-for typical thin metals.
+- `mesh_res` is the **target cell size**,
+- `smooth_ratio=1.5` is the **max ratio** between adjacent cells,
+- `SmoothMeshLines` only *adds* new lines, never moves or removes the input points. So all fixed lines (thirds-rule pins, zero-thickness primitive planes, LinPolygon vertex coordinates) are preserved.
+- It's applied per-dimension with the same `1.5` ratio.
 
-Threshold for entry:
+The role of smoothing is to **stitch together** the regions of different densities produced in step 6 — the coarse air region and the fine metal-edge region must transition smoothly so FDTD dispersion is bounded. Because fixed lines are inputs, smoothing can only add cells *between* them.
 
-| Dimension | Threshold | Rationale |
-|-----------|-----------|-----------|
-| x (dim=0) | `thirds_cell` | Narrow transverse features |
-| y (dim=1) | `2 × thirds_cell` | Wider threshold for stub-end transitions |
-| z (dim=2) | (excluded) | Uses `skip_thirds` instead |
+A `try/except` wraps the call so a CSXCAD-version mismatch doesn't kill the pipeline; on failure the unsmoothed lines stand.
 
-### Step 4: Initial Linspace (line 563)
+---
+
+## 8. Writing the grid back to CSXCAD (`_set_mesh_from_lines`, lines 708-716)
 
 ```python
-lines = np.linspace(lower, upper, num)
+grid = csx.GetGrid()
+grid.SetDeltaUnit(unit)
+for i in range(3):
+    grid.ClearLines(i)
+for dim, line in enumerate(self.mesh_lines[dim]):
+    grid.AddLine('xyz'[dim], fp_nearest(line))
 ```
 
-Uniform point distribution. All subsequent steps shift boundaries and
-regenerate the linspace.
+`SetDeltaUnit` sets the *unit* used by the grid (default `1e-3` mm). Lines are added one at a time so CSXCAD can sort/deduplicate internally; we pre-round to 10 decimals to match the helper precision.
 
-### Step 5: Metal Thirds Rule (lines 572–621)
+---
 
-For metal regions that are NOT handled by extended linspace or skip_thirds:
+## 9. State the algorithm accumulates on `self`
 
-1. **Scale offsets** for thin metals: `scale = min(1.0, dist / thirds_cell)`
-   Reduces `adj_in` and `adj_out` proportionally for metals thinner than
-   `thirds_cell`.
+| attribute | meaning |
+|---|---|
+| `sim_bounds[dim]` | final `[lower, upper]` per axis (sim box after geometry expansion) |
+| `ranges_meshed[dim]` | list of `[lo, hi]` intervals already populated, used by `_pos_meshed` |
+| `metal_bounds[dim]` | every metal region's `[lo, hi]` endpoints, used by `_is_metal_bound` |
+| `fixed_lines[dim]` | locked positions: zero-thickness planes, LinPoly vertices, thirds-rule anchors |
+| `mesh_lines[dim]` | the final per-axis mesh (sorted, deduplicated) |
+| `bounded_types[dim]` | the region list with types (cached for queries) |
+| `smallest_res` | currently set to `_metal_res`; no further use observed in this file |
+| `self.mesh` | alias for `csx.GetGrid()` |
 
-2. **Shift lower boundary**:
-   - Default: `adj_lower = adj_in` (1/3 cell inside)
-   - If region below is meshed metal: `adj_lower = adj_out` (2/3 cell inward
-     — the adjacent metal's external line already provides the 2/3 offset)
-   - Skip if at simulation box edge or already a fixed line
+---
 
-3. **Shift upper boundary**: Same logic.
+## 10. Key design decisions & things worth knowing
 
-4. **Regenerate linspace** if boundaries were shifted, with at least 2 points.
+1. **Sort regions by size first** (`_sort_bounded_types`) so small thin features are meshed before the surrounding bulk; this lets `_line_below`/`_line_above` see a neighbour before the larger region is seeded, so the spacing cap kicks in correctly.
 
-5. **Add external lines** (`lower - offset_out`, `upper + offset_out`) in the
-   adjacent air/nonmetal region. These are fixed lines. Skip if the adjacent
-   region is also metal (its own thirds rule provides the external line).
+2. **Smallest-AABB-wins classification with metal tiebreak** (`_type_at_pos`) — robust to overlapping primitives (e.g. a thin substrate inside a thicker air box, or a metal patch on top of substrate that is *also* inside the air box).
 
-6. **Mark adjusted boundary lines as fixed** to prevent smoothing from
-   moving them.
+3. **Two-sided thirds rule with thin-metal scaling** — the algorithm correctly handles metals thinner than the natural thirds cell, metals sitting on the sim-box boundary (no thirds line emitted outside the box), and metal-on-metal interfaces (no duplicate outer line).
 
-### Step 6: Nonmetal Thirds Rule (lines 623–642)
+4. **Substrate override** — for the z-axis (`dim==2`), the nonmetal region is forced to have at least `substrate_cells + 1` lines, guaranteeing a minimum number of vertical mesh cells through the dielectric regardless of the thickness-based heuristic.
 
-For nonmetal and air regions adjacent to metal boundaries:
+5. **Air is treated very coarsely** — `air_spacing = max(mesh_res*3, sim_box/10)` means the air region is sampled at ≥ 3× the substrate resolution, with a lower bound of one tenth of the sim box (so a tiny patch in a huge sim box still has at least 10 cells across). Combined with smoothing, the air gradually densifies near the structure.
+
+6. **PREC=10 round-trip on every input** — every float that enters a comparison, an `insort`, or the CSXCAD grid is rounded to 10 decimals. This is what makes "the vertex at `x=3.0`" align with "the box's edge at `x=3.0`" even though they were generated by different code paths.
+
+7. **LinPolygon special path** — without vertex extraction, a triangular patch with vertices at `(0,0), (10,0), (0,10)` would only contribute AABB corners, so the diagonal would have no mesh alignment. `_get_linpoly_vertex_bounds` pins all vertices as fixed lines, which is what makes slanted edges resolvable.
+
+8. **Sim box is grown automatically** — the user-supplied `simulation_box` is a *minimum*; if geometry sticks out, it expands by `max(λ₀/2, 15% × span)`. The check is one-way: the sim box can only grow, not shrink. If the geometry exceeds the sim box the user gave, a `ValueError` is raised (lines 375-380).
+
+9. **Smoothing is permissive-fail** — `SmoothMeshLines` is wrapped in `try/except`, so a bad line set won't crash the mesher; it'll just skip smoothing for that axis.
+
+10. **Latent helper** — `_lower_spacing` / `_upper_spacing` compute neighbour-aware spacing caps but their results are never used in `_gen_mesh_in_bounds`. The neighbouring-cell cap is currently implemented implicitly via the "drop a 2/3-outside fixed line" branch and via smoothing. If you wanted to fix the apparent dead code, those helpers could be the basis for tightening `num` directly inside the linspace.
+
+11. **`_line_below` / `_line_above` query helpers** (lines 739-771) — they bisect `self.mesh_lines` to find the nearest line *strictly below* or *strictly above* the given position. They walk past coincident lines so the "below" of position `3.0` is the line at `2.9`, not the `3.0` itself. This is what makes the seeding aware of lines that have already been placed at a boundary.
+
+12. **`_metal_thickness_at` is the bridge to thin-metal handling on the dielectric side** — the nonmetal branch in §6.5 needs to know how thick the adjacent metal is to decide whether to scale down its `offset_adj`. This is the only place where the metal's *thickness* (not just its boundary) is used.
+
+---
+
+## 11. Quick reference: the data flow
 
 ```
-if lower is a metal bound:
-    metal_t = thickness of that metal region
-    if metal_t < thirds_cell:
-        offset_adj = min(offset_out, max(offset_in, metal_t * 3))
-    else:
-        offset_adj = offset_out
-    lower += offset_adj
-
-if upper is a metal bound:
-    same logic for upper
-    upper -= offset_adj
-
-if either shift happened:
-    regenerate linspace with at least 2 points
+csx.GetAllPrimitives()
+        |
+        v
+ _physical_prims()  -- filters to Metal/Material only
+        |
+        +--> _set_fixed_lines()         -- zero-thickness planes, LinPoly vertices
+        |
+        +--> _collect_all_bounds()      -- AABBs + LinPoly vertex coords
+        |
+        +--> _set_sim_bounds_from_geometry() -- grow box by max(lambda0/2, 15%)
+        |
+        +--> _bounded_types()           -- regions + types via _type_at_pos
+        |
+        +--> _set_expanded_bounds()     -- prepend/append Type.air regions
+        |
+        +--> _set_metal_bounds()        -- record metal boundaries
+        |
+        +--> _sort_bounded_types()      -- smallest regions first
+        |
+        +--> _gen_mesh_for_bounded_types()
+        |       +-- _gen_mesh_in_bounds()   -- linspace + thirds rule per region
+        |
+        +--> _smooth_non_fixed_segments() -- CSXCAD SmoothMeshLines
+        |
+        +--> _set_mesh_from_lines()     -- write back to csx.GetGrid()
 ```
-
-The `metal_t * 3` cap prevents the shift from pushing too far past a thin
-adjacent metal trace (e.g., a 0.035mm copper trace caps the shift at
-0.105mm). The `max(offset_in, ...)` guard ensures the gap doesn't shrink
-below 1/3 of a mesh cell, which would unnecessarily limit the CFL time
-step.
-
-**For very thick metals** (metal_t ≥ thirds_cell): the full `offset_out`
-(= 2/3 of a cell) is used, giving the standard 1/3-inside + 2/3-outside
-FDTD cell at the boundary.
-
-### Step 7: Add Lines to Mesh (line 644)
-
-All lines for the region are inserted, deduplicated with `_remove_dups`,
-and the region is recorded in `ranges_meshed` for subsequent regions.
-
----
-
-## Smoothing (`_smooth_non_fixed_segments`, line 650)
-
-Calls CSXCAD's `SmoothMeshLines(all_lines, mesh_res, smooth_ratio=1.5)`.
-
-**SmoothMeshLines preserves all input points** — it only adds intermediate
-points where adjacent cell ratios exceed 1.5. This ensures:
-
-- Fixed lines (thirds-rule boundaries, zero-thickness primitives) stay exact
-- The transition from coarse air mesh to fine substrate/metal mesh is gradual
-- The global mesh resolves field variations without abrupt cell-size changes
-
----
-
-## Line Management
-
-### `_remove_dups` (line 135)
-
-Deduplicates with a priority rule:
-- If two lines are equal (within `fp_equalp`) and neither is fixed:
-  keep the first occurrence.
-- If two lines are equal and one is fixed: **keep the fixed one**,
-  delete the non-fixed one.
-
-This ensures thirds-rule boundary lines take precedence over linspace lines
-that happen to land at the same position.
-
-### `_add_lines_to_mesh` (line 676)
-
-Inserts each line via `insort_left` (maintains sorted order), then
-deduplicates with `_remove_dups`.
-
-### `_set_mesh_from_lines` (line 684)
-
-Writes all mesh lines to the CSXCAD grid, rounding each to PREC via
-`fp_nearest`.
-
----
-
-## Key Tuning Parameters
-
-| Parameter | Location | Default | Effect |
-|-----------|----------|---------|--------|
-| `mesh_resolution_factor` | `sim_params.py:125` | 20 | Coarser = larger `mesh_res` → fewer xy cells, less accuracy |
-| `metal_mesh_resolution_factor` | `sim_params.py:126` | 60 | Coarser = larger metal spacing |
-| `substrate_cells` | `sim_params.py:114` | 4 | Minimum FDTD cells through substrate thickness |
-| `min_lines` | `mesh.py:270` | 5 | Minimum lines per bounded region |
-| `smooth_ratio` | `mesh.py:267` | 1.5 | Max adjacent cell ratio for SmoothMeshLines |
-
----
-
-## Common Pitfalls
-
-### 1. No mesh line at the midpoint of copper thickness
-
-The copper trace (and ground plane) in z are handled by `skip_thirds`,
-which adds exactly one line at the midpoint. If you see no midpoint line,
-check that `dim == 2` and `dist < thirds_cell`. If the extended linspace
-path is taken instead (`is_metal and dim != 2`), the z-dimension metal
-gets 6+ extended lines instead of 1 midpoint line.
-
-### 2. Very dense lines inside the substrate
-
-Three possible causes:
-1. `substrate_cells` is too high → reduces to 4 or lower
-2. Extended linspace from copper/ground spills lines into the substrate
-   → check that dim==2 is excluded from extended linspace
-3. SmoothMeshLines adds transition points between coarse air and fine
-   substrate → normal behavior, controlled by `smooth_ratio`
-
-### 3. Lines at metal boundaries (thirds rule violation)
-
-The thirds rule requires no mesh line exactly at a metal edge. The code
-ensures this in two ways:
-- Metal thirds rule: shifts boundaries inward by `offset_in`/`offset_out`
-- Extended linspace: filters out any line that `fp_equalp` considers on
-  the boundary
-- Nonmetal thirds rule: shifts boundaries outward by `offset_adj`
-
-If boundary lines appear, check `fp_equalp` precision — a line at
-`0.0000000001` and a boundary at `0.0` are NOT equal at PREC=10, but
-they are effectively at the boundary for FDTD.
-
-### 4. Slow simulation due to very fine cells
-
-The CFL time step is limited by the **minimum cell size in any dimension**.
-The most common culprit is the gap between the substrate's first/last mesh
-line and an adjacent metal `skip_thirds` line. This gap is controlled by
-the nonmetal thirds rule `offset_adj` formula. Increasing
-`max(offset_in, metal_t * 3)` ensures a larger minimum gap.
-
----
-
-## Algorithm History (for maintainers)
-
-- **Extended linspace for thin metals** (dim 0 and 1): Replaced the previous
-  `adj_in` + 3-interior-lines + external-lines approach. A single linspace
-  from `lower-offset_out` to `upper+offset_out` with boundary-line filtering
-  produces smoother transitions and avoids boundary hits by construction.
-
-- **dim==1 threshold widened to 2×thirds_cell**: The y-dimension stub-end
-  region (~1.37mm) falls between `thirds_cell` and `2×thirds_cell` at the
-  default mesh resolution. The widened threshold catches these near-threshold
-  regions that otherwise get a poor 2-line mesh.
-
-- **dim==2 excluded from extended linspace**: The z-dimension has its own
-  correct handler (`skip_thirds`, single midpoint line for metals thinner
-  than `thirds_cell`). The extended linspace would spill extra lines into
-  adjacent substrate/air regions.
-
-- **Nonmetal thirds rule thin-metal clamp**: `min(offset_out, max(offset_in,
-  metal_t * 3))` replaces the earlier `min(offset_out, metal_t * 3)`. The
-  `max(offset_in, ...)` ensures a minimum boundary gap of 1/3 cell for CFL
-  performance, even when the adjacent metal is extremely thin.
-
-- **substrate_cells reduced to 4**: The default of 8 forced unnecessarily
-  many z-cells through the substrate. 4 is sufficient for most geometries.

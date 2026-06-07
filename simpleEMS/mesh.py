@@ -29,7 +29,12 @@ class Type(Enum):
 
 
 class BoundedType:
-    def __init__(self, prop_type: Type, lower_bound: float, upper_bound: float) -> None:
+    def __init__(
+        self,
+        prop_type: Type,
+        lower_bound: float,
+        upper_bound: float,
+    ) -> None:
         self.prop_type = prop_type
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
@@ -73,7 +78,12 @@ def fp_lep(val1: float, val2: float) -> bool:
 
 def _prim_metalp(prim: CSPrimitives) -> bool:
     type_str = prim.GetProperty().GetTypeString()
-    return type_str in ("Metal", "ConductingSheet", "LumpedElement")
+    return type_str in (
+        "Metal",
+        "ConductingSheet",
+        "LumpedElement",
+        "Excitation",
+    )
 
 
 def _prim_materialp(prim: CSPrimitives) -> bool:

@@ -33,9 +33,14 @@ from openEMS.nf2ff import nf2ff
 from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort
 
-from .calc import microstrip_width_from_impedance, patch_dims, phase_shift_length
+from .calc import (
+    microstrip_width_from_impedance,
+    patch_dims,
+    calculate_electrical_length_mm,
+)
 from .console import console
 from .sim_params import SimParams
+from .mesh import Mesh
 from .sim_tools import SimTools, mm_to_m
 
 # ----------------------------
@@ -93,7 +98,7 @@ class InsetFedPatchParams(SimParams):
 
     resonant_freq: float
     span_freq: float
-    ang_length_deg: int = 90
+    elec_length_deg: int = 90
     patch_length_mm: float = field(init=False)
     patch_width_mm: float = field(init=False)
     inset_length_mm: float = field(init=False)
@@ -192,8 +197,8 @@ class InsetFedPatchParams(SimParams):
             self.resonant_freq,
         )
 
-        self.feed_length_mm = phase_shift_length(
-            self.ang_length_deg,
+        self.feed_length_mm = calculate_electrical_length_mm(
+            self.elec_length_deg,
             er_eff,
             self.resonant_freq,
         )
@@ -486,7 +491,7 @@ class InsetFedPatchAntenna(PatchAntenna):
         )
         return port
 
-    def create_mesh(self) -> None:
+    def create_mesh(self, manual_mesh: bool = False) -> None:
         """
         Generate an FDTD mesh for the simulation domain.
 
@@ -500,52 +505,70 @@ class InsetFedPatchAntenna(PatchAntenna):
         -------
         None
         """
-        mesh = self.CSX.GetGrid()
-        mesh.SetDeltaUnit(self.params.unit)
+        if manual_mesh is True:
+            mesh = self.CSX.GetGrid()
+            mesh.SetDeltaUnit(self.params.unit)
 
-        mesh.AddLine(
-            "x", [-self.params.simulation_box[0] / 2, self.params.simulation_box[0] / 2]
-        )
-        mesh.AddLine(
-            "y", [-self.params.simulation_box[1] / 2, self.params.simulation_box[1] / 2]
-        )
-        mesh.AddLine(
-            "z",
-            [-self.params.simulation_box[2] / 3, self.params.simulation_box[2] * 2 / 3],
-        )
-        # Add mesh lines for substrate
-        mesh.AddLine(
-            "x",
-            [-self.params.substrate_width_mm / 2, self.params.substrate_width_mm / 2],
-        )
-        mesh.AddLine(
-            "y",
-            [-self.params.substrate_length_mm / 2, self.params.substrate_length_mm / 2],
-        )
-        # Add mesh lines for patch and feed
-        mesh.AddLine("x", -self.params.patch_width_mm / 2 - self.params.thirds_rule)
-        mesh.AddLine("x", self.params.patch_width_mm / 2 + self.params.thirds_rule)
-        mesh.AddLine("y", -self.params.patch_length_mm / 2 - self.params.thirds_rule)
-        mesh.AddLine("y", self.params.patch_length_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "x",
+                [-self.params.simulation_box[0] / 2, self.params.simulation_box[0] / 2],
+            )
+            mesh.AddLine(
+                "y",
+                [-self.params.simulation_box[1] / 2, self.params.simulation_box[1] / 2],
+            )
+            mesh.AddLine(
+                "z",
+                [
+                    -self.params.simulation_box[2] / 3,
+                    self.params.simulation_box[2] * 2 / 3,
+                ],
+            )
+            # Add mesh lines for substrate
+            mesh.AddLine(
+                "x",
+                [
+                    -self.params.substrate_width_mm / 2,
+                    self.params.substrate_width_mm / 2,
+                ],
+            )
+            mesh.AddLine(
+                "y",
+                [
+                    -self.params.substrate_length_mm / 2,
+                    self.params.substrate_length_mm / 2,
+                ],
+            )
+            # Add mesh lines for patch and feed
+            mesh.AddLine("x", -self.params.patch_width_mm / 2 - self.params.thirds_rule)
+            mesh.AddLine("x", self.params.patch_width_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "y", -self.params.patch_length_mm / 2 - self.params.thirds_rule
+            )
+            mesh.AddLine("y", self.params.patch_length_mm / 2 + self.params.thirds_rule)
 
-        mesh.AddLine("x", -self.params.feed_width_mm / 2 - self.params.thirds_rule)
-        mesh.AddLine("x", self.params.feed_width_mm / 2 + self.params.thirds_rule)
-        mesh.AddLine("y", -self.params.patch_length_mm / 2 - self.params.feed_length_mm)
-        mesh.AddLine(
-            "y", -self.params.patch_length_mm / 2 + self.params.inset_length_mm
-        )
+            mesh.AddLine("x", -self.params.feed_width_mm / 2 - self.params.thirds_rule)
+            mesh.AddLine("x", self.params.feed_width_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "y", -self.params.patch_length_mm / 2 - self.params.feed_length_mm
+            )
+            mesh.AddLine(
+                "y", -self.params.patch_length_mm / 2 + self.params.inset_length_mm
+            )
 
-        mesh.AddLine(
-            "z",
-            np.linspace(
-                -self.params.copper_thickness_mm / 2,
-                self.params.substrate_thickness_mm
-                + self.params.copper_thickness_mm / 2,
-                self.params.substrate_cells,
-            ),
-        )
+            mesh.AddLine(
+                "z",
+                np.linspace(
+                    -self.params.copper_thickness_mm / 2,
+                    self.params.substrate_thickness_mm
+                    + self.params.copper_thickness_mm / 2,
+                    self.params.substrate_cells,
+                ),
+            )
 
-        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+        else:
+            Mesh(self.CSX, self.params)
 
     def build_inset_fed_patch_antenna(self) -> tuple[LumpedPort, nf2ff]:
         """
@@ -796,7 +819,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
         )
         return port
 
-    def create_mesh(self) -> None:
+    def create_mesh(self, manual_mesh: bool = False) -> None:
         """
         Generate an FDTD mesh for the simulation domain.
 
@@ -810,43 +833,53 @@ class ProbeFedPatchAntenna(PatchAntenna):
         -------
         None
         """
-        mesh = self.CSX.GetGrid()
-        mesh.SetDeltaUnit(self.params.unit)
+        if manual_mesh is True:
+            mesh = self.CSX.GetGrid()
+            mesh.SetDeltaUnit(self.params.unit)
 
-        mesh.AddLine("y", self.params.probe_pos_mm)
-        mesh.AddLine(
-            "x",
-            np.linspace(
-                0,
-                1,
-                6,
-            ),
-        )
-        mesh.AddLine(
-            "x", [-self.params.simulation_box[0] / 2, self.params.simulation_box[0] / 2]
-        )
-        mesh.AddLine(
-            "y", [-self.params.simulation_box[1] / 2, self.params.simulation_box[1] / 2]
-        )
-        mesh.AddLine(
-            "z",
-            [-self.params.simulation_box[2] / 3, self.params.simulation_box[2] * 2 / 3],
-        )
-        mesh.AddLine("x", -self.params.patch_width_mm / 2 - self.params.thirds_rule)
-        mesh.AddLine("x", self.params.patch_width_mm / 2 + self.params.thirds_rule)
-        mesh.AddLine("y", -self.params.patch_length_mm / 2 - self.params.thirds_rule)
-        mesh.AddLine("y", self.params.patch_length_mm / 2 + self.params.thirds_rule)
-        mesh.AddLine(
-            "z",
-            np.linspace(
-                -self.params.copper_thickness_mm / 2,
-                self.params.substrate_thickness_mm
-                + self.params.copper_thickness_mm / 2,
-                self.params.substrate_cells,
-            ),
-        )
+            mesh.AddLine("y", self.params.probe_pos_mm)
+            mesh.AddLine(
+                "x",
+                np.linspace(
+                    0,
+                    1,
+                    6,
+                ),
+            )
+            mesh.AddLine(
+                "x",
+                [-self.params.simulation_box[0] / 2, self.params.simulation_box[0] / 2],
+            )
+            mesh.AddLine(
+                "y",
+                [-self.params.simulation_box[1] / 2, self.params.simulation_box[1] / 2],
+            )
+            mesh.AddLine(
+                "z",
+                [
+                    -self.params.simulation_box[2] / 3,
+                    self.params.simulation_box[2] * 2 / 3,
+                ],
+            )
+            mesh.AddLine("x", -self.params.patch_width_mm / 2 - self.params.thirds_rule)
+            mesh.AddLine("x", self.params.patch_width_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "y", -self.params.patch_length_mm / 2 - self.params.thirds_rule
+            )
+            mesh.AddLine("y", self.params.patch_length_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "z",
+                np.linspace(
+                    -self.params.copper_thickness_mm / 2,
+                    self.params.substrate_thickness_mm
+                    + self.params.copper_thickness_mm / 2,
+                    self.params.substrate_cells,
+                ),
+            )
 
-        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+        else:
+            Mesh(self.CSX, self.params)
 
     def build_probe_fed_patch_antenna(self) -> tuple[LumpedPort, nf2ff]:
         """

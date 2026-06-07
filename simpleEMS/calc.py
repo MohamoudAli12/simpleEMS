@@ -32,8 +32,8 @@ from scipy.integrate import quad
 from .sim_tools import m_to_mm, mm_to_m
 
 
-def phase_shift_length(
-    phase_shift: float,
+def calculate_electrical_length_mm(
+    elec_length_deg_rad: float,
     eps_eff: float,
     frequency: float,
     radians: bool = False,
@@ -58,7 +58,7 @@ def phase_shift_length(
     float
         Required length in mm.
     """
-    theta = phase_shift if radians else np.deg2rad(phase_shift)
+    theta = elec_length_deg_rad if radians else np.deg2rad(elec_length_deg_rad)
 
     # Guided phase constant (rad/m)
     beta = 2 * np.pi * frequency * np.sqrt(eps_eff) / C0

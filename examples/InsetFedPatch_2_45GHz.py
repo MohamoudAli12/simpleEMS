@@ -73,9 +73,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return optimize_s11(
             network_params.freqs,
             network_params.s11,
-            # target_freq=params.resonant_freq,
-            freq_band=(2.4e9, 2.48e9),
-            mode="threshold",
+            target_freq=params.resonant_freq,
         )
 
     if not (sweep or optimize):

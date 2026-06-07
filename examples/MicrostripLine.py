@@ -6,7 +6,6 @@ from simpleEMS import (
     MicrostripLine,
     MicrostripLineParams,
     setup_simulation,
-    Mesh,
 )
 
 # IMPORTS
@@ -20,7 +19,6 @@ params = MicrostripLineParams(
     substrate_eps_r=4.4,
     substrate_tand=0.001,
     charac_imp=50,
-    metal_mesh_resolution_factor=30,
 )
 # PARAMS
 
@@ -35,8 +33,7 @@ microstrip.create_substrate()
 microstrip.create_ground()
 microstrip.create_microstrip_line()
 port = microstrip.create_ports()
-# microstrip.create_mesh()
-Mesh(CSX, params)
+microstrip.create_mesh()
 microstrip.add_field_dump(CSX, params)
 microstrip.write_and_show_structure(FDTD)
 # BUILD

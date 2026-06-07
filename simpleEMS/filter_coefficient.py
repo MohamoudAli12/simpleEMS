@@ -375,7 +375,7 @@ def get_filter_coefficient(
         If filter_response is not one of the supported types.
     """
     if ripple_db is None:
-        ripple_db = 3
+        ripple_db = 0.1
 
     t = filter_response.lower()
     if t == "bessel":
@@ -385,4 +385,4 @@ def get_filter_coefficient(
     elif t == "chebyshev":
         return chebyshev_value(index, filter_order, ripple_db)
     else:
-        raise ValueError(f"Unsupported filter type: {filter_response}")
+        raise ValueError(f"Unsupported filter response: {filter_response}")

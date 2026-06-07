@@ -3,12 +3,12 @@
 
 from pathlib import Path
 
-import numpy as np
 
 from simpleEMS import (
     InsetFedPatchAntenna,
     InsetFedPatchParams,
     optimize_s_params,
+    optimize_s11,
     param_sweep,
     setup_simulation,
 )
@@ -22,9 +22,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_eps_r=3.00,
         substrate_tand=0.001,
         charac_imp=50.0,
-        end_criteria=1e-5,
-        mesh_resolution_factor=20,
-        metal_mesh_resolution_factor=50,
     )
 
     # parameters values after optimization
@@ -71,12 +68,11 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             params.charac_imp,
             output_path,
         )
-
-        freqs = network_params.freqs
-        s11 = network_params.s11
-        s11 = 20.0 * np.log10(np.abs(s11))
-        idx = (np.abs(freqs - params.resonant_freq)).argmin()
-        return s11[idx]
+        return optimize_s11(
+            freqs,
+            network_params.s11,
+            params.resonant_freq,
+        )
 
     if not (sweep or optimize):
         patch.run_simulation(FDTD, output_path)

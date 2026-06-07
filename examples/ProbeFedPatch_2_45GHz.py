@@ -10,6 +10,7 @@ from simpleEMS import (
     optimize_s_params,
     param_sweep,
     setup_simulation,
+    Mesh,
 )
 
 
@@ -42,10 +43,11 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     port = patch.create_port()
     patch.create_substrate()
     patch.create_ground()
-    patch.create_mesh()
+    # patch.create_mesh()
+    Mesh(CSX, params)
     patch.add_field_dump(CSX, params, output_path)
     nf2ff = patch.create_nf2ff(FDTD)
-    # patch.write_and_show_structure(FDTD, output_path)
+    patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:

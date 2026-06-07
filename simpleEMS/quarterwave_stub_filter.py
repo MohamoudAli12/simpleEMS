@@ -34,7 +34,8 @@ from openEMS.ports import LumpedPort
 
 from simpleEMS.sim_tools import SimTools
 from .sim_params import SimParams
-from .calc import microstrip_width_from_impedance, phase_shift_length
+from .mesh import Mesh
+from .calc import microstrip_width_from_impedance, calculate_electrical_length_mm
 from .filter_coefficient import get_filter_coefficient
 
 
@@ -199,7 +200,7 @@ class QuarterWaveFilterParams(SimParams):
             self.substrate_eps_r,
             self.centre_freq,
         )
-        length_shunt_mm = phase_shift_length(
+        length_shunt_mm = calculate_electrical_length_mm(
             self.elec_length_deg,
             er_eff_shunt,
             self.centre_freq,
@@ -225,7 +226,7 @@ class QuarterWaveFilterParams(SimParams):
             self.main_freq,
         )
 
-        self.line_length_mm = phase_shift_length(
+        self.line_length_mm = calculate_electrical_length_mm(
             self.elec_length_deg,
             er_eff,
             self.main_freq,
@@ -505,7 +506,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
 
         return [port_1, port_2]
 
-    def create_mesh(self) -> None:
+    def create_mesh(self, manual_mesh: bool = False) -> None:
         """
         Generate an FDTD mesh for the band-stop filter simulation domain.
 
@@ -518,93 +519,100 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         -------
         None
         """
-        mesh = self.CSX.GetGrid()
-        mesh.SetDeltaUnit(self.params.unit)
-        total_length = _get_total_length(
-            self.params.filter_order,
-            self.params.line_length_mm,
-            self.params.shunt_line_width_mm,
-        )
+        if manual_mesh is True:
+            mesh = self.CSX.GetGrid()
+            mesh.SetDeltaUnit(self.params.unit)
+            total_length = _get_total_length(
+                self.params.filter_order,
+                self.params.line_length_mm,
+                self.params.shunt_line_width_mm,
+            )
 
-        mesh.AddLine(
-            "x",
-            [
-                -self.params.simulation_box[0] - self.params.lambda0 / 2,
-                self.params.simulation_box[0] + self.params.lambda0,
-            ],
-        )
-        mesh.AddLine(
-            "y",
-            [
-                -self.params.simulation_box[1] - self.params.lambda0 / 2,
-                self.params.simulation_box[1] + self.params.lambda0,
-            ],
-        )
-        mesh.AddLine(
-            "z",
-            [-self.params.simulation_box[2] / 3, self.params.simulation_box[2] * 2 / 3],
-        )
-        # Add mesh lines for substrate
-        mesh.AddLine(
-            "x",
-            [
-                -self.params.substrate_width_mm / 3,
-                self.params.substrate_width_mm * 2 / 3,
-            ],
-        )
-        mesh.AddLine(
-            "y",
-            [
-                -self.params.substrate_length_mm / 3,
-                self.params.substrate_length_mm * 2 / 3,
-            ],
-        )
-        mesh.AddLine("x", 0)
-        mesh.AddLine("x", total_length)
-        mesh.AddLine(
-            "y",
-            np.linspace(
-                (self.params.series_line_width_mm + self.params.line_length_mm)
-                + 2
-                - 0.03,
-                (self.params.series_line_width_mm + self.params.line_length_mm)
-                - 2
-                + 0.06,
-                8,
-            ),
-        )
-        mesh.AddLine(
-            "y",
-            np.linspace(
-                0 - 0.3,
-                self.params.series_line_width_mm + 0.6,
-                9,
-            ),
-        )
-
-        mesh.AddLine(
-            "z",
-            np.linspace(
-                -self.params.copper_thickness_mm / 2,
-                self.params.substrate_thickness_mm
-                + self.params.copper_thickness_mm / 2,
-                9,
-            ),
-        )
-
-        for i in range(self.params.filter_order):
             mesh.AddLine(
                 "x",
+                [
+                    -self.params.simulation_box[0] - self.params.lambda0 / 2,
+                    self.params.simulation_box[0] + self.params.lambda0,
+                ],
+            )
+            mesh.AddLine(
+                "y",
+                [
+                    -self.params.simulation_box[1] - self.params.lambda0 / 2,
+                    self.params.simulation_box[1] + self.params.lambda0,
+                ],
+            )
+            mesh.AddLine(
+                "z",
+                [
+                    -self.params.simulation_box[2] / 3,
+                    self.params.simulation_box[2] * 2 / 3,
+                ],
+            )
+            # Add mesh lines for substrate
+            mesh.AddLine(
+                "x",
+                [
+                    -self.params.substrate_width_mm / 3,
+                    self.params.substrate_width_mm * 2 / 3,
+                ],
+            )
+            mesh.AddLine(
+                "y",
+                [
+                    -self.params.substrate_length_mm / 3,
+                    self.params.substrate_length_mm * 2 / 3,
+                ],
+            )
+            mesh.AddLine("x", 0)
+            mesh.AddLine("x", total_length)
+            mesh.AddLine(
+                "y",
                 np.linspace(
-                    (i + 1) * self.params.line_length_mm
-                    + sum(self.params.shunt_line_width_mm[:i])
-                    - 0.3,
-                    (i + 1) * self.params.line_length_mm
-                    + sum(self.params.shunt_line_width_mm[:i])
-                    + self.params.shunt_line_width_mm[i]
-                    + 0.6,
-                    6,
+                    (self.params.series_line_width_mm + self.params.line_length_mm)
+                    + 2
+                    - 0.03,
+                    (self.params.series_line_width_mm + self.params.line_length_mm)
+                    - 2
+                    + 0.06,
+                    8,
+                ),
+            )
+            mesh.AddLine(
+                "y",
+                np.linspace(
+                    0 - 0.3,
+                    self.params.series_line_width_mm + 0.6,
+                    9,
                 ),
             )
 
-        mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2.5)
+            mesh.AddLine(
+                "z",
+                np.linspace(
+                    -self.params.copper_thickness_mm / 2,
+                    self.params.substrate_thickness_mm
+                    + self.params.copper_thickness_mm / 2,
+                    9,
+                ),
+            )
+
+            for i in range(self.params.filter_order):
+                mesh.AddLine(
+                    "x",
+                    np.linspace(
+                        (i + 1) * self.params.line_length_mm
+                        + sum(self.params.shunt_line_width_mm[:i])
+                        - 0.3,
+                        (i + 1) * self.params.line_length_mm
+                        + sum(self.params.shunt_line_width_mm[:i])
+                        + self.params.shunt_line_width_mm[i]
+                        + 0.6,
+                        6,
+                    ),
+                )
+
+            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2.5)
+
+        else:
+            Mesh(self.CSX, self.params)

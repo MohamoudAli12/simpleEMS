@@ -10,7 +10,6 @@ from simpleEMS import (
     optimize_s_params,
     param_sweep,
     setup_simulation,
-    Mesh,
 )
 
 
@@ -26,10 +25,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     )
 
     # parameters values after optimization
-    # params.inset_length_mm = 0.53445
-    # params.inset_width_mm = 0.15269
-    # params.patch_length_mm = 1.38
-    # params.patch_width_mm = 1.74446
+    params.inset_length_mm = 0.53445
+    params.inset_width_mm = 0.15269
+    params.patch_length_mm = 1.38416
+    params.patch_width_mm = 1.74446
 
     if sweep:
         params.inset_length_mm = sweep_val[0]
@@ -51,11 +50,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch.create_patch_with_inset()
     patch.create_feed()
     port = patch.create_port()
-    # patch.create_mesh()
-    Mesh(CSX, params)
+    patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    # patch.write_and_show_structure(FDTD, output_path)
+    patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:
@@ -125,7 +123,7 @@ def main():
     output_path = Path(__file__).with_suffix("")
     output_path.mkdir(parents=True, exist_ok=True)
 
-    optimize = True
+    optimize = False
     if optimize:
         x0 = {
             "inset_length_mm": 0.533,
