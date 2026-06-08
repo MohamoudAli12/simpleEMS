@@ -18,12 +18,18 @@ this library will enable you to design RF circuits easily.
 - Inset-Fed Patch Antenna Design
 - Probe-Fed Patch Antenna Design
 
+### **Filter Design**
+- Bandpass Quarter-Wave Filter Design
+- Bandstop Quarter-wave Filter Design
+
 ### **Simulation & Optimization**
 - Parameter Sweep
 - S11 Optimization
+- S21 Optimization
 
 ### **Network Parameters Calculation**
 - S11 (Reflection Coefficient)
+- S21 (Insertion Loss)
 - VSWR (Voltage Standing Wave Ratio)
 - Z11 (Input Impedance)
 - Input Power
@@ -31,6 +37,7 @@ this library will enable you to design RF circuits easily.
 ### **Visualization & Plotting**
 - Geometry Structure Visualization
 - S11 Plotting
+- S21 Plotting
 - VSWR Plotting
 - Smith Chart for S11
 - Complex Impedance (Z11) Plotting
@@ -47,7 +54,7 @@ this library will enable you to design RF circuits easily.
 ### **Export Options**
 - Gerber Export
 - STL Export
-- Touchstone S1P Export
+- Touchstone SnP Export
 
 ## Demo
 [This example](./examples/simple_inset_fed_patch_antenna.py) creates an inset fed patch antenna and simulates the created model.

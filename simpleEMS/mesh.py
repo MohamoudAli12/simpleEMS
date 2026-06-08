@@ -307,6 +307,7 @@ class Mesh:
         size_ordered = _sort_bounded_types(bounded_types)
         self._gen_mesh_for_bounded_types(size_ordered)
         self._smooth_non_fixed_segments()
+        self._merge_close_lines()
         self._set_mesh_from_lines()
 
     # -----------------------------------------------------------------
@@ -692,6 +693,36 @@ class Mesh:
                 self.mesh_lines[dim] = sorted(set(smoothed))
             except Exception:
                 pass
+
+    def _merge_close_lines(self) -> None:
+        """Merge mesh lines closer than a threshold after smoothing.
+
+        SmoothMeshLines can insert interpolation points that land extremely close
+        to primitive boundary lines, creating tiny Yee cells that unnecessarily
+        constrain the FDTD timestep.  This method merges any pair of lines
+        closer than ``mesh_resolution / 100``, preferring to keep fixed lines
+        (from zero-thickness primitives) when one of the pair is fixed.
+        """
+        threshold = max(self._mesh_res, self._metal_res) / 100.0
+        for dim in range(3):
+            lines = sorted(set(self.mesh_lines[dim]))
+            if len(lines) < 2:
+                continue
+            cleaned: list[float] = [lines[0]]
+            for i in range(1, len(lines)):
+                gap = lines[i] - cleaned[-1]
+                if gap >= threshold:
+                    cleaned.append(lines[i])
+                    continue
+                prev_fixed = self._is_fixed_line(dim, cleaned[-1])
+                curr_fixed = self._is_fixed_line(dim, lines[i])
+                if prev_fixed and not curr_fixed:
+                    pass
+                elif curr_fixed and not prev_fixed:
+                    cleaned[-1] = lines[i]
+                else:
+                    cleaned[-1] = (cleaned[-1] + lines[i]) * 0.5
+            self.mesh_lines[dim] = cleaned
 
     # -----------------------------------------------------------------
     #  Line management

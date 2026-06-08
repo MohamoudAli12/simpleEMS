@@ -39,6 +39,16 @@ from .calc import microstrip_width_from_impedance, calculate_electrical_length_m
 from .filter_coefficient import get_filter_coefficient
 
 
+# ----------------------------
+# Public APIS
+# ----------------------------
+__all__ = [
+    "QuarterWaveFilterParams",
+    "BandStopQuarterWaveFilter",
+    "BandPassQuarterWaveFilter",
+]
+
+
 def _get_total_length(
     filter_order: int, line_length_mm: float, shunt_line_width_mm: list[float]
 ) -> float:
@@ -441,6 +451,337 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
             ]
             shunt_line.AddBox(
+                priority=1,
+                start=line_start,
+                stop=line_stop,
+            )
+
+    def create_ports(self) -> list[LumpedPort]:
+        """
+        Define the excitation lumped ports at both ends of the filter.
+
+        Creates Port 1 (excited) at the input and Port 2 (unexcited)
+        at the output for S-parameter measurement.
+
+        Returns
+        -------
+        list of LumpedPort
+            A list of two LumpedPort objects [port1, port2].
+        """
+        total_length = _get_total_length(
+            self.params.filter_order,
+            self.params.line_length_mm,
+            self.params.shunt_line_width_mm,
+        )
+        port_1_start = [
+            0,
+            0,
+            0,
+        ]
+        port_1_stop = [
+            0,
+            self.params.series_line_width_mm,
+            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+        ]
+        port_1 = self.FDTD.AddLumpedPort(
+            1,
+            self.params.charac_imp,
+            port_1_start,
+            port_1_stop,
+            "z",
+            excite=1,
+            priority=6,
+            edges2grid="x",
+        )
+        port_2_start = [
+            total_length,
+            0,
+            0,
+        ]
+        port_2_stop = [
+            total_length,
+            self.params.series_line_width_mm,
+            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+        ]
+        port_2 = self.FDTD.AddLumpedPort(
+            2,
+            self.params.charac_imp,
+            port_2_start,
+            port_2_stop,
+            "z",
+            excite=0,
+            priority=6,
+            edges2grid="x",
+        )
+
+        return [port_1, port_2]
+
+    def create_mesh(self, manual_mesh: bool = False) -> None:
+        """
+        Generate an FDTD mesh for the band-stop filter simulation domain.
+
+        Defines mesh lines for x, y, and z directions based on the
+        filter geometry, series and shunt line dimensions, and
+        simulation box size. Uses SmoothMeshLines for stable grid
+        transitions.
+
+        Returns
+        -------
+        None
+        """
+        if manual_mesh is True:
+            mesh = self.CSX.GetGrid()
+            mesh.SetDeltaUnit(self.params.unit)
+            total_length = _get_total_length(
+                self.params.filter_order,
+                self.params.line_length_mm,
+                self.params.shunt_line_width_mm,
+            )
+
+            mesh.AddLine(
+                "x",
+                [
+                    -self.params.simulation_box[0] - self.params.lambda0 / 2,
+                    self.params.simulation_box[0] + self.params.lambda0,
+                ],
+            )
+            mesh.AddLine(
+                "y",
+                [
+                    -self.params.simulation_box[1] - self.params.lambda0 / 2,
+                    self.params.simulation_box[1] + self.params.lambda0,
+                ],
+            )
+            mesh.AddLine(
+                "z",
+                [
+                    -self.params.simulation_box[2] / 3,
+                    self.params.simulation_box[2] * 2 / 3,
+                ],
+            )
+            # Add mesh lines for substrate
+            mesh.AddLine(
+                "x",
+                [
+                    -self.params.substrate_width_mm / 3,
+                    self.params.substrate_width_mm * 2 / 3,
+                ],
+            )
+            mesh.AddLine(
+                "y",
+                [
+                    -self.params.substrate_length_mm / 3,
+                    self.params.substrate_length_mm * 2 / 3,
+                ],
+            )
+            mesh.AddLine("x", 0)
+            mesh.AddLine("x", total_length)
+            mesh.AddLine(
+                "y",
+                np.linspace(
+                    (self.params.series_line_width_mm + self.params.line_length_mm)
+                    + 2
+                    - 0.03,
+                    (self.params.series_line_width_mm + self.params.line_length_mm)
+                    - 2
+                    + 0.06,
+                    8,
+                ),
+            )
+            mesh.AddLine(
+                "y",
+                np.linspace(
+                    0 - 0.3,
+                    self.params.series_line_width_mm + 0.6,
+                    9,
+                ),
+            )
+
+            mesh.AddLine(
+                "z",
+                np.linspace(
+                    -self.params.copper_thickness_mm / 2,
+                    self.params.substrate_thickness_mm
+                    + self.params.copper_thickness_mm / 2,
+                    9,
+                ),
+            )
+
+            for i in range(self.params.filter_order):
+                mesh.AddLine(
+                    "x",
+                    np.linspace(
+                        (i + 1) * self.params.line_length_mm
+                        + sum(self.params.shunt_line_width_mm[:i])
+                        - 0.3,
+                        (i + 1) * self.params.line_length_mm
+                        + sum(self.params.shunt_line_width_mm[:i])
+                        + self.params.shunt_line_width_mm[i]
+                        + 0.6,
+                        6,
+                    ),
+                )
+
+            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2.5)
+
+        else:
+            Mesh(self.CSX, self.params)
+
+
+class BandPassQuarterWaveFilter(QuarterWaveFilter):
+    """
+    Band-pass quarter-wave stub filter model.
+
+    This class implements the geometry representation of a band-stop
+    quarter-wave stub filter. It extends `QuarterWaveFilter` by adding
+    the series transmission line sections, shunt stubs and shorts, ports, and
+    FDTD mesh.
+    """
+
+    def create_series_line(self) -> None:
+        """
+        Create the series transmission line sections.
+
+        Adds multiple rectangular metal boxes for the series line
+        segments of the band-pass filter, separated by shunt stub
+        locations.
+        Returns
+        -------
+        None
+        """
+        first_series_line = self.CSX.AddMetal("series_line_1")
+        first_series_line.SetColor("#B87333", 255)
+        f_line_start = [0, 0, self.params.substrate_thickness_mm]
+        f_line_stop = [
+            self.params.line_length_mm,
+            self.params.series_line_width_mm,
+            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+        ]
+        first_series_line.AddBox(
+            priority=1,
+            start=f_line_start,
+            stop=f_line_stop,
+        )
+        for i in range(self.params.filter_order):
+            remaining_series_line = self.CSX.AddMetal(f"series_line_{i + 2}")
+            remaining_series_line.SetColor("#B87333", 255)
+            line_start = [
+                (i + 1) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1]),
+                0,
+                self.params.substrate_thickness_mm,
+            ]
+            line_stop = [
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1]),
+                self.params.series_line_width_mm,
+                self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+            ]
+            remaining_series_line.AddBox(
+                priority=1,
+                start=line_start,
+                stop=line_stop,
+            )
+
+    def create_shunt_line(self) -> None:
+        """
+        Create the shunt stub line sections.
+
+        Adds multiple rectangular metal boxes for the shunt stub
+        elements of the band-pass filter, connecting from the series
+        line to the short-circuit end.
+        Returns
+        -------
+        None
+        """
+        first_shunt_line = self.CSX.AddMetal("shunt_line_1")
+        first_shunt_line.SetColor("#B87333", 255)
+        f_line_start = [
+            self.params.line_length_mm,
+            0,
+            self.params.substrate_thickness_mm,
+        ]
+        f_line_stop = [
+            self.params.line_length_mm + self.params.shunt_line_width_mm[0],
+            self.params.shunt_line_length_mm[0] + self.params.series_line_width_mm,
+            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+        ]
+        first_shunt_line.AddBox(
+            priority=1,
+            start=f_line_start,
+            stop=f_line_stop,
+        )
+
+        for i in range(self.params.filter_order - 1):
+            shunt_line = self.CSX.AddMetal(f"shunt_line_{i + 2}")
+            shunt_line.SetColor("#B87333", 255)
+            line_start = [
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1]),
+                0,
+                self.params.substrate_thickness_mm,
+            ]
+            line_stop = [
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1])
+                + self.params.shunt_line_width_mm[i + 1],
+                self.params.series_line_width_mm
+                + self.params.shunt_line_length_mm[i + 1],
+                self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+            ]
+            shunt_line.AddBox(
+                priority=1,
+                start=line_start,
+                stop=line_stop,
+            )
+
+    def create_shunt_line_short(self) -> None:
+        """
+        Create the shunt stub shorts.
+
+        Adds multiple rectangular metal boxes for the shunt stub shorts
+        band-pass filter.
+        Returns
+        -------
+        None
+        """
+        first_shunt_line_short = self.CSX.AddMetal("shunt_line_short_1")
+        first_shunt_line_short.SetColor("#B87333", 255)
+        f_short_start = [
+            self.params.line_length_mm,
+            self.params.shunt_line_length_mm[0] + self.params.series_line_width_mm,
+            0,
+        ]
+        f_short_stop = [
+            self.params.line_length_mm + self.params.shunt_line_width_mm[0],
+            self.params.shunt_line_length_mm[0] + self.params.series_line_width_mm,
+            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+        ]
+        first_shunt_line_short.AddBox(
+            priority=1,
+            start=f_short_start,
+            stop=f_short_stop,
+        )
+
+        for i in range(self.params.filter_order - 1):
+            shunt_line_short = self.CSX.AddMetal(f"shunt_line_short_{i + 2}")
+            shunt_line_short.SetColor("#B87333", 255)
+            line_start = [
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1]),
+                self.params.series_line_width_mm
+                + self.params.shunt_line_length_mm[i + 1],
+                0,
+            ]
+            line_stop = [
+                (i + 2) * self.params.line_length_mm
+                + sum(self.params.shunt_line_width_mm[: i + 1])
+                + self.params.shunt_line_width_mm[i + 1],
+                self.params.series_line_width_mm
+                + self.params.shunt_line_length_mm[i + 1],
+                self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+            ]
+            shunt_line_short.AddBox(
                 priority=1,
                 start=line_start,
                 stop=line_stop,

@@ -22,7 +22,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_tand=0.0037,
         charac_imp=50.0,
         end_criteria=1e-5,
-        metal_mesh_resolution_factor=10,
     )
 
     params.patch_length_mm = 3.15
@@ -81,7 +80,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
 
     if not (sweep or optimize):
-        # patch.run_simulation(FDTD, output_path)
+        patch.run_simulation(FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
             freqs,
