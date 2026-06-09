@@ -338,8 +338,9 @@ class SimTools:
 
         Parameters
         ----------
-        port : object
-            The openEMS port object representing the simulation port.
+        port : LumpedPort or list of LumpedPort
+            The openEMS port object (or list of two ports) representing the
+            simulation port(s).
         freqs: NDArray
             takes list of frequencies that was used for the simulation.
         charac_imp: float
@@ -408,9 +409,9 @@ class SimTools:
         label_s21: str | None = None,
     ) -> None:
         """
-        Plot the S11 parameter (reflection coefficient) against frequency.
+        Plot S-parameters (S11 and optionally S21) against frequency.
 
-        Generate a 2D plot of the S11 parameter (in dB) as a function
+        Generate a 2D plot of the S-parameters (in dB) as a function
         of frequency.
 
         Parameters
@@ -680,8 +681,13 @@ class SimTools:
         freq : float
             Frequency (in Hz) at which the far-field radiation pattern is evaluated.
 
-        output_path : Path
+        output_path : Path, optional
             Path to the directory where the simulation result is saved.
+            Defaults to current working directory.
+
+        read_cached : bool, optional
+            If True, read cached NF2FF results instead of re-computing.
+            Default is False.
 
         Returns
         -------
@@ -801,8 +807,13 @@ class SimTools:
         freq : float
             Frequency (in Hz) at which the far-field radiation pattern is evaluated.
 
-        output_path : Path
+        output_path : Path, optional
             Path to the directory where the simulation result is saved.
+            Defaults to current working directory.
+
+        read_cached : bool, optional
+            If True, read cached NF2FF results instead of re-computing.
+            Default is False.
 
         Returns
         -------
@@ -948,8 +959,13 @@ class SimTools:
         freq : float
             Frequency (in Hz) at which the 3D far-field radiation pattern is evaluated.
 
-        output_path : Path
+        output_path : Path, optional
             Path to the directory where the simulation result is saved.
+            Defaults to current working directory.
+
+        read_cached : bool, optional
+            If True, read cached NF2FF results instead of re-computing.
+            Default is False.
 
         Returns
         -------
@@ -1217,14 +1233,12 @@ class SimTools:
 
         Returns
         -------
-            None
+        None
 
         Notes
         -----
-        #TODO : confirm below statement
-        This method must be called after ``show_plots`` while all
-        matplotlib plots are open.  This will not save any annotations
-        on the plots; use the manual ``save`` button to save annotations.
+        This method should be called before ``show_plots`` since
+        ``show_plots`` blocks until plots are closed.
         """
         if output_path is None:
             output_path = Path.cwd()
@@ -1261,7 +1275,7 @@ class SimTools:
         CSX : ContinuousStructure
             The openEMS CSX object representing the simulation geometry and settings.
 
-        params : object
+        params : SimParams
             Parameter object containing simulation parameters such as frequency,
             time steps, and dump configuration.
 
@@ -1308,29 +1322,31 @@ class SimTools:
         filename: str = "s_param",
     ) -> None:
         """
-        Export  S-parameters to a Touchstone file.
+        Export S-parameters to a Touchstone file.
 
         This method writes the provided S-parameter data to a Touchstone
         file.
 
         Parameters
         ----------
-        freqs:NDArray
+        freqs : NDArray
             List of frequencies to be exported.
-        s11:NDArray
-            calculated S11 parameters over the frequency range.
+        s11 : NDArray
+            Calculated S11 parameters over the frequency range.
 
-        s21:NDArray
-            calculated S21 parameters over the frequency range.
+        s21 : NDArray, optional
+            Calculated S21 parameters over the frequency range.
+            Default is None (single-port case).
 
-        output_path : Path
+        output_path : Path, optional
             Path to the directory where simulation result is saved.
+            Defaults to current working directory.
 
         charac_imp : float, optional
             Characteristic impedance used for the Touchstone export. Default is 50.0.
 
-        filename:str, optional
-            Name of the file.
+        filename : str, optional
+            Name of the file. Default is "s_param".
 
         Returns
         -------
@@ -1440,8 +1456,8 @@ class SimTools:
         Parameters
         ----------
 
-        params: object
-            parameter object that contains all simulation parmaters.
+        params: SimParams
+            parameter object that contains all simulation parameters.
         output_path: Path
             The path to the directory where the simulation result
             is stored. Default is ``cwd``.
@@ -1632,8 +1648,10 @@ def optimize_s21(
     This function computes a scalar cost from S21 data for use in
     optimization routines. Since optimizers minimize, the cost is
     negated so that maximizing S21 corresponds to minimizing the cost.
+
     Parameters
     ----------
+
     freqs : NDArray
         Array of frequencies in Hz.
     s21 : NDArray
@@ -1647,12 +1665,15 @@ def optimize_s21(
         - "mean" : Returns negative mean of S21 in dB across the band.
         - "worst" : Returns negative minimum of S21 in dB across the band.
         Default is "worst".
+
     Returns
     -------
+
     float
         Scalar cost value (negated S21 in dB).
     Raises
     ------
+
     ValueError
         If mode is not "mean" or "worst", or if neither target_freq
         nor freq_band is provided.
@@ -1686,8 +1707,8 @@ def optimize_s_params(
     bounds: tuple | None = None,
 ) -> None:
     """
-    This function optimizes the S11 parameter utilizing Scipy's minimize function.
-    Nelder-Mead algorithm is used to perform the optimization.
+    Optimise S-parameters using SciPy's minimize function.
+    Nelder-Mead algorithm is used to perform the optimisation.
 
     Parameters
     ----------
@@ -1787,12 +1808,15 @@ def param_sweep(
     output_path : Path
         Path to the directory where simulation result is saved.
 
+    label : str, optional
+        Label prefix used in plot legends for the sweep. Default is "".
+
     sweep : bool, optional
         Flag indicating whether the parameter sweep is performed. Default is True.
 
     Returns
     -------
-    Network_params
+    NetworkParams or None
         The network parameters returned by the simulation function. Contains
         attributes such as freqs, s11, s21, vswr, z11, and input_power.
     """
@@ -1828,11 +1852,13 @@ def mm_to_m(mm: float) -> float:
     Parameters
     ----------
 
-    mm: float
+    mm : float
         Value in millimeters
+
     Returns
     -------
-    Value in meters
+    float
+        Value in meters
 
     """
     return mm / 1000.0
@@ -1845,11 +1871,13 @@ def m_to_mm(m: float) -> float:
     Parameters
     ----------
 
-    m: float
+    m : float
         Value in meters
+
     Returns
     -------
-    Value in millimeters
+    float
+        Value in millimeters
 
     """
     return m * 1000.0
@@ -1861,11 +1889,14 @@ def mil_to_mm(mil: float) -> float:
 
     Parameters
     ----------
-    mil: float
+
+    mil : float
         Value in mils
+
     Returns
     -------
-    Value in millimeters
+    float
+        Value in millimeters
 
     """
     return mil * 0.0254
@@ -1877,11 +1908,14 @@ def mm_to_mil(mm: float) -> float:
 
     Parameters
     ----------
-    mm: float
+
+    mm : float
         Value in millimeters
+
     Returns
     -------
-    Value in mils
+    float
+        Value in mils
 
     """
     return mm / 0.0254
@@ -1893,11 +1927,14 @@ def cm_to_mm(cm: float) -> float:
 
     Parameters
     ----------
-    cm: float
+
+    cm : float
         Value in centimeters
+
     Returns
     -------
-    Value in millimeters
+    float
+        Value in millimeters
 
     """
     return cm * 10.0
@@ -1909,11 +1946,14 @@ def mm_to_cm(mm: float) -> float:
 
     Parameters
     ----------
-    mm: float
+
+    mm : float
         Value in millimeters
+
     Returns
     -------
-    Value in centimeters
+    float
+        Value in centimeters
 
     """
     return mm / 10.0

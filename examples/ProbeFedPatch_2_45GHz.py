@@ -10,7 +10,6 @@ from simpleEMS import (
     optimize_s_params,
     param_sweep,
     setup_simulation,
-    Mesh,
 )
 
 
@@ -39,14 +38,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     CSX, FDTD, freqs = setup_simulation(params)
     patch = ProbeFedPatchAntenna(params, CSX, FDTD)
     patch.print_and_save_params(params, output_path)
-    patch.create_probe_fed_patch()
-    port = patch.create_port()
-    patch.create_substrate()
-    patch.create_ground()
-    # patch.create_mesh()
-    Mesh(CSX, params)
-    patch.add_field_dump(CSX, params, output_path)
+    port = patch.build_probe_fed_patch_antenna()
+    patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
+    patch.add_field_dump(CSX, params, output_path)
     patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 

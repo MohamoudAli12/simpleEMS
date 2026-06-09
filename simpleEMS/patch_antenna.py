@@ -29,7 +29,6 @@ import numpy as np
 
 from CSXCAD import ContinuousStructure
 from numpy.typing import NDArray
-from openEMS.nf2ff import nf2ff
 from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort
 
@@ -69,7 +68,7 @@ class InsetFedPatchParams(SimParams):
     span_freq : float
         Frequency span used to compute the simulation range around
         the resonant frequency in Hz.
-    ang_length_deg : int, optional
+    elec_length_deg : int, optional
         Electrical length (in degrees) used to compute the feed phase
         shift length. Default is 90.
 
@@ -110,6 +109,7 @@ class InsetFedPatchParams(SimParams):
     def freq_range(self) -> tuple[float, float]:
         """
         Compute the simulation frequency range.
+
         Returns
         -------
         tuple of (float, float)
@@ -184,6 +184,7 @@ class InsetFedPatchParams(SimParams):
         This method calculates the feed line dimensions, patch width and length,
         inset dimensions, and substrate size based on the resonant frequency,
         substrate properties, and characteristic impedance.
+
         Returns
         -------
         None
@@ -223,6 +224,7 @@ class InsetFedPatchParams(SimParams):
         This method iterates over key geometric and mesh attributes and rounds
         them to `self.fp_precision` decimal places for cleaner output and
         consistent simulation behavior.
+
         Returns
         -------
         None
@@ -252,7 +254,7 @@ class PatchAntenna(SimTools):
 
     Parameters
     ----------
-    params :
+    params : InsetFedPatchParams or ProbeFedPatchParams
         Data container containing geometric and material properties
         (e.g., substrate thickness, permittivity, and dimensions).
     CSX : ContinuousStructure
@@ -371,8 +373,8 @@ class InsetFedPatchAntenna(PatchAntenna):
 
         Notes
         -----
-        The method includes a DRC (Design Rule Check) warning if the
-        `inset_width_mm` is below 0.089 mm, which may exceed standard
+        The method includes a DRC (Design Rule Check) warning if
+        `inset_width_mm / 2` is below 0.089 mm, which may exceed standard
         PCB fabrication capabilities.
         """
         patch_inset = self.CSX.AddMetal("patch_inset")
@@ -501,6 +503,12 @@ class InsetFedPatchAntenna(PatchAntenna):
         refinement near metal edges and uses `SmoothMeshLines` to
         ensure a stable grid transition.
 
+        Parameters
+        ----------
+        manual_mesh : bool, optional
+            If True, use manual mesh line definitions instead of the
+            automatic Mesh class. Default is False.
+
         Returns
         -------
         None
@@ -570,7 +578,7 @@ class InsetFedPatchAntenna(PatchAntenna):
         else:
             Mesh(self.CSX, self.params)
 
-    def build_inset_fed_patch_antenna(self) -> tuple[LumpedPort, nf2ff]:
+    def build_inset_fed_patch_antenna(self) -> LumpedPort:
         """
         Construct the complete inset-fed patch antenna geometry.
         This method orchestrates the creation of all antenna components
@@ -579,25 +587,20 @@ class InsetFedPatchAntenna(PatchAntenna):
 
         Returns
         -------
-        tuple
-            A tuple containing (port, nf2ff) where:
-            - port : LumpedPort object for S-parameter extraction.
-            - nf2ff : NF2FF object for far-field calculations.
+        port : LumpedPort object for S-parameter extraction.
         """
         self.create_patch_with_inset()
         self.create_feed()
         self.create_substrate()
         self.create_ground()
         port = self.create_port()
-        self.create_mesh()
-        nf2ff = self.create_nf2ff(self.FDTD)
-        return port, nf2ff
+        return port
 
 
 @dataclass
 class ProbeFedPatchParams(SimParams):
     """
-    Parameters for an probe-fed rectangular microstrip patch antenna.
+    Parameters for a probe-fed rectangular microstrip patch antenna.
     This class inherits from `SimParams` and computes derived geometric
     parameters required for antenna layout and simulation.
 
@@ -761,10 +764,10 @@ class ProbeFedPatchAntenna(PatchAntenna):
 
     def create_probe_fed_patch(self) -> None:
         """
-        Create the probe fed patch element.
+        Create the probe-fed patch element.
 
         This method defines the patch geometry as a linear polygon (LinPoly)
-        it also adds the metal edges to the FDTD grid for accurate field
+        and adds the metal edges to the FDTD grid for accurate field
         calculation at the conductor boundaries.
 
         Returns
@@ -829,6 +832,12 @@ class ProbeFedPatchAntenna(PatchAntenna):
         refinement near metal edges and uses `SmoothMeshLines` to
         ensure a stable grid transition.
 
+        Parameters
+        ----------
+        manual_mesh : bool, optional
+            If True, use manual mesh line definitions instead of the
+            automatic Mesh class. Default is False.
+
         Returns
         -------
         None
@@ -881,7 +890,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
         else:
             Mesh(self.CSX, self.params)
 
-    def build_probe_fed_patch_antenna(self) -> tuple[LumpedPort, nf2ff]:
+    def build_probe_fed_patch_antenna(self) -> LumpedPort:
         """
         Construct the complete probe-fed patch antenna geometry.
         This method orchestrates the creation of all antenna components
@@ -890,15 +899,10 @@ class ProbeFedPatchAntenna(PatchAntenna):
 
         Returns
         -------
-        tuple
-            A tuple containing (port, nf2ff) where:
-            - port : LumpedPort object for S-parameter extraction.
-            - nf2ff : NF2FF object for far-field calculations.
+        port : LumpedPort object for S-parameter extraction.
         """
         self.create_probe_fed_patch()
         self.create_substrate()
         self.create_ground()
         port = self.create_port()
-        self.create_mesh()
-        nf2ff = self.create_nf2ff(self.FDTD)
-        return port, nf2ff
+        return port

@@ -45,11 +45,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     patch = InsetFedPatchAntenna(params, CSX, FDTD)
     patch.print_and_save_params(params, output_path)
-    patch.create_substrate()
-    patch.create_ground()
-    patch.create_patch_with_inset()
-    patch.create_feed()
-    port = patch.create_port()
+    port = patch.build_inset_fed_patch_antenna()
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)

@@ -22,10 +22,12 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_tand=0.001,
         charac_imp=50,
     )
-    params.inset_length_mm = 7.630065548327785
-    params.inset_width_mm = 1.6269616446172428
-    params.patch_length_mm = 28.142656714299918
-    params.patch_width_mm = 51.49757999160293
+
+    # params.inset_length_mm = 7.630065
+    # params.inset_width_mm = 1.626961
+    # params.patch_length_mm = 28.14
+    # params.patch_width_mm = 51.497579
+
     if sweep:
         params.inset_length_mm = sweep_val[0]
         params.inset_width_mm = sweep_val[1]
@@ -40,15 +42,11 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     patch = InsetFedPatchAntenna(params, CSX, FDTD)
     patch.print_and_save_params(params, output_path)
-    patch.create_patch_with_inset()
-    patch.create_feed()
-    port = patch.create_port()
-    patch.create_substrate()
-    patch.create_ground()
+    port = patch.build_inset_fed_patch_antenna()
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
-    # patch.write_and_show_structure(FDTD, output_path)
+    patch.write_and_show_structure(FDTD, output_path)
     network_params = None
 
     if sweep:

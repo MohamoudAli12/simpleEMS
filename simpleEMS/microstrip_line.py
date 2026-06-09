@@ -55,6 +55,7 @@ class MicrostripLineParams(SimParams):
     Parameters for a microstrip transmission line.
     This class extends SimParams and computes derived geometric
     parameters required for microstrip line layout and simulation.
+
     Parameters
     ----------
     min_freq : float
@@ -63,9 +64,10 @@ class MicrostripLineParams(SimParams):
         Maximum frequency of the simulation range in Hz.
     target_freq : float
         Target frequency used to compute the microstrip dimensions in Hz.
-    ang_length_deg : int, optional
+    elec_length_deg : int, optional
         Electrical length (in degrees) used to compute the microstrip
         phase shift length. Default is 90.
+
     Attributes
     ----------
     microstrip_width_mm : float
@@ -90,6 +92,7 @@ class MicrostripLineParams(SimParams):
     def freq_range(self) -> tuple[float, float]:
         """
         Return the simulation frequency range.
+
         Returns
         -------
         tuple of (float, float)
@@ -101,6 +104,7 @@ class MicrostripLineParams(SimParams):
     def main_freq(self) -> float:
         """
         Return the primary frequency of interest for analysis.
+
         Returns
         -------
         float
@@ -159,6 +163,7 @@ class MicrostripLineParams(SimParams):
         This method calculates the microstrip width and length based on
         the characteristic impedance, substrate properties, and target
         frequency. It also computes the substrate dimensions.
+
         Returns
         -------
         None
@@ -184,6 +189,7 @@ class MicrostripLineParams(SimParams):
         Round all geometric parameters to the configured floating-point precision.
         This method iterates over key geometric and mesh attributes and rounds
         them to `self.fp_precision` decimal places.
+
         Returns
         -------
         None
@@ -205,6 +211,7 @@ class MicrostripLine(SimTools):
     This class extends SimTools and provides methods for creating the
     substrate, ground plane, microstrip trace, ports, and mesh for
     electromagnetic simulation using openEMS.
+
     Parameters
     ----------
     params : MicrostripLineParams
@@ -317,8 +324,10 @@ class MicrostripLine(SimTools):
         Creates two ports: Port 1 (excited) at one end and Port 2
         (unexcited) at the opposite end, enabling S21 transmission
         measurements.
+
         Returns
         -------
+
         list
             A list of two LumpedPort objects [port1, port2] used to
             retrieve S-parameter and impedance results after the simulation.
@@ -366,6 +375,26 @@ class MicrostripLine(SimTools):
 
         return [port_1, port_2]
 
+    def build_microstrip_line(self) -> list[LumpedPort]:
+        """
+        Construct the complete microstrip transmission line geometry.
+
+        This method orchestrates the creation of all microstrip
+        components including the substrate, ground plane,
+        microstrip conductor, and ports.
+
+        Returns
+        -------
+        list
+            A list of two LumpedPort objects [port1, port2] for
+            S-parameter extraction.
+        """
+        self.create_substrate()
+        self.create_ground()
+        self.create_microstrip_line()
+        ports = self.create_ports()
+        return ports
+
     def create_mesh(
         self,
         manual_mesh: bool = False,
@@ -378,6 +407,14 @@ class MicrostripLine(SimTools):
         simulation box size. It applies the "thirds rule" for mesh
         refinement near metal edges and uses SmoothMeshLines to
         ensure a stable grid transition.
+
+        Parameters
+        ----------
+        manual_mesh : bool, optional
+            If True, use manual mesh line definitions instead of the
+            automatic Mesh class. Default is False.
+        smooth_ratio : float, optional
+            Maximum ratio between adjacent mesh cells. Default is 1.5.
         Returns
         -------
         None

@@ -10,7 +10,7 @@ Algorithm:
 """
 
 from enum import Enum
-from bisect import bisect_left, bisect_right, insort_left
+from bisect import bisect_left, insort_left
 
 import numpy as np
 
@@ -23,12 +23,16 @@ PREC = 10
 
 
 class Type(Enum):
+    """Material type classification for mesh regions."""
+
     metal = 0
     nonmetal = 1
     air = 2
 
 
 class BoundedType:
+    """A region bounded by lower and upper bounds with a material type."""
+
     def __init__(
         self,
         prop_type: Type,
@@ -211,37 +215,6 @@ def _sort_bounded_types(
     for dim, btype_list in enumerate(bounded_types):
         new_bounded_types[dim] = sorted(btype_list, key=lambda x: x.size())
     return new_bounded_types
-
-
-def _dim_idx_to_desc(idx: int) -> str:
-    if idx == 0:
-        return "xmin"
-    if idx == 1:
-        return "xmax"
-    if idx == 2:
-        return "ymin"
-    if idx == 3:
-        return "ymax"
-    if idx == 4:
-        return "zmin"
-    if idx == 5:
-        return "zmax"
-    raise ValueError("Index must be between 0 and 5, inclusive.")
-
-
-def _mesh_lines_in_box(
-    mesh_lines: list[list[float]], box_lower: list[float], box_upper: list[float]
-) -> list[list[float]]:
-    mesh_lines_inside: list[list[float]] = []
-    for dim in range(3):
-        lower_pos = box_lower[dim]
-        upper_pos = box_upper[dim]
-        dim_lines = mesh_lines[dim]
-        dim_lines_inside = dim_lines[
-            bisect_left(dim_lines, lower_pos) : bisect_right(dim_lines, upper_pos)
-        ]
-        mesh_lines_inside.append(dim_lines_inside)
-    return mesh_lines_inside
 
 
 class Mesh:

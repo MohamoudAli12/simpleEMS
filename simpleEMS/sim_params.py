@@ -85,15 +85,14 @@ class SimParams:
         Division factor used to compute the metal primitives mesh resolution
         (``lambda0 / factor``). Default is ``60``.
 
-
     Attributes
     ----------
     substrate_kappa : float
         Conductivity-equivalent dielectric loss term computed from
         loss tangent, frequency, and permittivity.
     lambda0 : float
-    Effective wavelength in the substrate, computed as
-    ``C0 / (f_ref * sqrt(eps_r) * unit)``.
+        Effective wavelength in the substrate, computed as
+        ``C0 / (f_ref * sqrt(eps_r) * unit)``.
     simulation_box : NDArray of shape (3,)
         Bounding box dimensions [x, y, z] for the FDTD domain in mm,
         including lambda0 air padding around the structure.

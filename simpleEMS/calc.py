@@ -44,14 +44,14 @@ def calculate_electrical_length_mm(
 
     Parameters
     ----------
-    phase_shift : float
+    elec_length_deg_rad : float
         Phase shift in degrees (default) or radians.
     eps_eff : float
         Effective dielectric constant.
     frequency : float
         Frequency in Hz.
     radians : bool
-        If True, phase_shift is already in radians.
+        If True, elec_length_deg_rad is already in radians.
 
     Returns
     -------
@@ -90,7 +90,7 @@ def microstrip_width_from_impedance(
         The height of the substrate
     copper_thickness: float
         The thickness of the copper trace
-    subst_eps_r:float
+    subst_eps_r: float
         Dielectric constant of the substrate material.
     freq_hz: float
         Frequency in Hz
@@ -100,12 +100,13 @@ def microstrip_width_from_impedance(
     Returns
     -------
     width: float
-        width of trace for given characteristic impedance
+        Width of trace for given characteristic impedance in mm.
+    er_eff: float
+        Effective dielectric constant at the given frequency.
 
     Notes
     -----
-
-    for the formulas used, refer to this papers
+    For the formulas used, refer to:
     `<https://qucs.github.io/docs/technical/technical.pdf>`_.
     `<https://ieeexplore.ieee.org/document/1124303>`_.
     """

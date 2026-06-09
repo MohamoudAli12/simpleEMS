@@ -77,12 +77,14 @@ def primitive_box(file: TextIO, box: CSPrimBox) -> None:
     Export a CSXCAD box primitive to Gerber RS-274X format.
     Writes a rectangular aperture as a closed polygon contour
     to the Gerber output file.
+
     Parameters
     ----------
     file : file object
         Open file handle for writing Gerber output.
     box : CSPrimBox
         The box primitive object containing start and stop coordinates.
+
     Returns
     -------
     None
@@ -109,12 +111,14 @@ def primitive_polygon(file: TextIO, poly: CSPrimPolygon | CSPrimLinPoly) -> None
     Export a CSXCAD polygon primitive to Gerber RS-274X format.
     Only exports polygons with a +Z normal direction (XY-plane).
     Writes the polygon vertices as a closed contour in Gerber format.
+
     Parameters
     ----------
     file : file object
         Open file handle for writing Gerber output.
     poly : CSPrimPoly or CSPrimLinPoly
         The polygon primitive object containing vertex coordinates.
+
     Returns
     -------
     None
@@ -155,6 +159,7 @@ def process_primitives(
     This function iterates through a list of CSXCAD properties, filters
     out ignored ones based on options, and exports supported primitives
     (boxes and polygons) to a Gerber file.
+
     Parameters
     ----------
     file : file object
@@ -164,6 +169,7 @@ def process_primitives(
     options : dict
         Dictionary of export options. Supported keys:
         - "ignore" : list of property names to skip.
+
     Returns
     -------
     None
@@ -211,16 +217,17 @@ def export_gerber(
     Export openEMS CSX geometry to Gerber RS-274X format (XY-plane only).
     Extracts all metal properties from the CSXCAD structure and exports
     their box and polygon primitives to a Gerber layout file.
+
     Parameters
     ----------
     CSX : ContinuousStructure
         The CSXCAD geometry object containing the simulation structure.
     output_path : Path
         Directory where the Gerber file will be saved.
-    options : dict, optional
+    options : dict
         Dictionary of export options. Supported keys:
         - "ignore" : list of property names to skip during export.
-        Default is None.
+
     Returns
     -------
     None

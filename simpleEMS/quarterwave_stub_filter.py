@@ -20,7 +20,8 @@ Quarter-wave stub filter design and simulation.
 Provides parameter and geometry classes for band-pass and band-stop
 quarter-wave stub filters using Bessel, Butterworth, or Chebyshev
 responses. Includes `QuarterWaveFilterParams` for parameter
-definition and `BandStopQuarterWaveFilter` for structure construction.
+definition and `BandStopQuarterWaveFilter` and
+`BandPassQuarterWaveFilter` for structure construction.
 """
 
 import math
@@ -121,6 +122,7 @@ class QuarterWaveFilterParams(SimParams):
     def freq_range(self) -> tuple[float, float]:
         """
         Return the simulation frequency range.
+
         Returns
         -------
         tuple of (float, float)
@@ -132,6 +134,7 @@ class QuarterWaveFilterParams(SimParams):
     def main_freq(self) -> float:
         """
         Return the primary frequency of interest for analysis.
+
         Returns
         -------
         float
@@ -255,6 +258,7 @@ class QuarterWaveFilterParams(SimParams):
         Round all geometric parameters to the configured floating-point precision.
         This method iterates over key geometric and mesh attributes and rounds
         them to `self.fp_precision` decimal places.
+
         Returns
         -------
         None
@@ -516,6 +520,27 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
 
         return [port_1, port_2]
 
+    def build_band_stop_quarter_wave_filter(self) -> list[LumpedPort]:
+        """
+        Construct the complete band-stop quarter-wave stub filter geometry.
+
+        This method orchestrates the creation of all filter components
+        including the substrate, ground plane, series transmission line
+        sections, shunt stubs, ports, and mesh.
+
+        Returns
+        -------
+        list
+            A list of two LumpedPort objects [port1, port2] for
+            S-parameter extraction.
+        """
+        self.create_substrate()
+        self.create_ground()
+        self.create_series_line()
+        self.create_shunt_line()
+        ports = self.create_ports()
+        return ports
+
     def create_mesh(self, manual_mesh: bool = False) -> None:
         """
         Generate an FDTD mesh for the band-stop filter simulation domain.
@@ -524,6 +549,12 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         filter geometry, series and shunt line dimensions, and
         simulation box size. Uses SmoothMeshLines for stable grid
         transitions.
+
+        Parameters
+        ----------
+        manual_mesh : bool, optional
+            If True, use manual mesh line definitions instead of the
+            automatic Mesh class. Default is False.
 
         Returns
         -------
@@ -632,7 +663,7 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
     """
     Band-pass quarter-wave stub filter model.
 
-    This class implements the geometry representation of a band-stop
+    This class implements the geometry representation of a band-pass
     quarter-wave stub filter. It extends `QuarterWaveFilter` by adding
     the series transmission line sections, shunt stubs and shorts, ports, and
     FDTD mesh.
@@ -739,8 +770,8 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
         """
         Create the shunt stub shorts.
 
-        Adds multiple rectangular metal boxes for the shunt stub shorts
-        band-pass filter.
+        Adds multiple rectangular metal boxes for the band-pass filter
+        shunt stub shorts.
         Returns
         -------
         None
@@ -847,14 +878,42 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
 
         return [port_1, port_2]
 
+    def build_band_pass_quarter_wave_filter(self) -> list[LumpedPort]:
+        """
+        Construct the complete band-pass quarter-wave stub filter geometry.
+
+        This method orchestrates the creation of all filter components
+        including the substrate, ground plane, series transmission line
+        sections, shunt stubs, shorted shunt ends, and ports.
+
+        Returns
+        -------
+        list
+            A list of two LumpedPort objects [port1, port2] for
+            S-parameter extraction.
+        """
+        self.create_substrate()
+        self.create_ground()
+        self.create_series_line()
+        self.create_shunt_line()
+        self.create_shunt_line_short()
+        ports = self.create_ports()
+        return ports
+
     def create_mesh(self, manual_mesh: bool = False) -> None:
         """
-        Generate an FDTD mesh for the band-stop filter simulation domain.
+        Generate an FDTD mesh for the band-pass filter simulation domain.
 
         Defines mesh lines for x, y, and z directions based on the
         filter geometry, series and shunt line dimensions, and
         simulation box size. Uses SmoothMeshLines for stable grid
         transitions.
+
+        Parameters
+        ----------
+        manual_mesh : bool, optional
+            If True, use manual mesh line definitions instead of the
+            automatic Mesh class. Default is False.
 
         Returns
         -------

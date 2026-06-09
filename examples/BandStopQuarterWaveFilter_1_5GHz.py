@@ -42,11 +42,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     filter = BandStopQuarterWaveFilter(params, CSX, FDTD)
     filter.print_and_save_params(params, output_path)
-    filter.create_substrate()
-    filter.create_ground()
-    filter.create_series_line()
-    filter.create_shunt_line()
-    ports = filter.create_ports()
+    ports = filter.build_band_stop_quarter_wave_filter()
     filter.create_mesh()
     filter.add_field_dump(CSX, params, output_path)
     filter.write_and_show_structure(FDTD, output_path)

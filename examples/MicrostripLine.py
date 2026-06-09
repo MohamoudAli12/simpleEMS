@@ -29,10 +29,7 @@ CSX, FDTD, freqs = setup_simulation(params)
 # BUILD
 microstrip = MicrostripLine(params, CSX, FDTD)
 microstrip.print_and_save_params(params)
-microstrip.create_substrate()
-microstrip.create_ground()
-microstrip.create_microstrip_line()
-port = microstrip.create_ports()
+ports = microstrip.build_microstrip_line()
 microstrip.create_mesh()
 microstrip.add_field_dump(CSX, params)
 microstrip.write_and_show_structure(FDTD)
@@ -44,7 +41,7 @@ microstrip.run_simulation(FDTD)
 
 # PPROCESS
 network_params = microstrip.compute_network_params(
-    port,
+    ports,
     freqs,
     params.charac_imp,
 )
