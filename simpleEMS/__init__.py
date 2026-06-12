@@ -34,6 +34,7 @@ from .quarterwave_stub_filter import (
     BandStopQuarterWaveFilter,
     BandPassQuarterWaveFilter,
 )
+from .model import simulate_model
 from .sim_tools import (
     DumpType,
     SimTools,
@@ -61,6 +62,7 @@ __all__ = [
     "optimize_s21",
     "optimize_s_params",
     "param_sweep",
+    "simulate_model",
 ]
 
 __version__ = "0.1.0"

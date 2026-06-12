@@ -121,9 +121,10 @@ class SimParams:
     timestep: int = 90000000
     end_criteria: float = 1e-4
 
-    mesh_resolution_factor: int = 20
-    metal_mesh_resolution_factor: int = 20
+    mesh_resolution_factor: int = 10
+    metal_mesh_resolution_factor: int = 10
     mesh_resolution: float = field(init=False)
+    metal_mesh_resolution: float = field(init=False)
 
     lambda0: float = field(init=False)
     thirds_rule: NDArray = field(init=False)

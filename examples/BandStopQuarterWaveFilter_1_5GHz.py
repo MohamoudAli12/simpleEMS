@@ -24,7 +24,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         centre_freq=1.5e9,
         bandwidth_freq=1e9,
         filter_type="bandstop",
-        filter_response="chebyshev",
+        filter_response="butterworth",
         filter_order=3,
     )
 

@@ -28,8 +28,9 @@ CSX, FDTD, freqs = setup_simulation(params)
 # BUILD
 patch = ProbeFedPatchAntenna(params, CSX, FDTD)
 patch.print_and_save_params(params)
-port, nf2ff = patch.build_probe_fed_patch_antenna()
+port = patch.build_probe_fed_patch_antenna()
 patch.create_mesh()
+nf2ff = patch.create_nf2ff(FDTD)
 patch.add_field_dump(CSX, params)
 patch.write_and_show_structure(FDTD)
 # BUILD
