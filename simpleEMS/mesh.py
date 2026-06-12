@@ -90,6 +90,36 @@ def _get_prim_bounds(prim: CSPrimitives) -> np.ndarray:
     return bounds
 
 
+def _is_linpoly(prim: CSPrimitives) -> bool:
+    cls = prim.__class__.__name__
+    return cls in ("CSPrimLinPoly", "CSPrimPolygon")
+
+
+def _get_linpoly_vertex_bounds(prim: CSPrimitives) -> list[list[float]]:
+    bounds: list[list[float]] = [[], [], []]
+    try:
+        coords = prim.GetCoords()
+        x_verts, y_verts = coords[0], coords[1]
+        elev = float(prim.GetElevation())
+        norm_dir = int(prim.GetNormDir())
+        tr = prim.GetTransform()
+        for x, y in zip(x_verts, y_verts, strict=True):
+            pt = [0.0, 0.0, 0.0]
+            if norm_dir == 0:
+                pt = [elev, float(x), float(y)]
+            elif norm_dir == 1:
+                pt = [float(x), elev, float(y)]
+            else:
+                pt = [float(x), float(y), elev]
+            if tr is not None:
+                pt = tr.Transform(pt)
+            for d in range(3):
+                bounds[d].append(float(pt[d]))
+    except Exception:
+        pass
+    return bounds
+
+
 def _physical_prims(prims: list[CSPrimitives]) -> list[CSPrimitives]:
     physical = []
     for prim in prims:
@@ -123,6 +153,26 @@ def _bounds_from_prims(
         for dim, bounds in enumerate(prim_bounds):
             dim_bounds[dim].append(bounds[0])
             dim_bounds[dim].append(bounds[1])
+    for dim, bounds in enumerate(dim_bounds):
+        dim_bounds[dim] = sorted(bounds)
+        dim_bounds[dim] = _remove_dups(dim_bounds[dim], fixed[dim])
+    return dim_bounds
+
+
+def _collect_all_bounds(
+    prims: list[CSPrimitives], fixed: list[list[float]]
+) -> list[list[float]]:
+    dim_bounds: list[list[float]] = [[], [], []]
+    for prim in prims:
+        prim_bounds = _get_prim_bounds(prim)
+        for dim, bounds in enumerate(prim_bounds):
+            dim_bounds[dim].append(float(bounds[0]))
+            dim_bounds[dim].append(float(bounds[1]))
+        if _is_linpoly(prim):
+            vert_bounds = _get_linpoly_vertex_bounds(prim)
+            for dim in range(3):
+                for v in vert_bounds[dim]:
+                    dim_bounds[dim].append(v)
     for dim, bounds in enumerate(dim_bounds):
         dim_bounds[dim] = sorted(bounds)
         dim_bounds[dim] = _remove_dups(dim_bounds[dim], fixed[dim])
@@ -363,7 +413,7 @@ class Mesh:
         prims = self._csx.GetAllPrimitives()
         physical_prims = _physical_prims(prims)
         self._set_fixed_lines(physical_prims)
-        bounds = _bounds_from_prims(physical_prims, self.fixed_lines)
+        bounds = _collect_all_bounds(physical_prims, self.fixed_lines)
         self._set_sim_bounds_from_geometry(bounds)
         bounded_types = self._bounded_types(bounds, physical_prims)
         bounded_types = self._set_expanded_bounds(bounded_types)
