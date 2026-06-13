@@ -441,6 +441,7 @@ class Mesh:
         self._gen_mesh_for_bounded_types(size_ordered)
         self._set_mesh_from_lines()
         self.mesh.SmoothMeshLines("all", self._mesh_res, self._smooth[0])
+        self._clean_close_lines()
 
     def _set_fixed_lines(self, prims: list[CSPrimitives]) -> None:
         for prim in prims:
@@ -796,6 +797,40 @@ class Mesh:
             for line in self.mesh_lines[dim]:
                 ch = "xyz"[dim]
                 grid.AddLine(ch, fp_nearest(line))
+
+    def _clean_close_lines(self, min_spacing: float | None = None) -> None:
+        if min_spacing is None:
+            min_spacing = self.smallest_res * 0.01
+        for dim in range(3):
+            ch = "xyz"[dim]
+            lines = list(self.mesh.GetLines(ch))
+            if len(lines) < 2:
+                continue
+            cleaned = []
+            i = 0
+            while i < len(lines):
+                j = i + 1
+                if j < len(lines) and (lines[j] - lines[i]) < min_spacing:
+                    if self._is_fixed_line(dim, lines[i]):
+                        cleaned.append(fp_nearest(lines[i]))
+                        i = j + 1
+                        continue
+                    if self._is_fixed_line(dim, lines[j]):
+                        cleaned.append(fp_nearest(lines[j]))
+                        i = j + 1
+                        continue
+                    avg = fp_nearest((lines[i] + lines[j]) / 2.0)
+                    cleaned.append(avg)
+                    i = j + 1
+                else:
+                    cleaned.append(fp_nearest(lines[i]))
+                    i += 1
+            cleaned = _remove_dups(cleaned, self.fixed_lines[dim])
+            self.mesh_lines[dim] = cleaned
+            grid = self._csx.GetGrid()
+            grid.ClearLines(dim)
+            for line in cleaned:
+                grid.AddLine(ch, line)
 
     def nearest_mesh_line(
         self, dim: int, pos: float

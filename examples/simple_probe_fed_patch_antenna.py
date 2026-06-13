@@ -19,6 +19,8 @@ params = ProbeFedPatchParams(
     substrate_tand=0.001,
     charac_imp=50,
 )
+params.probe_pos_mm = 4.501
+params.patch_length_mm = 27.669
 # PARAMS
 
 # SETUP

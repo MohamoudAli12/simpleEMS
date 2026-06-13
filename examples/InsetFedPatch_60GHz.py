@@ -22,6 +22,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_tand=0.001,
         charac_imp=50.0,
         end_criteria=1e-4,
+        mesh_resolution_factor=20,
+        metal_mesh_resolution_factor=40,
     )
 
     # parameters values after optimization
@@ -46,7 +48,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     patch = InsetFedPatchAntenna(params, CSX, FDTD)
     patch.print_and_save_params(params, output_path)
     port = patch.build_inset_fed_patch_antenna()
-    patch.create_mesh()
+    patch.create_mesh(manual_mesh=True)
     nf2ff = patch.create_nf2ff(FDTD)
     patch.add_field_dump(CSX, params, output_path)
     patch.write_and_show_structure(FDTD, output_path)
