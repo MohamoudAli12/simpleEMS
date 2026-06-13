@@ -238,6 +238,7 @@ class InsetFedPatchParams(SimParams):
             "feed_length_mm",
             "lambda0",
             "mesh_resolution",
+            "metal_mesh_resolution",
             "thirds_rule",
         ]:
             setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
@@ -748,6 +749,7 @@ class ProbeFedPatchParams(SimParams):
             "probe_pos_mm",
             "lambda0",
             "mesh_resolution",
+            "metal_mesh_resolution",
             "thirds_rule",
         ]:
             setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))

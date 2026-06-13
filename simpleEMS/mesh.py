@@ -649,7 +649,18 @@ class Mesh:
         dist = upper - lower
         lower_spacing = self._lower_spacing(dim, lower, line_below, dist, is_metal)
         upper_spacing = self._upper_spacing(dim, upper, line_above, dist, is_metal)
-        max_spacing = self._metal_res if is_metal else self._mesh_res
+        if is_metal:
+            below_type = self._type_below(dim, lower)
+            above_type = self._type_above(dim, upper)
+            touches_air = (
+                below_type is None
+                or below_type == Type.air
+                or above_type is None
+                or above_type == Type.air
+            )
+            max_spacing = self._mesh_res if touches_air else self._metal_res
+        else:
+            max_spacing = self._mesh_res
 
         if fp_equalp(lower, upper):
             self._add_lines_to_mesh([lower], dim)

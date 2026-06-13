@@ -122,7 +122,7 @@ class SimParams:
     end_criteria: float = 1e-4
 
     mesh_resolution_factor: int = 10
-    metal_mesh_resolution_factor: int = 20
+    metal_mesh_resolution_factor: int = 30
     mesh_resolution: float = field(init=False)
     metal_mesh_resolution: float = field(init=False)
 
