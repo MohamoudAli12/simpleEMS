@@ -214,24 +214,10 @@ def _sort_bounded_types(
 
 
 def _factor_for_num(num: int, smaller_spacing: float, dist: float) -> float:
-    lo = 1.0001
-    if _geom_dist_zero(lo, num, smaller_spacing, dist) >= 0:
-        return lo
-    hi = max(2.0, dist / (smaller_spacing * max(1, num - 1)))
-    while _geom_dist_zero(hi, num, smaller_spacing, dist) <= 0:
-        hi *= 2
-        if hi > 1e6:
-            return hi
-    try:
-        result = scipy.optimize.root_scalar(
-            _geom_dist_zero,
-            args=(num, smaller_spacing, dist),
-            bracket=(lo, hi),
-            method="brentq",
-        )
-        return result.root
-    except (ValueError, RuntimeError):
-        return 1.5
+    roots = scipy.optimize.fsolve(
+        func=_geom_dist_zero, x0=1.5, args=(num, smaller_spacing, dist)
+    )
+    return roots[0]
 
 
 def _factor_ubound(num: int, ratio: float, max_factor: float) -> float:
@@ -340,16 +326,12 @@ def _spacings_at_dist_zero(
 def _dist_for_max_spacings(
     lower_spacing: float, upper_spacing: float, dist: float, max_factor: float
 ) -> float:
-    try:
-        result = scipy.optimize.root_scalar(
-            _spacings_at_dist_zero,
-            args=(lower_spacing, upper_spacing, dist, max_factor),
-            bracket=(dist * 1e-6, dist * (1 - 1e-6)),
-            method="brentq",
-        )
-        return result.root
-    except (ValueError, RuntimeError):
-        return dist / 2
+    roots = scipy.optimize.fsolve(
+        func=_spacings_at_dist_zero,
+        x0=dist / 2,
+        args=(lower_spacing, upper_spacing, dist, max_factor),
+    )
+    return roots[0]
 
 
 def _dim_idx_to_desc(idx: int) -> str:
