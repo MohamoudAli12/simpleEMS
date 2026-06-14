@@ -6,7 +6,7 @@ transitions and the thirds rule at metal boundaries.
 """
 
 from enum import Enum
-from bisect import bisect_left, bisect_right, insort_left
+from bisect import bisect_left, insort_left
 
 import numpy as np
 import scipy.optimize
@@ -142,21 +142,6 @@ def _remove_dups(lst: list, fixed: list | None = None) -> list:
         last = elt
         new_lst.append(elt)
     return new_lst
-
-
-def _bounds_from_prims(
-    prims: list[CSPrimitives], fixed: list[list[float]]
-) -> list[list[float]]:
-    dim_bounds = [[], [], []]
-    for prim in prims:
-        prim_bounds = _get_prim_bounds(prim)
-        for dim, bounds in enumerate(prim_bounds):
-            dim_bounds[dim].append(bounds[0])
-            dim_bounds[dim].append(bounds[1])
-    for dim, bounds in enumerate(dim_bounds):
-        dim_bounds[dim] = sorted(bounds)
-        dim_bounds[dim] = _remove_dups(dim_bounds[dim], fixed[dim])
-    return dim_bounds
 
 
 def _collect_all_bounds(
@@ -332,37 +317,6 @@ def _dist_for_max_spacings(
         args=(lower_spacing, upper_spacing, dist, max_factor),
     )
     return roots[0]
-
-
-def _dim_idx_to_desc(idx: int) -> str:
-    if idx == 0:
-        return "xmin"
-    if idx == 1:
-        return "xmax"
-    if idx == 2:
-        return "ymin"
-    if idx == 3:
-        return "ymax"
-    if idx == 4:
-        return "zmin"
-    if idx == 5:
-        return "zmax"
-    raise ValueError("Index must be between 0 and 5, inclusive.")
-
-
-def _mesh_lines_in_box(
-    mesh_lines: list[list[float]], box_lower: list[float], box_upper: list[float]
-) -> list[list[float]]:
-    mesh_lines_inside = []
-    for dim in range(3):
-        lower_pos = box_lower[dim]
-        upper_pos = box_upper[dim]
-        dim_lines = mesh_lines[dim]
-        dim_lines_inside = dim_lines[
-            bisect_left(dim_lines, lower_pos) : bisect_right(dim_lines, upper_pos)
-        ]
-        mesh_lines_inside.append(dim_lines_inside)
-    return mesh_lines_inside
 
 
 class Mesh:
