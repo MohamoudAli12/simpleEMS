@@ -168,8 +168,53 @@ def _float_inside(val: float, lower: float, upper: float) -> bool:
     return lower <= val <= upper
 
 
+def _point_in_poly(px: float, py: float, verts: list[tuple[float, float]]) -> bool:
+    inside = False
+    j = len(verts) - 1
+    for i in range(len(verts)):
+        xi, yi = verts[i]
+        xj, yj = verts[j]
+        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
 def _pos_in_bounds(pos: float, lower: float, upper: float) -> bool:
     return fp_gep(pos, lower) and fp_lep(pos, upper)
+
+
+def _linpoly_covers_point(prim: CSPrimitives, dim: int, pos: float) -> bool:
+    try:
+        coords = prim.GetCoords()
+        x_verts = list(coords[0])
+        y_verts = list(coords[1])
+        norm_dir = int(prim.GetNormDir())
+        tr = prim.GetTransform()
+        elev = float(prim.GetElevation())
+        bb = prim.GetBoundBox()
+        var_dims = [d for d in range(3) if d != norm_dir]
+        if dim == norm_dir:
+            lower, upper = bb[0][dim], bb[1][dim]
+            return _float_inside(pos, lower, upper)
+        d0, d1 = var_dims
+        p0 = pos if dim == d0 else (bb[0][d0] + bb[1][d0]) * 0.5
+        p1 = pos if dim == d1 else (bb[0][d1] + bb[1][d1]) * 0.5
+        world_verts: list[tuple[float, float]] = []
+        for x, y in zip(x_verts, y_verts, strict=True):
+            pt = [0.0, 0.0, 0.0]
+            if norm_dir == 0:
+                pt = [elev, float(x), float(y)]
+            elif norm_dir == 1:
+                pt = [float(x), elev, float(y)]
+            else:
+                pt = [float(x), float(y), elev]
+            if tr is not None:
+                pt = tr.Transform(pt)
+            world_verts.append((pt[d0], pt[d1]))
+        return _point_in_poly(p0, p1, world_verts)
+    except Exception:
+        return True
 
 
 def _type_at_pos(prims: list[CSPrimitives], dim: int, pos: float) -> Type | None:
@@ -178,6 +223,8 @@ def _type_at_pos(prims: list[CSPrimitives], dim: int, pos: float) -> Type | None
     for prim in prims:
         prim_bounds = _get_prim_bounds(prim)
         if _float_inside(pos, prim_bounds[dim][0], prim_bounds[dim][1]):
+            if _is_linpoly(prim) and not _linpoly_covers_point(prim, dim, pos):
+                continue
             dim_size = prim_bounds[dim][1] - prim_bounds[dim][0]
             if np.isclose(dim_size, smallest_dim, rtol=1e-3, atol=0):
                 if _prim_metalp(prim):
@@ -336,6 +383,7 @@ class Mesh:
         metal_mesh_resolution, unit, and main_freq.
     smooth_ratio : float
         Maximum ratio between adjacent cells (default 1.5).
+
     """
 
     def __init__(
@@ -395,6 +443,34 @@ class Mesh:
     def _bounded_types(
         self, bounds: list[list[float]], prims: list[CSPrimitives]
     ) -> list[list[BoundedType]]:
+        def _resolve_region_type(
+            ppos: list[CSPrimitives], pdim: int, ppos_val: float
+        ) -> Type | None:
+            t = _type_at_pos(ppos, pdim, ppos_val)
+            if t == Type.metal:
+                in_notch = False
+                for p in ppos:
+                    if _is_linpoly(p) and _prim_metalp(p):
+                        pb = _get_prim_bounds(p)
+                        if _float_inside(
+                            ppos_val, pb[pdim][0], pb[pdim][1]
+                        ) and not _linpoly_covers_point(p, pdim, ppos_val):
+                            in_notch = True
+                            break
+                if in_notch:
+                    covers = False
+                    for p in ppos:
+                        if _is_linpoly(p) and _prim_metalp(p):
+                            pb = _get_prim_bounds(p)
+                            if _float_inside(
+                                ppos_val, pb[pdim][0], pb[pdim][1]
+                            ) and _linpoly_covers_point(p, pdim, ppos_val):
+                                covers = True
+                                break
+                    if not covers:
+                        t = Type.nonmetal
+            return t
+
         bounded_types = [[], [], []]
         for dim, dim_bounds in enumerate(bounds):
             last_bound = None
@@ -402,15 +478,15 @@ class Mesh:
                 if bound in self.fixed_lines[dim]:
                     if last_bound is not None:
                         mid_pos = np.average([last_bound, bound])
-                        prop_type = _type_at_pos(prims, dim, mid_pos)
+                        prop_type = _resolve_region_type(prims, dim, mid_pos)
                         btype = BoundedType(prop_type, last_bound, bound)
                         bounded_types[dim].append(btype)
-                    prop_type = _type_at_pos(prims, dim, bound)
+                    prop_type = _resolve_region_type(prims, dim, bound)
                     btype = BoundedType(prop_type, bound, bound)
                     bounded_types[dim].append(btype)
                 elif last_bound is not None:
                     mid_pos = np.average([last_bound, bound])
-                    prop_type = _type_at_pos(prims, dim, mid_pos)
+                    prop_type = _resolve_region_type(prims, dim, mid_pos)
                     btype = BoundedType(prop_type, last_bound, bound)
                     bounded_types[dim].append(btype)
                 last_bound = bound
