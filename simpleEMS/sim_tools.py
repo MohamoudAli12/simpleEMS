@@ -85,6 +85,7 @@ __all__ = [
 ]
 
 freq_formatter = EngFormatter(unit="Hz", places=3)
+time_formatter = EngFormatter(unit="s", places=3)
 plt.rcParams["figure.constrained_layout.use"] = True
 plt.rcParams["savefig.dpi"] = 300
 
@@ -159,6 +160,8 @@ class NetworkParams(NamedTuple):
         VSWR values across the frequency range.
     input_power : float
         Calculated input power at the port.
+    phase_deg: NDArray | None
+        the phase of the transmission parameter S21.
     """
 
     freqs: NDArray
@@ -466,7 +469,7 @@ class SimTools:
             ),
         )
 
-        plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
+        plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.title(title)
@@ -524,12 +527,129 @@ class SimTools:
             ),
         )
 
-        plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
+        plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.title(title)
         plt.legend()
         plt.grid(True)
+
+    @staticmethod
+    def plot_phase(
+        freqs: NDArray,
+        s21: NDArray | None,
+        x_label: str = "Frequency",
+        y_label: str = "Phase (deg)",
+        title: str = "Phase vs Frequency",
+    ) -> None:
+        """
+        Plot the input impedance (Z11) as a function of frequency.
+
+        This method generates a 2D plot of the complex input impedance Z11 versus
+        frequency. The real and imaginary components of Z11 are plotted
+        to analyze impedance behavior across the frequency range.
+
+        Parameters
+        ----------
+        freqs : NDArray
+            A 1D array of frequencies (in Hz) to be plotted on the x-axis.
+
+        phase : NDArray
+            A 1D array of complex transmission parameter values corresponding to each
+            frequency.
+
+        x_label : str, optional
+            Label for the x-axis. Default is "Frequency".
+
+        y_label : str, optional
+            Label for the y-axis. Default is "Phase (deg)".
+
+        title : str, optional
+            Title of the plot. Default is "Phase vs Frequency".
+
+        Returns
+        -------
+        None
+            This method does not return any value. It displays the impedance plot.
+        """
+        phase = np.angle(s21, deg=True)
+        plt.figure()
+        lines_phase = plt.plot(freqs, phase, label="Phase (deg)")
+        cursor_phase = mplcursors.cursor(lines_phase, multiple=True)
+
+        cursor_phase.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
+                f"Freq={freq_formatter(sel.target[0])}\nPhase={sel.target[1]:.2f} Deg"
+            ),
+        )
+
+        plt.gca().xaxis.set_major_formatter(freq_formatter)
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+        plt.title(title)
+        plt.grid(True)
+        plt.legend()
+
+    @staticmethod
+    def plot_group_delay(
+        freqs: NDArray,
+        s21: NDArray | None,
+        x_label: str = "Frequency",
+        y_label: str = "Group Delay",
+        title: str = "Group Delay vs Frequency",
+    ) -> None:
+        """
+        Plot the input impedance (Z11) as a function of frequency.
+
+        This method generates a 2D plot of the complex input impedance Z11 versus
+        frequency. The real and imaginary components of Z11 are plotted
+        to analyze impedance behavior across the frequency range.
+
+        Parameters
+        ----------
+        freqs : NDArray
+            A 1D array of frequencies (in Hz) to be plotted on the x-axis.
+
+        phase : NDArray
+            A 1D array of complex transmission parameter values corresponding to each
+            frequency.
+
+        x_label : str, optional
+            Label for the x-axis. Default is "Frequency".
+
+        y_label : str, optional
+            Label for the y-axis. Default is "Phase (deg)".
+
+        title : str, optional
+            Title of the plot. Default is "Phase vs Frequency".
+
+        Returns
+        -------
+        None
+            This method does not return any value. It displays the impedance plot.
+        """
+        delta_phi_df = np.gradient(np.unwrap(np.angle(s21)), freqs)
+        group_delay = -delta_phi_df / 2 * np.pi
+        plt.figure()
+        lines_group = plt.plot(freqs, group_delay, label="group_delay")
+        cursor_group = mplcursors.cursor(lines_group, multiple=True)
+
+        cursor_group.connect(
+            "add",
+            lambda sel: sel.annotation.set_text(
+                f"Freq={freq_formatter(sel.target[0])}\n"
+                f"Group Delay={time_formatter(sel.target[1])}"
+            ),
+        )
+
+        plt.gca().xaxis.set_major_formatter(freq_formatter)
+        plt.gca().yaxis.set_major_formatter(time_formatter)
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+        plt.title(title)
+        plt.grid(True)
+        plt.legend()
 
     @staticmethod
     def plot_impedance(
@@ -592,7 +712,7 @@ class SimTools:
             ),
         )
 
-        plt.gca().xaxis.set_major_formatter(EngFormatter(unit="Hz"))
+        plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.title(title)
@@ -1293,20 +1413,52 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
+        def _set_sim_bounds_from_geometry(
+            params: SimParams, dim_bounds: list[list[float]]
+        ) -> NDArray:
+            new_sim_box = []
+            for dim in range(3):
+                if not dim_bounds[dim]:
+                    half = params.simulation_box[dim] / 2.0
+                    new_sim_box.append((-half, half))
+                    continue
+                geo_min = dim_bounds[dim][0]
+                geo_max = dim_bounds[dim][-1]
+                span = geo_max - geo_min
+                padding = max(params.lambda0 / 2, span * 0.15)
+                new_sim_box.append((geo_min - padding, geo_max + padding))
+            return np.array(new_sim_box)
+
+        bounds = [[], [], []]
+        for prim in CSX.GetAllPrimitives():
+            try:
+                bb = prim.GetBoundBox()
+                tr = prim.GetTransform()
+                p0 = np.array(tr.Transform(bb[0]))
+                p1 = np.array(tr.Transform(bb[1]))
+                for dim in range(3):
+                    bounds[dim].append(min(p0[dim], p1[dim]))
+                    bounds[dim].append(max(p0[dim], p1[dim]))
+            except Exception:
+                pass
+
+        dim_bounds = [sorted(set(b)) for b in bounds]
+        sim_box = _set_sim_bounds_from_geometry(params, dim_bounds)
+
         # TODO Add appropriate dump mode based on openEMS docs
         dump_path = output_path / "field_dump"
         dump_path.mkdir(parents=True, exist_ok=True)
-        # dump_file = dump_path / dump_type.value[1]
+        dump_name = str(Path("field_dump") / dump_type.value[1])
         dump = CSX.AddDump(
-            str(dump_path / dump_type.value[1]),
+            dump_name,
             file_type=0,
             dump_type=dump_type.value[0],
             dump_mode=0,
         )
-        start = [params.simulation_box[0] / 2, params.simulation_box[1] / 2, 0]
+        start = [sim_box[0][0], sim_box[1][0], 0]
         stop = [
-            -params.simulation_box[0] / 2,
-            -params.simulation_box[1] / 2,
+            sim_box[0][1],
+            sim_box[1][1],
             params.substrate_thickness_mm + params.copper_thickness_mm,
         ]
         dump.AddBox(start=start, stop=stop)

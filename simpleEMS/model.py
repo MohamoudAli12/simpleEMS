@@ -15,16 +15,14 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Load a ``structure.xml``, run the simulation, and post-process
-S-parameters.
-
-Provides :func:`simulate_model` as the main entry point, along with
-helper functions for frequency extraction and port reconstruction.
+Load a ``structure.xml``, run the simulation, and return CSX structure and network
+parameters.
 """
 
 from __future__ import annotations
 
 import re
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -36,14 +34,17 @@ from openEMS.ports import LumpedPort, Port
 
 from .sim_tools import NetworkParams, SimTools
 
+__all__ = ["simulate_model"]
 
-def get_freq_range(structure_xml_path: str) -> tuple[float, float]:
-    """Extract the excitation centre frequency and cutoff from
+
+def get_freq_range(structure_xml_path: str | Path) -> tuple[float, float]:
+    """
+    Extract the excitation centre frequency and cutoff from
     ``structure.xml``.
 
     Parameters
     ----------
-    structure_xml_path : str
+    structure_xml_path : str | Path
         Path to the ``structure.xml`` file.
 
     Returns
@@ -52,6 +53,13 @@ def get_freq_range(structure_xml_path: str) -> tuple[float, float]:
         ``(f0, fc)`` – centre frequency and cutoff frequency in Hz.
     """
     tree = ET.parse(structure_xml_path)
+    root = tree.getroot()
+    if root.tag != "openEMS":
+        raise ValueError(
+            "This model is missing openEMS FDTD parameters and cannot be simulated."
+            "model should be generated using FDTD.Write2XML() method"
+        )
+
     exc = tree.find(".//FDTD/Excitation")
     if exc is None:
         raise ValueError("No <FDTD><Excitation> element found in XML")
@@ -61,7 +69,8 @@ def get_freq_range(structure_xml_path: str) -> tuple[float, float]:
 
 
 def reconstruct_ports(csx: ContinuousStructure) -> tuple[list[LumpedPort], float]:
-    """Build ``LumpedPort`` objects from the CSXCAD properties of a
+    """
+    Build ``LumpedPort`` objects from the CSXCAD properties of a
     loaded ``structure.xml``.
 
     The port naming convention must follow the pattern created by
@@ -156,13 +165,14 @@ def reconstruct_ports(csx: ContinuousStructure) -> tuple[list[LumpedPort], float
 
 
 def simulate_model(
-    structure_xml_path: str,
+    structure_xml_path: str | Path,
     output_path: str | Path,
     num_points: int = 1000,
     run: bool = True,
-) -> NetworkParams:
-    """Load a ``structure.xml``, run the simulation, compute network
-    parameters, and optionally plot S-parameters.
+) -> tuple[NetworkParams, ContinuousStructure, float]:
+    """
+    Load a ``structure.xml``, run the simulation and compute network
+    parameters.
 
     Parameters
     ----------
@@ -178,8 +188,6 @@ def simulate_model(
     run : bool
         Whether to execute the FDTD solver (default ``True``).  Set
         to ``False`` to only post-process existing results.
-    plot : bool
-        Whether to display S-parameter plots (default ``True``).
 
     Returns
     -------
@@ -190,18 +198,24 @@ def simulate_model(
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    FDTD = openEMS()
-    FDTD.ReadFromXML(structure_xml_path)
-    _CSX = FDTD.GetCSX()
-    _CSX.Write2XML("_structure.xml")
-    CSX = ContinuousStructure()
-    CSX.ReadFromXML("_structure.xml")
-
-    SimTools.write_and_show_structure(CSX, output_path)
     f0, fc = get_freq_range(structure_xml_path)
     freqs = np.linspace(f0 - fc, f0 + fc, num_points)
 
+    FDTD = openEMS()
+    FDTD.ReadFromXML(structure_xml_path)
+    _CSX = FDTD.GetCSX()
+    # _CSX.Write2XML("_structure.xml")
+    # CSX = ContinuousStructure()
+    # CSX.ReadFromXML("_structure.xml")
+
+    with tempfile.NamedTemporaryFile(suffix=".xml") as tmp:
+        _CSX.Write2XML(tmp.name)
+        CSX = ContinuousStructure()
+        CSX.ReadFromXML(tmp.name)
+
+    SimTools.write_and_show_structure(CSX, output_path)
     ports, charac_imp = reconstruct_ports(CSX)
+
     if not ports:
         raise RuntimeError(f"No ports found in {structure_xml_path}")
 

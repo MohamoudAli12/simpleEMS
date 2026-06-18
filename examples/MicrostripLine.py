@@ -48,5 +48,6 @@ network_params = microstrip.compute_network_params(
 
 microstrip.plot_s_param(freqs, network_params.s11, network_params.s21)
 microstrip.plot_impedance(freqs, network_params.z11)
+microstrip.plot_phase(freqs, network_params.phase)
 microstrip.show_plots()
 # PPROCESS

@@ -16,7 +16,7 @@ from CSXCAD.CSPrimitives import CSPrimitives
 
 from .sim_params import SimParams
 
-PREC = 10
+PREC = 20
 
 
 class Type(Enum):

@@ -88,6 +88,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         filter.plot_s_param(
             network_params.freqs, network_params.s11, network_params.s21
         )
+        filter.plot_phase(network_params.freqs, network_params.s21)
+        filter.plot_group_delay(network_params.freqs, network_params.s21)
         filter.save_plots(output_path)
         filter.show_plots()
         filter.export_gerber(CSX, output_path)
