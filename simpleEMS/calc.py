@@ -173,6 +173,21 @@ def microstrip_width_from_impedance(
 
         return Z_f, er_eff_f
 
+    # --- Convergence check ---
+    Z_thinnest, _ = get_Z_at_freq(
+        0.001, subs_height, copper_thickness, subst_eps_r, freq_hz
+    )
+    Z_widest, _ = get_Z_at_freq(
+        100, subs_height, copper_thickness, subst_eps_r, freq_hz
+    )
+    Z_min = min(Z_thinnest, Z_widest)
+    Z_max = max(Z_thinnest, Z_widest)
+    if not (Z_min <= charac_imp <= Z_max):
+        raise ValueError(
+            f"Target impedance {charac_imp} Ω not realizable on this substrate"
+            f" (range [{Z_min:.1f}, {Z_max:.1f}] Ω)"
+        )
+
     # --- Binary Search for Width ---
     low, high = 0.001, 100
     mid_w = 0.0

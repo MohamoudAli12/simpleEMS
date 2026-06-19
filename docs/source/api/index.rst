@@ -7,4 +7,5 @@ API
     patch_antenna
     quarterwave_stub_filter
     microstrip_line
+    model
 

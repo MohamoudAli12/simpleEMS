@@ -20,17 +20,24 @@ from pathlib import Path
 def setup(app):
     def copy_assets(app):
         docs_dir = Path(__file__).parent.parent.resolve()
+
         image_src = (docs_dir / "../images").resolve()
         image_dst = (docs_dir / "build/html/images").resolve()
 
-        changlog_src = docs_dir.parent / "CHANGELOG.md"
+        changelog_src = docs_dir.parent / "CHANGELOG.md"
         changelog_dst = (docs_dir / "source").resolve()
+
+        contrib_src = docs_dir.parent / "CONTRIBUTING.md"
+        contrib_dst = (docs_dir / "source").resolve()
 
         if image_src.exists():
             shutil.copytree(image_src, image_dst, dirs_exist_ok=True)
 
-        if changlog_src.exists():
-            shutil.copy2(changlog_src, changelog_dst)
+        if changelog_src.exists():
+            shutil.copy2(changelog_src, changelog_dst)
+
+        if contrib_src.exists():
+            shutil.copy2(contrib_src, contrib_dst)
 
     app.connect("builder-inited", copy_assets)
 

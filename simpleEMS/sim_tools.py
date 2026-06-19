@@ -160,8 +160,6 @@ class NetworkParams(NamedTuple):
         VSWR values across the frequency range.
     input_power : float
         Calculated input power at the port.
-    phase_deg: NDArray | None
-        the phase of the transmission parameter S21.
     """
 
     freqs: NDArray
@@ -431,8 +429,23 @@ class SimTools:
         y_label : str, optional
             Label for the y-axis. Default is "S-Parameter (dB)".
 
+        s21 : NDArray, optional
+            A 1D array of complex S21 values for two-port networks.
+
+        x_label : str, optional
+            Label for the x-axis. Default is "Frequency".
+
+        y_label : str, optional
+            Label for the y-axis. Default is "S-Parameter (dB)".
+
         title : str, optional
             Title of the plot. Default is "S-Parameters vs Frequency".
+
+        label_s11 : str, optional
+            Legend label for the S11 trace. Default is ``"S11"``.
+
+        label_s21 : str, optional
+            Legend label for the S21 trace. Default is ``"S21"``.
 
         Returns
         -------
@@ -543,20 +556,18 @@ class SimTools:
         title: str = "Phase vs Frequency",
     ) -> None:
         """
-        Plot the input impedance (Z11) as a function of frequency.
+        Plot the transmission phase (angle of S21) as a function of frequency.
 
-        This method generates a 2D plot of the complex input impedance Z11 versus
-        frequency. The real and imaginary components of Z11 are plotted
-        to analyze impedance behavior across the frequency range.
+        This method generates a 2D plot of the unwrapped phase of S21 over
+        the specified frequency range.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) to be plotted on the x-axis.
 
-        phase : NDArray
-            A 1D array of complex transmission parameter values corresponding to each
-            frequency.
+        s21 : NDArray
+            A 1D array of complex S21 values corresponding to each frequency.
 
         x_label : str, optional
             Label for the x-axis. Default is "Frequency".
@@ -570,7 +581,7 @@ class SimTools:
         Returns
         -------
         None
-            This method does not return any value. It displays the impedance plot.
+            This method does not return any value. It displays the phase plot.
         """
         phase = np.angle(s21, deg=True)
         plt.figure()
@@ -600,34 +611,32 @@ class SimTools:
         title: str = "Group Delay vs Frequency",
     ) -> None:
         """
-        Plot the input impedance (Z11) as a function of frequency.
+        Plot the group delay as a function of frequency.
 
-        This method generates a 2D plot of the complex input impedance Z11 versus
-        frequency. The real and imaginary components of Z11 are plotted
-        to analyze impedance behavior across the frequency range.
+        This method computes and plots the group delay from the derivative of
+        the unwrapped phase of S21 over the specified frequency range.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) to be plotted on the x-axis.
 
-        phase : NDArray
-            A 1D array of complex transmission parameter values corresponding to each
-            frequency.
+        s21 : NDArray
+            A 1D array of complex S21 values corresponding to each frequency.
 
         x_label : str, optional
             Label for the x-axis. Default is "Frequency".
 
         y_label : str, optional
-            Label for the y-axis. Default is "Phase (deg)".
+            Label for the y-axis. Default is "Group Delay".
 
         title : str, optional
-            Title of the plot. Default is "Phase vs Frequency".
+            Title of the plot. Default is "Group Delay vs Frequency".
 
         Returns
         -------
         None
-            This method does not return any value. It displays the impedance plot.
+            This method does not return any value. It displays the group delay plot.
         """
         delta_phi_df = np.gradient(np.unwrap(np.angle(s21)), freqs)
         group_delay = -delta_phi_df / 2 * np.pi
@@ -660,34 +669,32 @@ class SimTools:
         title: str = "Z11 vs Frequency",
     ) -> None:
         """
-        Plot the input impedance (Z11) as a function of frequency.
+        Plot the transmission phase (angle of S21) as a function of frequency.
 
-        This method generates a 2D plot of the complex input impedance Z11 versus
-        frequency. The real and imaginary components of Z11 are plotted
-        to analyze impedance behavior across the frequency range.
+        This method generates a 2D plot of the unwrapped phase of S21 over
+        the specified frequency range.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) to be plotted on the x-axis.
 
-        z11 : NDArray
-            A 1D array of complex input impedance values corresponding to each
-            frequency.
+        s21 : NDArray
+            A 1D array of complex S21 values corresponding to each frequency.
 
         x_label : str, optional
             Label for the x-axis. Default is "Frequency".
 
         y_label : str, optional
-            Label for the y-axis. Default is "Z11".
+            Label for the y-axis. Default is "Phase (deg)".
 
         title : str, optional
-            Title of the plot. Default is "Z11 vs Frequency".
+            Title of the plot. Default is "Phase vs Frequency".
 
         Returns
         -------
         None
-            This method does not return any value. It displays the impedance plot.
+            This method does not return any value. It displays the phase plot.
         """
         z11_real = np.real(z11)
         z11_imag = np.imag(z11)

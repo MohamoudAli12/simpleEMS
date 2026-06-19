@@ -4,7 +4,7 @@
 
    user/index
    api/index
-   contributing
+   CONTRIBUTING
    CHANGELOG
 
 .. include:: ../../README.md

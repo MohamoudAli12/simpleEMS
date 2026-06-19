@@ -53,7 +53,22 @@ __all__ = [
 def _get_total_length(
     filter_order: int, line_length_mm: float, shunt_line_width_mm: list[float]
 ) -> float:
-    """Compute total physical length of the filter structure."""
+    """Compute total physical length of the filter structure along the x-axis.
+
+    Parameters
+    ----------
+    filter_order : int
+        Order of the filter (number of shunt stubs).
+    line_length_mm : float
+        Length of each series line section in mm.
+    shunt_line_width_mm : list of float
+        Widths of each shunt stub in mm.
+
+    Returns
+    -------
+    float
+        Total physical length in mm.
+    """
     total_length = (filter_order + 1) * line_length_mm
     for i in range(filter_order):
         total_length += shunt_line_width_mm[i]
@@ -99,6 +114,8 @@ class QuarterWaveFilterParams(SimParams):
         Width of the series transmission line in mm.
     shunt_line_width_mm : list of float
         Widths of each shunt stub in mm.
+    shunt_line_length_mm : list of float
+        Lengths of each shunt stub in mm.
     line_length_mm : float
         Physical length of each line section in mm.
     """
@@ -194,6 +211,11 @@ class QuarterWaveFilterParams(SimParams):
 
         self.frac_bandwidth = self.bandwidth_freq / self.centre_freq
 
+        if not 0 < self.frac_bandwidth <= 1:
+            raise ValueError(
+                f"Fractional bandwidth must be in (0, 1], got {self.frac_bandwidth}"
+            )
+
         self._compute_geometry()
 
     def _get_shunt_width_and_length(self, idx: int) -> tuple[float, float]:
@@ -213,6 +235,13 @@ class QuarterWaveFilterParams(SimParams):
             self.substrate_eps_r,
             self.centre_freq,
         )
+
+        if width_shunt_mm < self.min_trace_width_mm:
+            raise ValueError(
+                f"Shunt stub {idx} width {width_shunt_mm:.4f} mm "
+                f"< minimum trace width {self.min_trace_width_mm} mm"
+            )
+
         length_shunt_mm = calculate_electrical_length_mm(
             self.elec_length_deg,
             er_eff_shunt,
@@ -239,6 +268,12 @@ class QuarterWaveFilterParams(SimParams):
             self.main_freq,
         )
 
+        if self.series_line_width_mm < self.min_trace_width_mm:
+            raise ValueError(
+                f"Series line width {self.series_line_width_mm:.4f} mm "
+                f"< minimum trace width {self.min_trace_width_mm} mm"
+            )
+
         self.line_length_mm = calculate_electrical_length_mm(
             self.elec_length_deg,
             er_eff,
@@ -250,6 +285,16 @@ class QuarterWaveFilterParams(SimParams):
             width_shunt, length_shunt = self._get_shunt_width_and_length(i)
             self.shunt_line_width_mm.append(width_shunt)
             self.shunt_line_length_mm.append(length_shunt)
+
+        for i in range(self.filter_order - 1):
+            gap = (
+                self.line_length_mm
+                - (self.shunt_line_width_mm[i] + self.shunt_line_width_mm[i + 1]) / 2
+            )
+            if gap < 0:
+                raise ValueError(
+                    f"Adjacent stubs {i} and {i + 1} overlap by {-gap:.4f} mm"
+                )
 
         self._round_outputs()
 

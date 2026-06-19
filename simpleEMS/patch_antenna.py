@@ -216,6 +216,13 @@ class InsetFedPatchParams(SimParams):
         self.inset_width_mm = dims.inset_width_mm / 2
         self.inset_length_mm = dims.inset_length_mm
 
+        inset_gap = self.inset_width_mm / 2
+        if inset_gap < self.min_trace_spacing_mm:
+            raise ValueError(
+                f"Inset gap {inset_gap:.4f} mm < minimum trace "
+                f"spacing {self.min_trace_spacing_mm} mm"
+            )
+
         self._round_outputs()
 
     def _round_outputs(self) -> None:
@@ -371,22 +378,9 @@ class InsetFedPatchAntenna(PatchAntenna):
         Returns
         -------
         None
-
-        Notes
-        -----
-        The method includes a DRC (Design Rule Check) warning if
-        `inset_width_mm / 2` is below 0.089 mm, which may exceed standard
-        PCB fabrication capabilities.
         """
         patch_inset = self.CSX.AddMetal("patch_inset")
         patch_inset.SetColor("#B87333", 255)
-        if self.params.inset_width_mm / 2 < 0.089:
-            console.print(
-                f"WARNING: Inset Width {self.params.inset_width_mm / 2}"
-                " is too small, check minimum trace spacing"
-                " with your PCB manufacturer",
-                style="warning",
-            )
         pp = [
             [
                 -self.params.patch_width_mm / 2,
@@ -584,7 +578,8 @@ class InsetFedPatchAntenna(PatchAntenna):
         Construct the complete inset-fed patch antenna geometry.
         This method orchestrates the creation of all antenna components
         including the patch with inset, feed line, substrate, ground plane,
-        excitation port, mesh, and NF2FF recording box.
+        and excitation port. Mesh and NF2FF recording box must be created
+        separately via ``create_mesh`` and ``create_nf2ff``.
 
         Returns
         -------
@@ -896,8 +891,9 @@ class ProbeFedPatchAntenna(PatchAntenna):
         """
         Construct the complete probe-fed patch antenna geometry.
         This method orchestrates the creation of all antenna components
-        including the patch element, substrate, ground plane, excitation port,
-        mesh, and NF2FF recording box.
+        including the patch element, substrate, ground plane, and excitation
+        port. Mesh and NF2FF recording box must be created separately via
+        ``create_mesh`` and ``create_nf2ff``.
 
         Returns
         -------

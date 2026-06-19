@@ -55,17 +55,21 @@ class SimParams:
     substrate_thickness_mm : float
         Substrate thickness in millimeters.
     substrate_width_mm : float
-        Substrate width in millimeters.
+        Substrate width in millimeters. Must be provided by subclasses.
     substrate_length_mm : float
-        Substrate length in millimeters.
+        Substrate length in millimeters. Must be provided by subclasses.
     substrate_cells : int, optional
         Suggested number of mesh cells along the substrate thickness.
         Default value is ``4``.
     unit : float, optional
-        unit used in the model. Default value is ``1e-3`` which represents millimeters.
-        this value should not be changed.
+        Unit used in the model. Default value is ``1e-3`` which represents millimeters.
+        This value should not be changed.
     copper_thickness_mm : float, optional
         Thickness of the copper layer in millimeters. Default is ``0.035``.
+    min_trace_width_mm : float, optional
+        Minimum manufacturable trace width in millimeters. Default is ``0.1``.
+    min_trace_spacing_mm : float, optional
+        Minimum manufacturable trace spacing in millimeters. Default is ``0.089``.
     num_points : int
         Number of frequency points for post-processing. Default is ``1000``.
     fp_precision : int, optional
@@ -79,11 +83,11 @@ class SimParams:
         Convergence threshold for the stopping criteria. Default is ``1e-4``.
     mesh_resolution_factor : float, optional
         Division factor used to compute the global mesh resolution
-        (``lambda0 / factor``). Default is ``20``.
+        (``lambda0 / factor``). Default is ``10``.
 
     metal_mesh_resolution_factor : float, optional
         Division factor used to compute the metal primitives mesh resolution
-        (``lambda0 / factor``). Default is ``60``.
+        (``lambda0 / factor``). Default is ``40``.
 
     Attributes
     ----------
@@ -116,6 +120,8 @@ class SimParams:
     num_points: int = 1000
 
     copper_thickness_mm: float = 0.035
+    min_trace_width_mm: float = 0.1
+    min_trace_spacing_mm: float = 0.089
     fp_precision: int = 3
     charac_imp: float = 50
     timestep: int = 90000000

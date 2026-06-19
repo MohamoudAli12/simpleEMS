@@ -18,7 +18,6 @@ params = InsetFedPatchParams(
     substrate_eps_r=4.4,
     substrate_tand=0.001,
     charac_imp=50,
-    fp_precision=5,
 )
 # PARAMS
 

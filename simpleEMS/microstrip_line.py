@@ -176,6 +176,12 @@ class MicrostripLineParams(SimParams):
             self.main_freq,
         )
 
+        if self.microstrip_width_mm < self.min_trace_width_mm:
+            raise ValueError(
+                f"Microstrip width {self.microstrip_width_mm:.4f} mm "
+                f"< minimum trace width {self.min_trace_width_mm} mm"
+            )
+
         self.microstrip_length_mm = calculate_electrical_length_mm(
             self.elec_length_deg,
             er_eff,
