@@ -38,21 +38,21 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         params.shunt_line_width_mm = optimize_val[2:5]
         params.shunt_line_length_mm = optimize_val[5:]
 
-    CSX, FDTD, freqs = setup_simulation(params)
+    sim = setup_simulation(params)
 
-    filter = BandPassQuarterWaveFilter(params, CSX, FDTD)
+    filter = BandPassQuarterWaveFilter(params, sim.CSX, sim.FDTD)
     filter.print_and_save_params(params, output_path)
     ports = filter.build_band_pass_quarter_wave_filter()
-    filter.add_field_dump(CSX, params, output_path)
+    filter.add_field_dump(sim.CSX, params, output_path)
     filter.create_mesh()
-    filter.write_and_show_structure(FDTD, output_path)
+    filter.write_and_show_structure(sim.FDTD, output_path)
     network_params = None
 
     if sweep:
-        filter.run_simulation(FDTD, output_path)
+        filter.run_simulation(sim.FDTD, output_path)
         network_params = filter.compute_network_params(
             ports,
-            freqs,
+            sim.freqs,
             params.charac_imp,
             output_path,
         )
@@ -60,10 +60,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return network_params
 
     if optimize:
-        filter.run_simulation(FDTD, output_path)
+        filter.run_simulation(sim.FDTD, output_path)
         network_params = filter.compute_network_params(
             ports,
-            freqs,
+            sim.freqs,
             params.charac_imp,
             output_path,
         )
@@ -77,10 +77,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return s21_cost
 
     if not (sweep or optimize):
-        filter.run_simulation(FDTD, output_path)
+        filter.run_simulation(sim.FDTD, output_path)
         network_params = filter.compute_network_params(
             ports,
-            freqs,
+            sim.freqs,
             params.charac_imp,
             output_path,
         )
@@ -90,9 +90,9 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
         filter.save_plots(output_path)
         filter.show_plots()
-        filter.export_gerber(CSX, output_path)
+        filter.export_gerber(sim.CSX, output_path)
         filter.export_touchstone(
-            freqs=freqs,
+            freqs=sim.freqs,
             s11=network_params.s11,
             s21=network_params.s21,
             output_path=output_path,

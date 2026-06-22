@@ -24,31 +24,31 @@ params = QuarterWaveFilterParams(
 # PARAMS
 
 # SETUP
-CSX, FDTD, freqs = setup_simulation(params)
+sim = setup_simulation(params)
 # SETUP
 
 # BUILD
-filter = BandPassQuarterWaveFilter(params, CSX, FDTD)
+filter = BandPassQuarterWaveFilter(params, sim.CSX, sim.FDTD)
 filter.print_and_save_params(params)
 ports = filter.build_band_pass_quarter_wave_filter()
 filter.create_mesh()
-filter.write_and_show_structure(FDTD)
+filter.write_and_show_structure(sim.FDTD)
 # BUILD
 
 # SIMULATE
-filter.run_simulation(FDTD)
+filter.run_simulation(sim.FDTD)
 # SIMULATE
 
 # PPROCESS
-network_params = filter.compute_network_params(ports, freqs, params.charac_imp)
-filter.plot_s_param(freqs, network_params.s11, network_params.s21)
+network_params = filter.compute_network_params(ports, sim.freqs, params.charac_imp)
+filter.plot_s_param(sim.freqs, network_params.s11, network_params.s21)
 filter.show_plots()
 # PPROCESS
 
 # EXPORT
-filter.export_gerber(CSX)
+filter.export_gerber(sim.CSX)
 filter.export_touchstone(
-    freqs=freqs,
+    freqs=sim.freqs,
     s11=network_params.s11,
     s21=network_params.s21,
 )

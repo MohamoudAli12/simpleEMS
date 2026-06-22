@@ -62,6 +62,7 @@ from openEMS.nf2ff import nf2ff_results
 # ----------------------------
 from .console import console
 from .export_gerber import export_gerber
+from .export_step import export_step, export_csxcad_xml_to_step
 from .sim_params import SimParams
 
 # ----------------------------
@@ -170,10 +171,29 @@ class NetworkParams(NamedTuple):
     input_power: float
 
 
+class SimSetupFDTD(NamedTuple):
+    """
+    Named tuple holding the simulation setup objects.
+
+    Attributes
+    ----------
+    CSX : ContinuousStructure
+        CSXCAD geometry object.
+    FDTD : openEMS
+        openEMS FDTD object.
+    freqs : NDArray
+        Frequency points used in simulation and post-processing.
+    """
+
+    CSX: ContinuousStructure
+    FDTD: openEMS
+    freqs: NDArray
+
+
 def setup_simulation(
     params: SimParams,
     boundary_cond: list[str] | None = None,
-) -> tuple[ContinuousStructure, openEMS, NDArray]:
+) -> SimSetupFDTD:
     """
     Sets up the openEMS simulation.
 
@@ -187,12 +207,9 @@ def setup_simulation(
 
     Returns
     -------
-    CSX:ContinuousStructure
-        CSXCAD geometry object.
-    FDTD: openEMS
-        openEMS FDTD object.
-    freqs:NDArray
-        a list of frequencies that will be used in the simulation and post-processing.
+    SimSetupFDTD
+        Named tuple with ``CSX`` (CSXCAD geometry), ``FDTD`` (openEMS FDTD
+        object), and ``freqs`` (frequency array).
     """
     if boundary_cond is None:
         boundary_cond = [
@@ -217,7 +234,7 @@ def setup_simulation(
 
     freqs = np.linspace(fmin, fmax, params.num_points)
 
-    return CSX, FDTD, freqs
+    return SimSetupFDTD(CSX=CSX, FDTD=FDTD, freqs=freqs)
 
 
 class SimTools:
@@ -1578,11 +1595,79 @@ class SimTools:
 
         gerber_path = output_path / "gerber"
         gerber_path.mkdir(parents=True, exist_ok=True)
+
         export_gerber(
             CSX=CSX,
             output_path=gerber_path,
             options=options,
         )
+
+    @staticmethod
+    def export_step(
+        CSX: ContinuousStructure,
+        output_path: Path | None = None,
+        options: dict[str, list] | None = None,
+    ) -> None:
+        """
+        Export CSXCAD geometry to STEP AP242 format using CadQuery.
+
+        Parameters
+        ----------
+        CSX : ContinuousStructure
+            CSXCAD geometry object.
+
+        output_path : Path, optional
+            Directory where the STEP file will be saved. Defaults to
+            current working directory.
+
+        options : dict[str, list], optional
+            Dictionary of export options. Supported keys:
+            - ``"ignore"`` : list of property names to skip.
+
+        Returns
+        -------
+        None
+        """
+        if options is None:
+            options = {}
+
+        if output_path is None:
+            output_path = Path.cwd()
+
+        step_path = output_path / "step"
+        step_path.mkdir(parents=True, exist_ok=True)
+
+        export_step(
+            CSX=CSX,
+            output_path=step_path,
+        )
+
+    @staticmethod
+    def export_csxcad_xml_to_step(
+        structure_xml_path: str | Path,
+        output_path: Path | None = None,
+    ) -> None:
+        """
+        Load a ``structure.xml`` and export it to a STEP file.
+
+
+        Parameters
+        ----------
+        structure_xml_path : str | Path
+            Path to the ``structure.xml`` file exported by CSXCAD / openEMS.
+        output_path : Path | None
+            Directory where the STEP file will be saved.
+        options : dict, optional
+            Passed through to :func:`export_step`.
+        """
+
+        if output_path is None:
+            output_path = Path.cwd()
+
+        step_path = output_path / "step"
+        step_path.mkdir(parents=True, exist_ok=True)
+
+        export_csxcad_xml_to_step(structure_xml_path, output_path)
 
     @staticmethod
     def show_plots() -> None:

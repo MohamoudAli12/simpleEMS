@@ -35,21 +35,21 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     params.probe_pos_mm = round(params.probe_pos_mm - 7, params.fp_precision)
     params.patch_length_mm = round(params.patch_length_mm - 1.14, params.fp_precision)
 
-    CSX, FDTD, freqs = setup_simulation(params)
-    patch = ProbeFedPatchAntenna(params, CSX, FDTD)
+    sim = setup_simulation(params)
+    patch = ProbeFedPatchAntenna(params, sim.CSX, sim.FDTD)
     patch.print_and_save_params(params, output_path)
     port = patch.build_probe_fed_patch_antenna()
     patch.create_mesh()
-    nf2ff = patch.create_nf2ff(FDTD)
-    patch.add_field_dump(CSX, params, output_path)
-    patch.write_and_show_structure(FDTD, output_path)
+    nf2ff = patch.create_nf2ff(sim.FDTD)
+    patch.add_field_dump(sim.CSX, params, output_path)
+    patch.write_and_show_structure(sim.FDTD, output_path)
     network_params = None
 
     if sweep:
-        patch.run_simulation(FDTD, output_path)
+        patch.run_simulation(sim.FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            freqs,
+            sim.freqs,
             params.charac_imp,
             output_path,
         )
@@ -57,10 +57,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         return network_params
 
     if optimize:
-        patch.run_simulation(FDTD, output_path)
+        patch.run_simulation(sim.FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            freqs,
+            sim.freqs,
             params.charac_imp,
             output_path,
         )
@@ -71,10 +71,10 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
 
     elif not (sweep and optimize):
-        patch.run_simulation(FDTD, output_path)
+        patch.run_simulation(sim.FDTD, output_path)
         network_params = patch.compute_network_params(
             port,
-            freqs,
+            sim.freqs,
             params.charac_imp,
             output_path,
         )
@@ -106,7 +106,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             output_path=output_path,
         )
 
-        patch.export_gerber(CSX, output_path)
+        patch.export_gerber(sim.CSX, output_path)
 
 
 def main():

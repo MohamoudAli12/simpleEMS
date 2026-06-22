@@ -52,7 +52,7 @@ The `ProbeFedPatchParams` class defines parameters such as resonant frequency, s
 :end-before: SETUP
 ```
 
-The `setup_simulation` function is used to setup the `FDTD` simulation engine and `CSXCAD` geometry which will be used to visualise the design. The function returns `CSX`, `FDTD`, and `freqs` objects.
+The `setup_simulation` function is used to setup the `FDTD` simulation engine and `CSXCAD` geometry which will be used to visualise the design. The function returns a `SimSetupFDTD` named tuple with `.CSX`, `.FDTD`, and `.freqs` attributes.
 
 ## Antenna Creation
 

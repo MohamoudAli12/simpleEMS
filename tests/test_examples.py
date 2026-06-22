@@ -26,8 +26,7 @@ def run_examples(scripts):
 
 if __name__ == "__main__":
     scripts_to_run = [
-        "../examples/InsetFedPatch_60GHz.py",
-        "../examples/InsetFedPatch_2_45GHz.py",
-        "../examples/ProbeFedPatch_2_45GHz.py",
+        "../examples/InsetFedPatch_24GHz.py",
+        "../examples/MicrostripLine.py",
     ]
     run_examples(scripts_to_run)

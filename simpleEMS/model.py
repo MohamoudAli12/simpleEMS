@@ -204,9 +204,6 @@ def simulate_model(
     FDTD = openEMS()
     FDTD.ReadFromXML(structure_xml_path)
     _CSX = FDTD.GetCSX()
-    # _CSX.Write2XML("_structure.xml")
-    # CSX = ContinuousStructure()
-    # CSX.ReadFromXML("_structure.xml")
 
     with tempfile.NamedTemporaryFile(suffix=".xml") as tmp:
         _CSX.Write2XML(tmp.name)
@@ -228,7 +225,7 @@ def simulate_model(
     )
 
     return (
-        network_params,
         CSX,
+        network_params,
         charac_imp,
     )

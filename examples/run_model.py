@@ -11,7 +11,7 @@ field_dump.mkdir(parents=True, exist_ok=True)
 # PATH
 
 # SIMULATE
-network_params, CSX, charac_imp = simulate_model(
+CSX, network_params, charac_imp = simulate_model(
     "structure.xml",
     output_path,
 )
