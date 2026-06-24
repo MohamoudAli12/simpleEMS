@@ -27,9 +27,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from CSXCAD import ContinuousStructure
 from numpy.typing import NDArray
-from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort
 
 from .calc import (
@@ -40,7 +38,7 @@ from .calc import (
 from .console import console
 from .sim_params import SimParams
 from .mesh import Mesh
-from .sim_tools import SimTools, mm_to_m
+from .sim_tools import SimTools, SimSetup, mm_to_m
 
 # ----------------------------
 # Public APIS
@@ -265,19 +263,17 @@ class PatchAntenna(SimTools):
     params : InsetFedPatchParams or ProbeFedPatchParams
         Data container containing geometric and material properties
         (e.g., substrate thickness, permittivity, and dimensions).
-    CSX : ContinuousStructure
-        The CSXCAD geometry container used to define physical objects.
-    FDTD : openEMS
-        The FDTD simulation engine object.
+    sim : SimSetup
+        Named tuple containing the CSXCAD geometry and openEMS FDTD engine.
 
     Attributes
     ----------
     params :
         Stored reference to the simulation parameters.
     CSX : ContinuousStructure
-        Stored reference to the geometry engine.
+        Stored reference to the geometry engine (from sim).
     FDTD : openEMS
-        Stored reference to the simulation engine.
+        Stored reference to the simulation engine (from sim).
 
     Notes
     -----
@@ -288,13 +284,12 @@ class PatchAntenna(SimTools):
     def __init__(
         self,
         params,  # noqa: ANN001
-        CSX: ContinuousStructure,
-        FDTD: openEMS,
+        sim: SimSetup,
     ) -> None:
         """Initialise the PatchAntenna with parameters and simulation objects."""
         self.params = params
-        self.CSX = CSX
-        self.FDTD = FDTD
+        self.CSX = sim.CSX
+        self.FDTD = sim.FDTD
 
     def create_substrate(self) -> None:
         """
@@ -470,7 +465,11 @@ class InsetFedPatchAntenna(PatchAntenna):
             and impedance results after the simulation.
         """
         port_position = -self.params.patch_length_mm / 2 - self.params.feed_length_mm
-        port_start = [self.params.feed_width_mm / 2, port_position, 0]
+        port_start = [
+            self.params.feed_width_mm / 2,
+            port_position,
+            -self.params.copper_thickness_mm,
+        ]
         port_stop = [
             -self.params.feed_width_mm / 2,
             port_position,

@@ -75,7 +75,6 @@ __all__ = [
     "optimize_s_params",
     "optimize_s11",
     "optimize_s21",
-    "NetworkParams",
     "param_sweep",
     "mm_to_m",
     "m_to_mm",
@@ -144,8 +143,8 @@ class DumpType(Enum):
     raw_data = (29, "raw")
 
 
-class NetworkParams(NamedTuple):
-    """Named tuple holding network/s-parameter results.
+class SimData(NamedTuple):
+    """Named tuple holding simulation data/results.
 
     Attributes
     ----------
@@ -171,7 +170,7 @@ class NetworkParams(NamedTuple):
     input_power: float
 
 
-class SimSetupFDTD(NamedTuple):
+class SimSetup(NamedTuple):
     """
     Named tuple holding the simulation setup objects.
 
@@ -193,7 +192,7 @@ class SimSetupFDTD(NamedTuple):
 def setup_simulation(
     params: SimParams,
     boundary_cond: list[str] | None = None,
-) -> SimSetupFDTD:
+) -> SimSetup:
     """
     Sets up the openEMS simulation.
 
@@ -207,7 +206,7 @@ def setup_simulation(
 
     Returns
     -------
-    SimSetupFDTD
+    SimSetup
         Named tuple with ``CSX`` (CSXCAD geometry), ``FDTD`` (openEMS FDTD
         object), and ``freqs`` (frequency array).
     """
@@ -234,7 +233,7 @@ def setup_simulation(
 
     freqs = np.linspace(fmin, fmax, params.num_points)
 
-    return SimSetupFDTD(CSX=CSX, FDTD=FDTD, freqs=freqs)
+    return SimSetup(CSX=CSX, FDTD=FDTD, freqs=freqs)
 
 
 class SimTools:
@@ -249,15 +248,15 @@ class SimTools:
 
     @staticmethod
     def write_and_show_structure(
-        FDTD: openEMS, output_path: Path | None = None
+        sim: SimSetup, output_path: Path | None = None
     ) -> None:
         """
         This method shows the CSXCAD structure.
 
         Parameters
         ----------
-        FDTD:openEMS
-            FDTD openEMS object.
+        sim : SimSetup
+            Simulation setup named tuple containing CSX, FDTD, and freqs.
         output_path: Path
             The output path where simulation results is stored.
         """
@@ -267,7 +266,7 @@ class SimTools:
 
         structure_3d = output_path / "structure.xml"
 
-        FDTD.Write2XML(
+        sim.FDTD.Write2XML(
             str(structure_3d)
         )  # str in this fixes an error encountered on Windows.
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)
@@ -302,49 +301,49 @@ class SimTools:
         subprocess.run(cmd, check=True)
 
     @staticmethod
-    def run_simulation(FDTD: openEMS, output_path: Path | None = None) -> None:
+    def run_simulation(sim: SimSetup, output_path: Path | None = None) -> None:
         """
         This method starts and runs the openEMS simulation.
 
         Parameters
         ----------
 
-        FDTD: openEMS
-            openEMS FDTD object.
+        sim : SimSetup
+            Simulation setup named tuple containing CSX, FDTD, and freqs.
         output_path: Path
             The output path of the simulation results.
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
-        FDTD.Run(output_path)
+        sim.FDTD.Run(output_path)
 
     @staticmethod
-    def create_nf2ff(FDTD: openEMS) -> nf2ff:
+    def create_nf2ff(sim: SimSetup) -> nf2ff:
         """
         Creates near field to far field (NF2FF) recording box.
 
         Parameters
         ----------
 
-        FDTD: openEMS
-            openEMS FDTD object.
+        sim : SimSetup
+            Simulation setup named tuple containing CSX, FDTD, and freqs.
 
         Returns
         -------
         nf2ff : object
             NF2FF object
         """
-        nf2ff = FDTD.CreateNF2FFBox()
+        nf2ff = sim.FDTD.CreateNF2FFBox()
         return nf2ff
 
     @staticmethod
-    def compute_network_params(
+    def compute_sim_data(
         port: LumpedPort | list[LumpedPort],
         freqs: NDArray,
         charac_imp: float,
         output_path: Path | None = None,
-    ) -> NetworkParams:
+    ) -> SimData:
         """
         Compute several network parameters for plotting and
         post-processing of simulation results.
@@ -368,8 +367,8 @@ class SimTools:
 
         Returns
         -------
-        NetworkParams
-            A named tuple containing the following attributes:
+        SimData
+            A named tuple containing the simulation data:
 
             - freqs : NDArray
                 A numpy array of frequencies used for post-processing.
@@ -403,7 +402,7 @@ class SimTools:
             s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
             vswr = (1 + s11_mag) / (1 - s11_mag)
             input_power = 0.5 * np.real(port[0].uf_tot * np.conj(port[0].if_tot))
-            return NetworkParams(freqs, s11, s21, z11, vswr, input_power)
+            return SimData(freqs, s11, s21, z11, vswr, input_power)
         else:
             port.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
             s21 = None
@@ -413,7 +412,7 @@ class SimTools:
             s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
             vswr = (1 + s11_mag) / (1 - s11_mag)
             input_power = 0.5 * np.real(port.uf_tot * np.conj(port.if_tot))
-            return NetworkParams(freqs, s11, s21, z11, vswr, input_power)
+            return SimData(freqs, s11, s21, z11, vswr, input_power)
 
     @staticmethod
     def plot_s_param(
@@ -1402,7 +1401,7 @@ class SimTools:
 
     @staticmethod
     def add_field_dump(
-        CSX: ContinuousStructure,
+        sim: SimSetup,
         params: SimParams,
         output_path: Path | None = None,
         dump_type: DumpType = DumpType.efield_time,
@@ -1416,8 +1415,8 @@ class SimTools:
 
         Parameters
         ----------
-        CSX : ContinuousStructure
-            The openEMS CSX object representing the simulation geometry and settings.
+        sim : SimSetup
+            Simulation setup named tuple containing CSX, FDTD, and freqs.
 
         params : SimParams
             Parameter object containing simulation parameters such as frequency,
@@ -1454,7 +1453,7 @@ class SimTools:
             return np.array(new_sim_box)
 
         bounds = [[], [], []]
-        for prim in CSX.GetAllPrimitives():
+        for prim in sim.CSX.GetAllPrimitives():
             try:
                 bb = prim.GetBoundBox()
                 tr = prim.GetTransform()
@@ -1473,7 +1472,7 @@ class SimTools:
         dump_path = output_path / "field_dump"
         dump_path.mkdir(parents=True, exist_ok=True)
         dump_name = str(Path("field_dump") / dump_type.value[1])
-        dump = CSX.AddDump(
+        dump = sim.CSX.AddDump(
             dump_name,
             file_type=0,
             dump_type=dump_type.value[0],
@@ -1555,7 +1554,7 @@ class SimTools:
 
     @staticmethod
     def export_gerber(
-        CSX: ContinuousStructure,
+        sim: SimSetup,
         output_path: Path | None = None,
         options: dict[str, list] | None = None,
     ) -> None:
@@ -1565,8 +1564,8 @@ class SimTools:
 
         Parameters
         ----------
-        CSX : ContinuousStructure
-            CSXCAD geometry object.
+        sim : SimSetup
+            Simulation setup named tuple containing CSX, FDTD, and freqs.
 
         output_path : Path
             Path to the directory where simulation result is stored.
@@ -1597,14 +1596,14 @@ class SimTools:
         gerber_path.mkdir(parents=True, exist_ok=True)
 
         export_gerber(
-            CSX=CSX,
+            CSX=sim.CSX,
             output_path=gerber_path,
             options=options,
         )
 
     @staticmethod
     def export_step(
-        CSX: ContinuousStructure,
+        sim: SimSetup,
         output_path: Path | None = None,
         options: dict[str, list] | None = None,
     ) -> None:
@@ -1613,8 +1612,8 @@ class SimTools:
 
         Parameters
         ----------
-        CSX : ContinuousStructure
-            CSXCAD geometry object.
+        sim : SimSetup
+            Simulation setup named tuple containing CSX, FDTD, and freqs.
 
         output_path : Path, optional
             Directory where the STEP file will be saved. Defaults to
@@ -1638,7 +1637,7 @@ class SimTools:
         step_path.mkdir(parents=True, exist_ok=True)
 
         export_step(
-            CSX=CSX,
+            CSX=sim.CSX,
             output_path=step_path,
         )
 
@@ -1730,7 +1729,7 @@ class SimTools:
 
     @staticmethod
     def run_all_post_processing(
-        CSX: ContinuousStructure,
+        sim: SimSetup,
         freqs: NDArray,
         s11: NDArray,
         vswr: NDArray,
@@ -1751,8 +1750,8 @@ class SimTools:
 
         Parameters
         ----------
-        CSX : ContinuousStructure
-            The CSXCAD geometry object containing the simulation structure.
+        sim : SimSetup
+            Simulation setup named tuple containing CSX, FDTD, and freqs.
         freqs : NDArray
             Array of frequencies used in the simulation.
         s11 : NDArray
@@ -1809,7 +1808,7 @@ class SimTools:
             charac_imp=params.charac_imp,
             s21=s21,
         )
-        SimTools.export_gerber(CSX, output_path, options={"ignore": ["ground"]})
+        SimTools.export_gerber(sim, output_path, options={"ignore": ["ground"]})
 
 
 def optimize_s11(
@@ -2032,7 +2031,7 @@ def param_sweep(
     output_path: Path,
     label: str = "",
     sweep: bool = True,
-) -> NetworkParams | None:
+) -> SimData | None:
     """
     Perform a parameter sweep using a simulation function.
     The function supports multiple parameters; the sweep is a
@@ -2060,8 +2059,8 @@ def param_sweep(
 
     Returns
     -------
-    NetworkParams or None
-        The network parameters returned by the simulation function. Contains
+    SimData or None
+        The simulation data returned by the simulation function. Contains
         attributes such as freqs, s11, s21, vswr, z11, and input_power.
     """
     console.print("-------------------------------------", style="info")
@@ -2070,7 +2069,7 @@ def param_sweep(
 
     sweep_values = {key: np.linspace(*val).tolist() for key, val in sweep_vals.items()}
     cartesian_sweep = list(product(*sweep_values.values()))
-    network_params = None
+    sim_data = None
 
     for values in cartesian_sweep:
         kv_pairs = list(zip(sweep_values.keys(), values, strict=True))
@@ -2079,14 +2078,14 @@ def param_sweep(
         sweep_path = output_path / "sweep" / key_value
         sweep_path.mkdir(parents=True, exist_ok=True)
 
-        network_params = simulate_fn(sweep_path, sweep, values)
+        sim_data = simulate_fn(sweep_path, sweep, values)
         SimTools.plot_s_param(
-            network_params.freqs,
-            network_params.s11,
+            sim_data.freqs,
+            sim_data.s11,
             label_s11=label,
         )
     SimTools.show_plots()
-    return network_params
+    return sim_data
 
 
 def mm_to_m(mm: float) -> float:

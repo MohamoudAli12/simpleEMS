@@ -27,27 +27,27 @@ sim = setup_simulation(params)
 # SETUP
 
 # BUILD
-microstrip = MicrostripLine(params, sim.CSX, sim.FDTD)
+microstrip = MicrostripLine(params, sim)
 microstrip.print_and_save_params(params)
 ports = microstrip.build_microstrip_line()
 microstrip.create_mesh()
-microstrip.add_field_dump(sim.CSX, params)
-microstrip.write_and_show_structure(sim.FDTD)
+microstrip.add_field_dump(sim, params)
+microstrip.write_and_show_structure(sim)
 # BUILD
 
 # SIMULATE
-microstrip.run_simulation(sim.FDTD)
+microstrip.run_simulation(sim)
 # SIMULATE
 
 # PPROCESS
-network_params = microstrip.compute_network_params(
+sim_data = microstrip.compute_sim_data(
     ports,
     sim.freqs,
     params.charac_imp,
 )
 
-microstrip.plot_s_param(sim.freqs, network_params.s11, network_params.s21)
-microstrip.plot_impedance(sim.freqs, network_params.z11)
-microstrip.plot_phase(sim.freqs, network_params.s21)
+microstrip.plot_s_param(sim_data.freqs, sim_data.s11, sim_data.s21)
+microstrip.plot_impedance(sim_data.freqs, sim_data.z11)
+microstrip.plot_phase(sim_data.freqs, sim_data.s21)
 microstrip.show_plots()
 # PPROCESS

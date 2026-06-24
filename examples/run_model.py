@@ -11,7 +11,7 @@ field_dump.mkdir(parents=True, exist_ok=True)
 # PATH
 
 # SIMULATE
-CSX, network_params, charac_imp = simulate_model(
+sim_data, sim, charac_imp = simulate_model(
     "structure.xml",
     output_path,
 )
@@ -19,13 +19,13 @@ CSX, network_params, charac_imp = simulate_model(
 
 # PPROCESS
 SimTools.plot_s_param(
-    network_params.freqs,
-    network_params.s11,
-    network_params.s21,
+    sim_data.freqs,
+    sim_data.s11,
+    sim_data.s21,
 )
-SimTools.plot_impedance(network_params.freqs, network_params.z11)
-SimTools.plot_smith_chart(network_params.freqs, network_params.s11)
-SimTools.plot_vswr(network_params.freqs, network_params.vswr)
+SimTools.plot_impedance(sim_data.freqs, sim_data.z11)
+SimTools.plot_smith_chart(sim_data.freqs, sim_data.s11)
+SimTools.plot_vswr(sim_data.freqs, sim_data.vswr)
 SimTools.show_plots()
 SimTools.save_plots(output_path)
 # PPROCESS
@@ -33,10 +33,10 @@ SimTools.save_plots(output_path)
 # EXPORT
 SimTools.export_stl(output_path)
 SimTools.export_touchstone(
-    network_params.freqs,
-    network_params.s11,
+    sim_data.freqs,
+    sim_data.s11,
     output_path=output_path,
     charac_imp=charac_imp,
 )
-SimTools.export_gerber(CSX, output_path)
+SimTools.export_gerber(sim, output_path)
 # EXPORT

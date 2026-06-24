@@ -28,34 +28,34 @@ sim = setup_simulation(params)
 # SETUP
 
 # BUILD
-patch = ProbeFedPatchAntenna(params, sim.CSX, sim.FDTD)
+patch = ProbeFedPatchAntenna(params, sim)
 patch.print_and_save_params(params)
 port = patch.build_probe_fed_patch_antenna()
 patch.create_mesh()
-nf2ff = patch.create_nf2ff(sim.FDTD)
-patch.add_field_dump(sim.CSX, params)
-patch.write_and_show_structure(sim.FDTD)
+nf2ff = patch.create_nf2ff(sim)
+patch.add_field_dump(sim, params)
+patch.write_and_show_structure(sim)
 # BUILD
 
 # SIMULATE
-patch.run_simulation(sim.FDTD)
+patch.run_simulation(sim)
 # SIMULATE
 
 # PPROCESS
-network_params = patch.compute_network_params(
+sim_data = patch.compute_sim_data(
     port,
     sim.freqs,
     params.charac_imp,
 )
 nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
-patch.plot_s_param(sim.freqs, network_params.s11)
-patch.plot_smith_chart(sim.freqs, network_params.s11)
-patch.plot_vswr(sim.freqs, network_params.vswr)
-patch.plot_impedance(sim.freqs, network_params.z11)
+patch.plot_s_param(sim_data.freqs, sim_data.s11)
+patch.plot_smith_chart(sim_data.freqs, sim_data.s11)
+patch.plot_vswr(sim_data.freqs, sim_data.vswr)
+patch.plot_impedance(sim_data.freqs, sim_data.z11)
 patch.plot_2d_directivity(nf2ff, params.resonant_freq)
 patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq)
 patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq)
-patch.plot_3d_gain(nf2ff_3d_result, params.resonant_freq, network_params.input_power)
+patch.plot_3d_gain(nf2ff_3d_result, params.resonant_freq, sim_data.input_power)
 patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq)
 patch.save_plots()
 patch.show_plots()
@@ -64,9 +64,9 @@ patch.show_plots()
 # EXPORT
 patch.export_stl()
 patch.export_touchstone(
-    network_params.freqs,
-    network_params.s11,
+    sim_data.freqs,
+    sim_data.s11,
     charac_imp=params.charac_imp,
 )
-patch.export_gerber(sim.CSX)
+patch.export_gerber(sim)
 # EXPORT

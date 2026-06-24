@@ -51,7 +51,7 @@ The `InsetFedPatchParams` class defines parameters such as resonant frequency, s
 :end-before: SETUP
 ```
 
-The `setup_simulation` function is used to setup the `FDTD` simulation engine and `CSXCAD` geometry which will be used to visualise the design. The function returns a `SimSetupFDTD` named tuple with `.CSX`, `.FDTD`, and `.freqs` attributes.
+The `setup_simulation` function is used to setup the `FDTD` simulation engine and `CSXCAD` geometry which will be used to visualise the design. The function returns a `SimSetup` named tuple with `.CSX`, `.FDTD`, and `.freqs` attributes.
 
 ## Antenna Creation
 

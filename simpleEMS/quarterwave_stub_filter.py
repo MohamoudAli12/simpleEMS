@@ -29,11 +29,9 @@ import numpy as np
 from numpy.typing import NDArray
 from dataclasses import dataclass, field
 
-from CSXCAD import ContinuousStructure
-from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort
 
-from simpleEMS.sim_tools import SimTools
+from simpleEMS.sim_tools import SimTools, SimSetup
 from .sim_params import SimParams
 from .mesh import Mesh
 from .calc import microstrip_width_from_impedance, calculate_electrical_length_mm
@@ -333,13 +331,12 @@ class QuarterWaveFilter(SimTools):
     def __init__(
         self,
         params: QuarterWaveFilterParams,
-        CSX: ContinuousStructure,
-        FDTD: openEMS,
+        sim: SimSetup,
     ) -> None:
         """Initialise the QuarterWaveFilter with parameters and simulation objects."""
         self.params = params
-        self.CSX = CSX
-        self.FDTD = FDTD
+        self.CSX = sim.CSX
+        self.FDTD = sim.FDTD
 
     def create_substrate(self) -> None:
         """

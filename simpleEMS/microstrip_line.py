@@ -28,8 +28,6 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-from CSXCAD import ContinuousStructure
-from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort
 
 from .calc import (
@@ -37,7 +35,7 @@ from .calc import (
     calculate_electrical_length_mm,
 )
 from .sim_params import SimParams
-from .sim_tools import SimTools
+from .sim_tools import SimTools, SimSetup
 from .mesh import Mesh
 
 # ----------------------------
@@ -222,22 +220,19 @@ class MicrostripLine(SimTools):
     ----------
     params : MicrostripLineParams
         Data container containing geometric and material properties.
-    CSX : ContinuousStructure
-        The CSXCAD geometry container used to define physical objects.
-    FDTD : openEMS
-        The FDTD simulation engine object.
+    sim : SimSetup
+        Named tuple containing the CSXCAD geometry and openEMS FDTD engine.
     """
 
     def __init__(
         self,
         params: MicrostripLineParams,
-        CSX: ContinuousStructure,
-        FDTD: openEMS,
+        sim: SimSetup,
     ) -> None:
         """Initialise the MicrostripLine with parameters and simulation objects."""
         self.params = params
-        self.CSX = CSX
-        self.FDTD = FDTD
+        self.CSX = sim.CSX
+        self.FDTD = sim.FDTD
 
     def create_substrate(self) -> None:
         """

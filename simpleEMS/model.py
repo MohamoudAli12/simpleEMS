@@ -32,7 +32,7 @@ from CSXCAD import ContinuousStructure
 from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort, Port
 
-from .sim_tools import NetworkParams, SimTools
+from .sim_tools import SimData, SimSetup, SimTools
 
 __all__ = ["simulate_model"]
 
@@ -169,7 +169,7 @@ def simulate_model(
     output_path: str | Path,
     num_points: int = 1000,
     run: bool = True,
-) -> tuple[NetworkParams, ContinuousStructure, float]:
+) -> tuple[SimData, SimSetup, float]:
     """
     Load a ``structure.xml``, run the simulation and compute network
     parameters.
@@ -191,9 +191,13 @@ def simulate_model(
 
     Returns
     -------
-    NetworkParams
-        Named tuple with ``freqs``, ``s11``, ``s21``, ``z11``,
-        ``vswr``, and ``input_power``.
+    tuple[SimData, SimSetup, float]
+        A tuple containing:
+
+        - **sim_data** (*SimData*) -- Named tuple with ``freqs``, ``s11``,
+        ``s21``, ``z11``, ``vswr``, and ``input_power``.
+        - **sim** (*SimSetup*) -- Named tuple with ``CSX``, ``FDTD``, and ``freqs``.
+        - **charac_imp** (*float*) -- Characteristic impedance extracted from the model.
     """
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -210,7 +214,8 @@ def simulate_model(
         CSX = ContinuousStructure()
         CSX.ReadFromXML(tmp.name)
 
-    SimTools.write_and_show_structure(CSX, output_path)
+    sim = SimSetup(CSX=CSX, FDTD=FDTD, freqs=freqs)
+    SimTools.write_and_show_structure(sim, output_path)
     ports, charac_imp = reconstruct_ports(CSX)
 
     if not ports:
@@ -220,12 +225,10 @@ def simulate_model(
         FDTD.Run(str(output_path))
 
     port_arg = ports if len(ports) > 1 else ports[0]
-    network_params = SimTools.compute_network_params(
-        port_arg, freqs, charac_imp, output_path
-    )
+    sim_data = SimTools.compute_sim_data(port_arg, freqs, charac_imp, output_path)
 
     return (
-        CSX,
-        network_params,
+        sim_data,
+        sim,
         charac_imp,
     )

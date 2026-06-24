@@ -18,7 +18,6 @@ step_path = (
 )
 step = em.geo.STEPItems("Filter", str(step_path), unit=0.001)
 vols = step.dictionary
-print(vols)
 
 substrate = vols["Filter_substrate"]
 substrate.set_material(

@@ -40,28 +40,28 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     sim = setup_simulation(params)
 
-    filter = BandPassQuarterWaveFilter(params, sim.CSX, sim.FDTD)
+    filter = BandPassQuarterWaveFilter(params, sim)
     filter.print_and_save_params(params, output_path)
     ports = filter.build_band_pass_quarter_wave_filter()
-    filter.add_field_dump(sim.CSX, params, output_path)
+    filter.add_field_dump(sim, params, output_path)
     filter.create_mesh()
-    filter.write_and_show_structure(sim.FDTD, output_path)
-    network_params = None
+    filter.write_and_show_structure(sim, output_path)
+    sim_data = None
 
     if sweep:
-        filter.run_simulation(sim.FDTD, output_path)
-        network_params = filter.compute_network_params(
+        filter.run_simulation(sim, output_path)
+        sim_data = filter.compute_sim_data(
             ports,
             sim.freqs,
             params.charac_imp,
             output_path,
         )
 
-        return network_params
+        return sim_data
 
     if optimize:
-        filter.run_simulation(sim.FDTD, output_path)
-        network_params = filter.compute_network_params(
+        filter.run_simulation(sim, output_path)
+        sim_data = filter.compute_sim_data(
             ports,
             sim.freqs,
             params.charac_imp,
@@ -69,32 +69,30 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
 
         s21_cost = optimize_s21(
-            network_params.freqs,
-            network_params.s21,
+            sim_data.freqs,
+            sim_data.s21,
             params.centre_freq,
         )
 
         return s21_cost
 
     if not (sweep or optimize):
-        filter.run_simulation(sim.FDTD, output_path)
-        network_params = filter.compute_network_params(
+        filter.run_simulation(sim, output_path)
+        sim_data = filter.compute_sim_data(
             ports,
             sim.freqs,
             params.charac_imp,
             output_path,
         )
 
-        filter.plot_s_param(
-            network_params.freqs, network_params.s11, network_params.s21
-        )
+        filter.plot_s_param(sim_data.freqs, sim_data.s11, sim_data.s21)
         filter.save_plots(output_path)
         filter.show_plots()
-        filter.export_gerber(sim.CSX, output_path)
+        filter.export_gerber(sim, output_path)
         filter.export_touchstone(
-            freqs=sim.freqs,
-            s11=network_params.s11,
-            s21=network_params.s21,
+            freqs=sim_data.freqs,
+            s11=sim_data.s11,
+            s21=sim_data.s21,
             output_path=output_path,
         )
 

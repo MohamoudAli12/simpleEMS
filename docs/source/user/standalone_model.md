@@ -18,8 +18,7 @@ The model should be generated from openEMS `Write2XML` method to have `FDTD` pro
 ## Loading and simulating the model
 
 To load the model and simulate it we will use {func}`simpleEMS.model.simulate_model` function from simpleEMS.
-This function returns the `network_parameters` such as `S11`, `S21` etc., `CSX` structure, and `characteristic impedance` extracted
-from the model. all of the returned values are used for postprocessing.
+This function returns a tuple containing `sim_data` (a `SimData` named tuple with `freqs`, `s11`, `s21`, `z11`, `vswr`, and `input_power`), `sim` (a `SimSetup` named tuple with the `CSX` geometry and `FDTD` solver), and `charac_imp` (the characteristic impedance). All of the returned values are used for postprocessing.
 
 ## Postprocessing
 once the simulation is finished, you can use all available tools from simpleEMS's `SimTools` class to postprocess and plot any data
