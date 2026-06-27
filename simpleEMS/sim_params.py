@@ -134,6 +134,7 @@ class SimParams:
 
     lambda0: float = field(init=False)
     thirds_rule: NDArray = field(init=False)
+    backend: str = "FDTD"
 
     @property
     def freq_range(self) -> tuple[float, float]:

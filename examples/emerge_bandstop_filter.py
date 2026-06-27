@@ -5,6 +5,7 @@ import gmsh
 import emerge as em
 from emerge.plot import plot_sp, smith
 from pathlib import Path
+from simpleEMS.emerge_fem import emerge_load_step
 
 mm = 0.001
 
