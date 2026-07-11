@@ -55,6 +55,14 @@ extensions = [
     "myst_parser",
 ]
 
+autodoc_mock_imports = [
+    "pyvista",
+    "pyvistaqt",
+    "PyQt6",
+    "CSXCAD",
+    "openEMS",
+]
+
 sourcautodoc_member_order = "bysource"
 
 automodapi_toctreedirnm = "api/build"

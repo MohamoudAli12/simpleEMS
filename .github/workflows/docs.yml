@@ -27,11 +27,8 @@ jobs:
       - name: Install package with docs dependencies
         run: pip install -e ".[dev]"
 
-      - name: Install system libraries for VTK/pyvista
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libglx-mesa0 xvfb
-
       - name: Build Sphinx docs
-        run: xvfb-run -a sphinx-build -b html docs/source docs/build/html
+        run: sphinx-build -b html docs/source docs/build/html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
