@@ -1,0 +1,12 @@
+[tool.bumpversion]
+current_version = "0.1.0"
+commit = true
+tag = true
+tag_name = "docs-v{new_version}"
+allow_dirty = false
+message = "Bump docs version: {current_version} → {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "docs/source/conf.py"
+search = 'release = "{current_version}"'
+replace = 'release = "{new_version}"'

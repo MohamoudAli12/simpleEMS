@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.ruff_*
+
+# Virtual environments
+.venv
+
+ref_material/*
+
+examples/*/
+docs/source/CHANGELOG.md
+docs/source/CONTRIBUTING.md

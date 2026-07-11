@@ -1,0 +1,20 @@
+line-length = 88
+target-version = "py311"
+
+[lint]
+select = [
+  "E",    # pycodestyle errors (PEP8 style issues)
+  "F",    # Pyflakes (real bugs, unused imports, undefined names)
+  "B",    # flake8-bugbear (bug-prone patterns and bad practices)
+  "UP",   # pyupgrade (modernize Python syntax)
+  "SIM",  # flake8-simplify (simpler and cleaner logic)
+  "ANN",  # flake8-annotations (require type annotations)
+  # "N",    # pep8-naming (naming convention checks)
+]
+ignore = []
+
+# fem_formulation.py emits a GetDP .pro template with intentionally long
+# embedded DSL lines that cannot be wrapped without breaking the syntax.
+exclude = ["simpleEMS/cli.py", "simpleEMS/fem_formulation.py"]
+[format]
+quote-style = "double"
