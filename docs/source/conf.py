@@ -14,7 +14,14 @@ release = "0.1.0"
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 import shutil
+import sys
 from pathlib import Path
+
+# sphinx_automodapi imports documented modules with a plain __import__() that
+# bypasses autodoc_mock_imports, so heavy/native deps (openEMS, CSXCAD,
+# pyvista, pyvistaqt, PyQt6) that aren't installable in CI are shadowed here
+# with lightweight stub packages instead.
+sys.path.insert(0, str((Path(__file__).parent.parent / "_stubs").resolve()))
 
 
 def setup(app):
@@ -53,14 +60,6 @@ extensions = [
     "sphinx.ext.autosummary",
     "sphinx_copybutton",
     "myst_parser",
-]
-
-autodoc_mock_imports = [
-    "pyvista",
-    "pyvistaqt",
-    "PyQt6",
-    "CSXCAD",
-    "openEMS",
 ]
 
 sourcautodoc_member_order = "bysource"

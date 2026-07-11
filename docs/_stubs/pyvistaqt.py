@@ -1,0 +1,2 @@
+class BackgroundPlotter:
+    pass
