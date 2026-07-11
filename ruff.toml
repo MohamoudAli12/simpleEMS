@@ -1,0 +1,18 @@
+line-length = 88
+target-version = "py311"
+
+[lint]
+select = [
+  "E",    # pycodestyle errors (PEP8 style issues)
+  "F",    # Pyflakes (real bugs, unused imports, undefined names)
+  "B",    # flake8-bugbear (bug-prone patterns and bad practices)
+  "UP",   # pyupgrade (modernize Python syntax)
+  "SIM",  # flake8-simplify (simpler and cleaner logic)
+  "ANN",  # flake8-annotations (require type annotations)
+  # "N",    # pep8-naming (naming convention checks)
+]
+ignore = []
+
+exclude = ["simpleEMS/cli.py"]
+[format]
+quote-style = "double"

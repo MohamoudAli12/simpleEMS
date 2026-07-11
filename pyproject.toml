@@ -1,0 +1,75 @@
+[project]
+name = "simpleEMS"
+version = "0.1.0"
+description = "simpleEMS is a framework built on top of openEMS to make design and simulation of antennas and other microwave structures simpler"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.11"
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Engineers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+
+dependencies = [
+    "cadquery==2.8.0",
+    "h5py==3.15.1",
+    "matplotlib==3.10.8",
+    "mplcursors==0.7",
+    "numpy==2.4.4",
+    "pyqt6==6.10.1",
+    "pysmithchart==0.4.1",
+    "pyvista==0.46.4",
+    "pyvistaqt==0.11.3",
+    "rich==14.3.3",
+    "scikit-rf==1.9.0",
+    "scipy==1.16.3",
+    "typer==0.26.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "bump-my-version==1.4.1",
+    "myst-parser==5.0.0",
+    "prek==0.3.13",
+    "pydata-sphinx-theme==0.16.1",
+    "ruff==0.15.12",
+    "sphinx>=7.2",
+    "sphinx-automodapi==0.22.0",
+    "sphinx-copybutton>=0.5.2",
+]
+
+[project.scripts]
+simpleems = "simpleEMS.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.24,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "simpleEMS"
+module-root = ""
+
+[tool.bumpversion]
+current_version = "0.1.0"
+commit = true
+tag = true
+tag_name = "v{new_version}"
+allow_dirty = false
+message = "Bump version: {current_version} → {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "simpleEMS/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
