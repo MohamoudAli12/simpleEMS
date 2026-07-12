@@ -88,5 +88,5 @@ The result of the simulation
 
 ## Installation
 
-Refer to the installation instructions in the ![docs](https://mohamoudali12.github.io/simpleEMS/user/installation.html).
+Refer to the installation instructions in the [docs](https://mohamoudali12.github.io/simpleEMS/user/installation.html).
 
