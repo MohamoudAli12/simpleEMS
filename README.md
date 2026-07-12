@@ -1,7 +1,7 @@
 # simpleEMS
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL_v3_or_later-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![PyPI Version](https://img.shields.io/pypi/v/project-name.svg)](https://pypi.org/project/project-name/)
-[![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org)
+[![PyPI Version](https://img.shields.io/pypi/v/simpleEMS)](https://pypi.org/project/simpleEMS/)
+[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
 
 simpleEMS is a python library built on top of [openEMS](https://openems.readthedocs.io/en/latest/) to make the design of antennas and other RF structures simpler.
 
@@ -57,7 +57,7 @@ this library will enable you to design RF circuits easily.
 - Touchstone SnP Export
 
 ## Demo
-[This example](./examples/simple_inset_fed_patch_antenna.py) creates an inset fed patch antenna and simulates the created model.
+[This example](https://github.com/MohamoudAli12/simpleEMS/blob/master/examples/simple_inset_fed_patch_antenna.py) creates an inset fed patch antenna and simulates the created model.
 
 ```{literalinclude} ../../examples/simple_inset_fed_patch_antenna.py
 ```
@@ -88,5 +88,5 @@ The result of the simulation
 
 ## Installation
 
-Refer to the installation instructions in the docs.
+Refer to the installation instructions in the ![docs](https://mohamoudali12.github.io/simpleEMS/user/installation.html).
 
