@@ -5,7 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and follo
 
 ---
 
-## 0.1.0 - YYYY-MM-DD
+## 0.1.0 - 11 Jul 2026
 
 - Initial public release
 ---
