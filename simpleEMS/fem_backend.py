@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.interpolate import AAA
 
 from CSXCAD import ContinuousStructure
 
@@ -315,6 +316,8 @@ def _mesh_problem(prob: Problem, output_path: Path, verbose: bool = True) -> str
         "pro_path": pro_path,
         "name": prob.name,
         "bbox": list(mesh.bbox),  # structure extents (m); needed for far-field box
+        "domain_bbox": list(mesh.inner_bbox),  # meshed E/H extents (m); Huygens
+        # box must stay strictly inside this or CutBox samples outside the mesh
         "port_numbers": sorted(pm.number for pm in mesh.port_regions.values()),
         "ref_impedances": {
             str(pm.number): pm.ref_impedance for pm in mesh.port_regions.values()
@@ -385,6 +388,29 @@ def _sweep_from_meta(
     outdir = os.path.join(os.path.abspath(str(output_path)), "output")
     idx = {n: i for i, n in enumerate(port_numbers)}  # port number -> matrix index
     npt = len(port_numbers)
+    ref_port = port_numbers[0]  # SimData reports V/I/input_power for this port only
+
+    # GetDP appends to these Format Table files (write_problem's xs_file =
+    # "File >") instead of overwriting, so a sweep's per-solve rows accumulate
+    # in one file. Clear any left over from a previous sweep/run first, or
+    # this run's rows would land after stale ones from before.
+    stale_patterns = [
+        "intPort.txt",
+        "xS_*.txt",
+        "V_*.txt",
+        "I_*.txt",
+        "Ploss.txt",
+        "Prad.txt",
+    ]
+    for pattern in stale_patterns:
+        for stale in Path(outdir).glob(pattern):
+            stale.unlink()
+
+    # freq -> (V, I) of the reference port's own total voltage/current, sampled
+    # only at the frequencies the adaptive S-sweep below actually solves (no
+    # extra getdp runs: V_<n>/I_<n> are written by the same Get_SParameters call
+    # that already produces xS_<n> at each (freq, active-port) solve).
+    vi_solved: dict[float, tuple[complex, complex]] = {}
 
     # One full FEM solve at a single frequency: drive each port in turn and read
     # back the column of the S-matrix it produces (S[:, active]).
@@ -402,6 +428,14 @@ def _sweep_from_meta(
                 s[idx[n], idx[active]] = fem_solver.read_complex(
                     os.path.join(outdir, f"xS_{n * 10 + active}.txt")
                 )
+            if active == ref_port:
+                v = fem_solver.read_complex(
+                    os.path.join(outdir, f"V_{active * 10 + active}.txt")
+                )
+                i = fem_solver.read_complex(
+                    os.path.join(outdir, f"I_{active * 10 + active}.txt")
+                )
+                vi_solved[freq] = (v, i)
         return s
 
     # The expensive part is each solve_at() call, so let the adaptive sweep pick
@@ -411,6 +445,22 @@ def _sweep_from_meta(
     s_dense = fem_sweep.rational_sweep(
         freqs, port_numbers, solve_at, num_solve_points, verbose=verbose
     )
+
+    # V/I are linear in the same field solution S was fit from, so the same
+    # sparse solve points suffice -- rational-interpolate them the same way
+    # (AAA is much better conditioned on data scaled to [-1, 1] than raw Hz).
+    fmin, fmax = float(freqs[0]), float(freqs[-1])
+    span = (fmax - fmin) or 1.0
+
+    def _zof(f: NDArray) -> NDArray:
+        return (2 * np.asarray(f) - (fmin + fmax)) / span
+
+    vi_freqs = np.array(sorted(vi_solved))
+    v_samples = np.array([vi_solved[f][0] for f in vi_freqs])
+    i_samples = np.array([vi_solved[f][1] for f in vi_freqs])
+    v_dense = AAA(_zof(vi_freqs), v_samples)(_zof(freqs))
+    i_dense = AAA(_zof(vi_freqs), i_samples)(_zof(freqs))
+
     ref_impedances = [meta["ref_impedances"][str(n)] for n in port_numbers]
     np.savez(
         output_path / _SPARAMS,
@@ -418,6 +468,8 @@ def _sweep_from_meta(
         S=s_dense,
         port_numbers=np.asarray(port_numbers),
         ref_impedances=np.asarray(ref_impedances),
+        port_voltage=v_dense,
+        port_current=i_dense,
     )
     if verbose:
         console.print(
@@ -504,8 +556,12 @@ def compute_sim_data(
     # convention exp(+j w t). The two differ by a complex conjugate, so
     # conjugate here to report S/Z in the same convention as the FDTD backend
     # (otherwise the reactance sign flips: Smith-chart points mirror across the
-    # real axis, i.e. inductive <-> capacitive / top <-> bottom).
+    # real axis, i.e. inductive <-> capacitive / top <-> bottom). port_voltage/
+    # port_current are linear in the same field solution, so they need the same
+    # conjugation.
     s = np.conj(data["S"])
+    port_voltage = np.conj(data["port_voltage"])
+    port_current = np.conj(data["port_current"])
     freqs_out = data["freqs"]
     ref_impedances = data["ref_impedances"]
     nports = s.shape[1]
@@ -519,11 +575,13 @@ def compute_sim_data(
     z11 = z0 * (1 + s11) / (1 - s11)  # input impedance from the reflection coeff
     s11_mag = np.clip(np.abs(s11), 0, 0.999)  # prevent division by zero error
     vswr = (1 + s11_mag) / (1 - s11_mag)
-    # FEM S-parameters are normalized to unit incident power (there is no
-    # absolute source drive as in FDTD), so report input_power as 1.0.
-    input_power = 1.0
+    # accepted power at the driven (reference) port, from its total voltage and
+    # current (see fem_formulation.write_problem's V_n/I_n post-quantities).
+    input_power = 0.5 * np.real(port_voltage * np.conj(port_current))
 
-    return SimData(freqs_out, s11, s21, z11, vswr, input_power)
+    return SimData(
+        freqs_out, s11, s21, z11, vswr, input_power, port_voltage, port_current
+    )
 
 
 # ----------------------------

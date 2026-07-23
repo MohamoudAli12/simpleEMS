@@ -161,6 +161,10 @@ class SimData(NamedTuple):
         VSWR values across the frequency range.
     input_power : float
         Calculated input power at the port.
+    port_voltage : NDArray
+        Total complex voltage at the driven port across the frequency range.
+    port_current : NDArray
+        Total complex current at the driven port across the frequency range.
     """
 
     freqs: NDArray
@@ -169,6 +173,8 @@ class SimData(NamedTuple):
     z11: NDArray
     vswr: NDArray
     input_power: float
+    port_voltage: NDArray
+    port_current: NDArray
 
 
 class SimSetup(NamedTuple):
@@ -196,9 +202,10 @@ class SimSetup(NamedTuple):
     CSX: ContinuousStructure
     FDTD: openEMS
     freqs: NDArray
-    backend_engine: str = "FDTD"
+    backend_engine: str
     num_fem_solve_points: int = 10
     fem_options: FemOptions | None = None
+    charac_imp: float = 50
 
 
 def setup_simulation(
@@ -265,6 +272,7 @@ def setup_simulation(
         backend_engine=params.backend_engine,
         num_fem_solve_points=params.num_fem_solve_points,
         fem_options=fem_options,
+        charac_imp=params.charac_imp,
     )
 
 
@@ -302,7 +310,12 @@ class SimTools:
             msh_path = fem_backend.build_mesh(
                 sim.CSX, sim.freqs, output_path, fem_options=sim.fem_options
             )
-            SimTools._display_mesh(msh_path)
+            vtk_path = Path(msh_path).with_suffix(".vtk")
+            grid = pv.read(str(vtk_path if vtk_path.exists() else msh_path))
+            plotter = pv.Plotter()
+            plotter.add_mesh(grid, show_edges=True, opacity=0.5, color="lightblue")
+            plotter.add_axes()
+            plotter.show()
             return
 
         structure_3d = output_path / "structure.xml"
@@ -311,26 +324,6 @@ class SimTools:
             str(structure_3d)
         )  # str in this fixes an error encountered on Windows.
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)
-
-    @staticmethod
-    def _display_mesh(msh_path: str | Path) -> None:
-        """
-        Display a Gmsh ``.msh`` tetrahedral mesh with pyvista.
-
-        Parameters
-        ----------
-        msh_path : str | Path
-            Path to the ``.msh`` file to display.
-        """
-        try:
-            vtk_path = Path(msh_path).with_suffix(".vtk")
-            grid = pv.read(str(vtk_path if vtk_path.exists() else msh_path))
-            plotter = pv.Plotter()
-            plotter.add_mesh(grid, show_edges=True, opacity=0.5, color="lightblue")
-            plotter.add_axes()
-            plotter.show()
-        except Exception as exc:  # display is non-critical (e.g. headless runs)
-            console.print(f"[warning]Could not display mesh: {exc}[/warning]")
 
     @staticmethod
     def export_stl(output_path: Path | None = None) -> None:
@@ -419,11 +412,9 @@ class SimTools:
 
     @staticmethod
     def compute_sim_data(
+        sim: SimSetup,
         port: LumpedPort | list[LumpedPort],
-        freqs: NDArray,
-        charac_imp: float,
         output_path: Path | None = None,
-        backend_engine: str = "FDTD",
     ) -> SimData:
         """
         Compute several network parameters for plotting and
@@ -474,21 +465,21 @@ class SimTools:
                 The calculated input power at the port.
 
         """
-        if backend_engine == "FEM":
+        if sim.backend_engine == "FEM":
             from . import fem_backend
 
             # match the default used by write_and_show_structure / run_simulation
             # so the FEM results are read from where they were written.
             if output_path is None:
                 output_path = Path.cwd() / "Sim_Path"
-            return fem_backend.compute_sim_data(freqs, charac_imp, output_path)
+            return fem_backend.compute_sim_data(sim.freqs, sim.charac_imp, output_path)
 
         if output_path is None:
             output_path = Path.cwd()
 
         if isinstance(port, list):
             for p in port:
-                p.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
+                p.CalcPort(str(output_path), sim.freqs, ref_impedance=sim.charac_imp)
             s11 = port[0].uf_ref / port[0].uf_inc
             s21 = port[1].uf_ref / port[0].uf_inc
             z11 = port[0].uf_tot / port[0].if_tot
@@ -496,9 +487,18 @@ class SimTools:
             s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
             vswr = (1 + s11_mag) / (1 - s11_mag)
             input_power = 0.5 * np.real(port[0].uf_tot * np.conj(port[0].if_tot))
-            return SimData(freqs, s11, s21, z11, vswr, input_power)
+            return SimData(
+                sim.freqs,
+                s11,
+                s21,
+                z11,
+                vswr,
+                input_power,
+                port[0].uf_tot,
+                port[0].if_tot,
+            )
         else:
-            port.CalcPort(str(output_path), freqs, ref_impedance=charac_imp)
+            port.CalcPort(str(output_path), sim.freqs, ref_impedance=sim.charac_imp)
             s21 = None
             z11 = port.uf_tot / port.if_tot
             s11 = port.uf_ref / port.uf_inc
@@ -506,7 +506,9 @@ class SimTools:
             s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
             vswr = (1 + s11_mag) / (1 - s11_mag)
             input_power = 0.5 * np.real(port.uf_tot * np.conj(port.if_tot))
-            return SimData(freqs, s11, s21, z11, vswr, input_power)
+            return SimData(
+                sim.freqs, s11, s21, z11, vswr, input_power, port.uf_tot, port.if_tot
+            )
 
     @staticmethod
     def plot_s_param(

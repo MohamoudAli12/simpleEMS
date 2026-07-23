@@ -45,18 +45,14 @@ def simulate(output_path: Path) -> None:
     patch.print_and_save_params(params, output_path)
     port = patch.build_inset_fed_patch_antenna()
     patch.create_mesh()
-    # For FEM this returns a FemNF2FF adapter with the same CalcNF2FF interface as
-    # the openEMS box, so all the radiation-plotting methods below are reused.
     nf2ff = patch.create_nf2ff(sim)
     patch.write_and_show_structure(sim, output_path)  # FEM: shows the mesh
 
     patch.run_simulation(sim, output_path)  # FEM: adaptive GetDP sweep
     sim_data = patch.compute_sim_data(
+        sim,
         port,
-        sim.freqs,
-        params.charac_imp,
         output_path,
-        backend_engine=params.backend_engine,
     )
 
     patch.plot_s_param(sim_data.freqs, sim_data.s11)
@@ -69,10 +65,9 @@ def simulate(output_path: Path) -> None:
     patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
     nf2ff_3d = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq, output_path)
     patch.plot_3d_directivity(nf2ff_3d, params.resonant_freq, output_path)
-    # FEM gain: pass the accepted power (Prad + Ploss) so gain is de-rated by the
-    # radiation efficiency (SimData.input_power is normalized to 1.0 for FEM).
-    accepted_power = nf2ff_3d.Prad[0] + nf2ff_3d.Ploss[0]
-    patch.plot_3d_gain(nf2ff_3d, params.resonant_freq, accepted_power, output_path)
+    patch.plot_3d_gain(
+        nf2ff_3d, params.resonant_freq, sim_data.input_power, output_path
+    )
     patch.plot_3d_power(nf2ff_3d, params.resonant_freq, output_path)
 
     patch.save_plots(output_path)

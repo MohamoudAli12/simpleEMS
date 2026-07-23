@@ -79,10 +79,12 @@ def compute_pattern(
     freq: float,
     bbox: tuple,
     workdir: str,
+    domain_bbox: tuple | None = None,
     nphi: int = 72,
-    ntheta: int = 90,
-    npts: tuple[int, int, int] = (30, 30, 30),
+    ntheta: int = 36,
+    npts: tuple[int, int, int] = (14, 14, 14),
     margin_frac: float = 0.15,
+    safety_frac: float = 0.6,
     verbose: bool = False,
 ) -> tuple[NDArray, NDArray, NDArray, float]:
     """
@@ -98,12 +100,37 @@ def compute_pattern(
         Structure extents ``(xmin, ymin, zmin, xmax, ymax, zmax)`` in metres.
     workdir : str
         Directory for the intermediate NearToFarField output.
+    domain_bbox : tuple | None
+        Meshed E/H field extents (the air/PML interface, from
+        ``fem_mesh.json``'s ``domain_bbox``). The Huygens box is placed
+        ``safety_frac`` of the way from ``bbox`` to this boundary on each
+        axis, so ``CutBox`` always samples inside the mesh. If ``None``
+        (older ``fem_mesh.json`` without the field), falls back to
+        ``margin_frac`` of the largest structure dimension -- which can
+        place the box outside the mesh if the FEM air padding is smaller,
+        silently zeroing the far field (``CutBox``/``OctreePost`` return 0
+        for points outside every element, unlike ``gmsh.view.probe``).
     nphi, ntheta : int
-        Far-field angular sampling (azimuth, elevation). Cost ~ ``nphi * ntheta``.
+        Far-field angular sampling (azimuth, elevation). The ``NearToFarField``
+        plugin is a triple loop over ``nphi * ntheta * num_surface_elements``
+        (one surface integral per requested direction), so cost scales with
+        their product. Every angle ``SimTools`` ever requests -- even a
+        0.1 deg sweep -- is interpolated from this one grid
+        (:class:`~scipy.interpolate.RegularGridInterpolator` in
+        :meth:`FemNF2FF.CalcNF2FF`), so raising these buys smoother
+        interpolation of an already-smooth pattern, not more physical
+        information; the near field is only resolved at the FEM mesh's own
+        element density regardless.
     npts : tuple[int, int, int]
-        CutBox sampling density on each axis of the Huygens box.
+        CutBox sampling density on each axis of the Huygens box. Determines
+        ``num_surface_elements`` above (``~6*(npts-1)**2`` boundary quads),
+        so it multiplies directly into the ``NearToFarField`` cost.
     margin_frac : float
-        Huygens-box margin as a fraction of the largest structure dimension.
+        Fallback Huygens-box margin as a fraction of the largest structure
+        dimension, used only when ``domain_bbox`` is ``None``.
+    safety_frac : float
+        Fraction of the per-axis gap between ``bbox`` and ``domain_bbox``
+        used for the Huygens-box margin. Default ``0.6``.
     verbose : bool
         Print Gmsh progress. Default ``False``.
 
@@ -122,11 +149,20 @@ def compute_pattern(
     gmsh.merge(e_pos)  # view index 0 -> E
     gmsh.merge(h_pos)  # view index 1 -> H
 
-    # Huygens box just outside the structure, inside the air region.
-    dx, dy, dz = bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2]
-    m = margin_frac * max(dx, dy, dz)
-    x0, y0, z0 = bbox[0] - m, bbox[1] - m, bbox[2] - m
-    x1, y1, z1 = bbox[3] + m, bbox[4] + m, bbox[5] + m
+    # Huygens box just outside the structure, inside the meshed air region.
+    if domain_bbox is not None:
+        x0, y0, z0 = (
+            bbox[i] - safety_frac * (bbox[i] - domain_bbox[i]) for i in range(3)
+        )
+        x1, y1, z1 = (
+            bbox[3 + i] + safety_frac * (domain_bbox[3 + i] - bbox[3 + i])
+            for i in range(3)
+        )
+    else:
+        dx, dy, dz = bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2]
+        m = margin_frac * max(dx, dy, dz)
+        x0, y0, z0 = bbox[0] - m, bbox[1] - m, bbox[2] - m
+        x1, y1, z1 = bbox[3] + m, bbox[4] + m, bbox[5] + m
 
     def cb(name: str, val: float) -> None:
         gmsh.plugin.setNumber("CutBox", name, val)
@@ -307,13 +343,22 @@ class FemNF2FF:
         if key not in self._cache:
             meta = json.loads((Path(output_path) / _MESH_META).read_text())
             pro, msh, bbox = meta["pro_path"], meta["msh_path"], tuple(meta["bbox"])
+            domain_bbox = tuple(meta["domain_bbox"]) if "domain_bbox" in meta else None
+            if domain_bbox is None:
+                console.print(
+                    "[warning]fem_mesh.json has no domain_bbox (stale mesh); "
+                    "falling back to a structure-relative Huygens box, which "
+                    "can land outside the meshed domain and zero out the far "
+                    "field. Re-run build_mesh to regenerate it.[/warning]"
+                )
             console.print(
                 f"[info]FEM far-field: solving fields at {freq / 1e9:.4f} GHz[/info]"
             )
-            e_pos, h_pos = fem_solver.solve_fields(pro, msh, output_path, freq)
-            p_loss, p_rad = fem_solver.solve_power(pro, msh, output_path, freq)
+            e_pos, h_pos, p_loss, p_rad = fem_solver.solve_fields_and_power(
+                pro, msh, output_path, freq
+            )
             theta_axis, phi_axis, u_grid, dir_db = compute_pattern(
-                e_pos, h_pos, freq, bbox, output_path
+                e_pos, h_pos, freq, bbox, output_path, domain_bbox=domain_bbox
             )
             self._cache[key] = (theta_axis, phi_axis, u_grid, dir_db, p_rad, p_loss)
         return self._cache[key]

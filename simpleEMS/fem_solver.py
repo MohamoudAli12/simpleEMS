@@ -36,6 +36,7 @@ __all__ = [
     "read_complex",
     "solve_fields",
     "solve_power",
+    "solve_fields_and_power",
 ]
 
 _GETDP_ENV = "SIMPLEEMS_GETDP_BIN"
@@ -82,19 +83,21 @@ def read_complex(path: str) -> complex:
     Parameters
     ----------
     path : str
-        Path to an ``xS_<n><k>.txt`` file with ``[tag, Re, Im]`` columns.
+        Path to an ``xS_<n><k>.txt`` file with ``[tag, Re, Im]`` columns. Rows
+        accumulate across a sweep (GetDP appends, see ``write_problem``), so
+        the most recently solved point is always the last row.
 
     Returns
     -------
     complex
-        The first row's complex value, or ``0j`` if the file is missing.
+        The last row's complex value, or ``0j`` if the file is missing.
     """
     if not os.path.exists(path):
         return 0j
     d = np.loadtxt(path)
     if d.ndim == 1:
         d = d.reshape(1, -1)
-    return complex(d[0, 1], d[0, 2])
+    return complex(d[-1, 1], d[-1, 2])
 
 
 def run_getdp(
@@ -102,7 +105,7 @@ def run_getdp(
     msh_path: str,
     workdir: str,
     setnumbers: dict,
-    postop: str | None,
+    postop: str | list[str] | None,
     resolution: str = "Analysis",
     extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
@@ -119,8 +122,12 @@ def run_getdp(
         Working directory for the run (outputs go under ``workdir/output``).
     setnumbers : dict
         Numeric ``-setnumber`` overrides (e.g. ``{"FREQ": f, "ACTIVE_PORT": k}``).
-    postop : str | None
-        Name of the ``-pos`` post-operation to run, or ``None``.
+    postop : str | list[str] | None
+        Name(s) of the ``-pos`` post-operation(s) to run, or ``None``. GetDP's
+        ``-pos`` accepts multiple post-operation ids in one invocation, run
+        against whatever the ``-solve``/``-cal`` step already assembled and
+        solved -- passing a list here runs them all off a single
+        ``Generate``/``Solve`` instead of one GetDP process per post-operation.
     resolution : str
         Name of the GetDP resolution to solve. Default ``"Analysis"``.
     extra_args : list[str] | None
@@ -138,25 +145,34 @@ def run_getdp(
     """
     # Build the getdp command line:
     #   getdp <name>.pro -msh <name>.msh -setnumber FREQ <f> -setnumber ACTIVE_PORT <k>
-    #         -solve <Resolution> -pos <PostOperation> -v2
+    #         -solve <Resolution> -pos <PostOperation(s)> -v2
     # i.e. one solve at one frequency driving one port; results are written by
-    # the .pro's PostOperation into output/xS_<n><k>.txt.
+    # the .pro's PostOperation(s) into output/xS_<n><k>.txt.
     args = [find_getdp(), pro_path, "-msh", msh_path]
     for k, v in setnumbers.items():
         args += ["-setnumber", k, repr(float(v))]
     args += ["-solve", resolution]
     if postop:  # omit for the internal sweep (its Resolution calls PostOperation)
-        args += ["-pos", postop]
+        postops = [postop] if isinstance(postop, str) else list(postop)
+        args += ["-pos", *postops]
     args += ["-v2"]  # verbosity level 2 (progress but not per-iteration spam)
     if extra_args:  # passthrough getdp/PETSc flags
         args += list(extra_args)
-    res = subprocess.run(args, cwd=workdir, capture_output=True, text=True)
+    res = subprocess.run(args, cwd=workdir, capture_output=False, text=True)
     if res.returncode != 0:
         raise RuntimeError(
             f"getdp failed ({res.returncode}):\n"
             f"{res.stdout[-2000:]}\n{res.stderr[-2000:]}"
         )
     return res
+
+
+def _read_power_value(outdir: str, fname: str) -> float:
+    # rows accumulate across calls (GetDP appends); take the latest one.
+    path = os.path.join(outdir, fname)
+    if not os.path.exists(path):
+        return 0.0
+    return float(np.atleast_2d(np.loadtxt(path))[-1, -2])
 
 
 def solve_fields(
@@ -226,11 +242,53 @@ def solve_power(
         "Get_Power",
     )
     outdir = os.path.join(os.path.abspath(workdir), "output")
+    return (
+        _read_power_value(outdir, "Ploss.txt"),
+        _read_power_value(outdir, "Prad.txt"),
+    )
 
-    def _read(fname: str) -> float:
-        path = os.path.join(outdir, fname)
-        if not os.path.exists(path):
-            return 0.0
-        return float(np.atleast_2d(np.loadtxt(path))[0, -2])
 
-    return _read("Ploss.txt"), _read("Prad.txt")
+def solve_fields_and_power(
+    pro_path: str, msh_path: str, workdir: str, freq: float, active: int = 1
+) -> tuple[str, str, float, float]:
+    """
+    Solve at one frequency and return both the field views and the powers.
+
+    Drives ``Get_Fields`` and ``Get_Power`` together in a single GetDP
+    invocation, so the linear system is assembled and solved only once (both
+    post-operations read off the same solved system) instead of once per
+    post-operation as separate calls to :func:`solve_fields` and
+    :func:`solve_power` would do.
+
+    Parameters
+    ----------
+    pro_path, msh_path : str
+        Paths to the ``.pro`` and ``.msh`` files.
+    workdir : str
+        Working directory (outputs go under ``workdir/output``).
+    freq : float
+        Frequency in Hz.
+    active : int
+        Driven port number. Default ``1``.
+
+    Returns
+    -------
+    tuple[str, str, float, float]
+        ``(e_pos, h_pos, p_loss, p_rad)`` -- paths to the written ``e.pos``
+        and ``h.pos`` field views, and the dielectric-loss and radiated
+        powers (field units).
+    """
+    run_getdp(
+        pro_path,
+        msh_path,
+        workdir,
+        {"FREQ": freq, "ACTIVE_PORT": active},
+        ["Get_Fields", "Get_Power"],
+    )
+    outdir = os.path.join(os.path.abspath(workdir), "output")
+    return (
+        os.path.join(outdir, "e.pos"),
+        os.path.join(outdir, "h.pos"),
+        _read_power_value(outdir, "Ploss.txt"),
+        _read_power_value(outdir, "Prad.txt"),
+    )

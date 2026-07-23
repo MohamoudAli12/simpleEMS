@@ -50,10 +50,8 @@ microstrip.run_simulation(sim)  # FEM: adaptive GetDP sweep
 
 # PPROCESS
 sim_data = microstrip.compute_sim_data(
+    sim,
     ports,
-    sim.freqs,
-    params.charac_imp,
-    backend_engine=params.backend_engine,
 )
 
 microstrip.plot_s_param(sim_data.freqs, sim_data.s11, sim_data.s21)

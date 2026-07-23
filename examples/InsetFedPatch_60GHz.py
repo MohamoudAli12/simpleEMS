@@ -24,6 +24,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         charac_imp=50.0,
         end_criteria=1e-4,
         min_trace_spacing_mm=0.05,
+        backend_engine="FEM",
     )
 
     # parameters values after optimization
@@ -92,6 +93,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             sim.freqs,
             params.charac_imp,
             output_path,
+            backend_engine=params.backend_engine,
         )
 
         nf2ff_3d_result = patch.compute_nf2ff_3d(

@@ -10,6 +10,7 @@ from simpleEMS import (
     param_sweep,
     setup_simulation,
     optimize_s11,
+    DumpType,
 )
 
 
@@ -32,7 +33,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if sweep:
         params.inset_length_mm = sweep_val[0]
-        params.inset_width_mm = sweep_val[1]
+        # params.inset_width_mm = sweep_val[1]
 
     if optimize:
         params.inset_length_mm = optimize_val[0]
@@ -47,16 +48,15 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     port = patch.build_inset_fed_patch_antenna()
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(sim)
-    patch.add_field_dump(sim, params, output_path)
+    patch.add_field_dump(sim, params, output_path, DumpType.efield_time)
     patch.write_and_show_structure(sim, output_path)
     sim_data = None
 
     if sweep:
         patch.run_simulation(sim, output_path)
         sim_data = patch.compute_sim_data(
+            sim,
             port,
-            sim.freqs,
-            params.charac_imp,
             output_path,
         )
         return sim_data
@@ -78,9 +78,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     if not (sweep or optimize):
         patch.run_simulation(sim, output_path)
         sim_data = patch.compute_sim_data(
+            sim,
             port,
-            sim.freqs,
-            params.charac_imp,
             output_path,
         )
 
@@ -128,10 +127,10 @@ def main():
         }
         optimize_s_params(simulate, x0, output_path)
 
-    sweep = False
+    sweep = True
     if sweep:
         sweep_vals = {
-            "inset_length_mm": (0.533, 0.750, 3),
+            "inset_length_mm": (1.075, 1.2, 6),
             # "inset_width_mm": (0.148, 0.158, 3),
         }
         param_sweep(
