@@ -53,16 +53,6 @@ from .fem_materials import EPS0, Dielectric, FEMOptions, guess_role
 if TYPE_CHECKING:
     from .sim_tools import SimData
 
-__all__ = [
-    "SolidSpec",
-    "PortSpec",
-    "Problem",
-    "build_mesh",
-    "existing_mesh_path",
-    "run_sweep",
-    "compute_sim_data",
-    "simulate_step_FEM",
-]
 
 # The three public functions run in the same order as the FDTD pipeline and,
 # like it, hand state between stages through FILES in the output directory

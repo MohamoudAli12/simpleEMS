@@ -59,8 +59,6 @@ from .fem_materials import (
 if TYPE_CHECKING:
     from .fem_backend import Problem
 
-__all__ = ["PortMesh", "Mesh", "list_solids", "build_mesh"]
-
 
 @dataclass
 class PortMesh:

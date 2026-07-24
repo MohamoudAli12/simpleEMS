@@ -41,24 +41,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = [
-    "Dielectric",
-    "FEMOptions",
-    "EPS0",
-    "MU0",
-    "C0",
-    "ETA0",
-    "SIGMA_CU",
-    "guess_role",
-    "AIR",
-    "PML",
-    "PEC",
-    "IMPEDANCE",
-    "ABC",
-    "SYM",
-    "dielectric_region",
-    "port_region",
-]
+__all__ = ["FEMOptions"]
 
 EPS0 = 8.8541878128e-12  # F/m
 MU0 = 1.25663706212e-6  # H/m

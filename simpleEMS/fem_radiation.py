@@ -44,7 +44,7 @@ from . import fem_solver
 from .console import console
 from .fem_materials import C0
 
-__all__ = ["FEMFarField", "FEMNF2FF"]
+__all__ = ["FEMNF2FF"]
 
 _MESH_META = "fem_mesh.json"
 

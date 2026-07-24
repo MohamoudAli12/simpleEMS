@@ -52,8 +52,6 @@ if TYPE_CHECKING:
     from .fem_geometry import Mesh
     from .fem_backend import Problem
 
-__all__ = ["write_problem"]
-
 
 def _fmt(x: float) -> str:
     return repr(float(x))

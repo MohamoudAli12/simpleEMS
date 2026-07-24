@@ -36,8 +36,6 @@ from scipy.interpolate import AAA
 
 from .console import console
 
-__all__ = ["rational_sweep"]
-
 
 def rational_sweep(
     freqs_out: NDArray,

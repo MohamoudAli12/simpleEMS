@@ -36,12 +36,7 @@ _NAMES_BY_MODULE = {
         "BandPassQuarterWaveFilter",
     ],
     "standalone_model": ["simulate_model"],
-    "fem_backend": [
-        "simulate_step_FEM",
-        "Problem",
-        "SolidSpec",
-        "PortSpec",
-    ],
+    "fem_backend": ["simulate_step_FEM"],
     "fem_materials": ["FEMOptions"],
     "sim_tools": [
         "DumpType",
@@ -114,9 +109,6 @@ __all__ = [
     "param_sweep",
     "simulate_model",
     "simulate_step_FEM",
-    "Problem",
-    "SolidSpec",
-    "PortSpec",
     "FEMOptions",
 ]
 
