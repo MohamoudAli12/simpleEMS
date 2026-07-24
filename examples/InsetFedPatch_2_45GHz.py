@@ -51,22 +51,12 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if sweep:
         patch.run_simulation(sim, output_path)
-        sim_data = patch.compute_sim_data(
-            port,
-            sim.freqs,
-            params.charac_imp,
-            output_path,
-        )
+        sim_data = patch.compute_sim_data(sim, port, output_path)
 
         return sim_data
     if optimize:
         patch.run_simulation(sim, output_path)
-        sim_data = patch.compute_sim_data(
-            port,
-            sim.freqs,
-            params.charac_imp,
-            output_path,
-        )
+        sim_data = patch.compute_sim_data(sim, port, output_path)
 
         return optimize_s11(
             sim_data.freqs,
@@ -76,12 +66,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if not (sweep or optimize):
         patch.run_simulation(sim, output_path)
-        sim_data = patch.compute_sim_data(
-            port,
-            sim.freqs,
-            params.charac_imp,
-            output_path,
-        )
+        sim_data = patch.compute_sim_data(sim, port, output_path)
 
         nf2ff_3d_result = patch.compute_nf2ff_3d(
             nf2ff, params.resonant_freq, output_path

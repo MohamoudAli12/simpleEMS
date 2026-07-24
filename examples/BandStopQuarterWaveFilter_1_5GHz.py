@@ -50,23 +50,13 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if sweep:
         filter.run_simulation(sim, output_path)
-        sim_data = filter.compute_sim_data(
-            ports,
-            sim.freqs,
-            params.charac_imp,
-            output_path,
-        )
+        sim_data = filter.compute_sim_data(sim, ports, output_path)
 
         return sim_data
 
     if optimize:
         filter.run_simulation(sim, output_path)
-        sim_data = filter.compute_sim_data(
-            ports,
-            sim.freqs,
-            params.charac_imp,
-            output_path,
-        )
+        sim_data = filter.compute_sim_data(sim, ports, output_path)
 
         s21_cost = optimize_s21(
             sim_data.freqs,
@@ -78,12 +68,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
 
     if not (sweep or optimize):
         filter.run_simulation(sim, output_path)
-        sim_data = filter.compute_sim_data(
-            ports,
-            sim.freqs,
-            params.charac_imp,
-            output_path,
-        )
+        sim_data = filter.compute_sim_data(sim, ports, output_path)
 
         filter.plot_s_param(sim_data.freqs, sim_data.s11, sim_data.s21)
         filter.plot_phase(sim_data.freqs, sim_data.s21)

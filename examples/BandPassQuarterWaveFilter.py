@@ -40,7 +40,7 @@ filter.run_simulation(sim)
 # SIMULATE
 
 # PPROCESS
-sim_data = filter.compute_sim_data(ports, sim.freqs, params.charac_imp)
+sim_data = filter.compute_sim_data(sim, ports)
 filter.plot_s_param(sim_data.freqs, sim_data.s11, sim_data.s21)
 filter.show_plots()
 # PPROCESS

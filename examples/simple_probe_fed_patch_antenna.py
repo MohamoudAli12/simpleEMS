@@ -42,11 +42,7 @@ patch.run_simulation(sim)
 # SIMULATE
 
 # PPROCESS
-sim_data = patch.compute_sim_data(
-    port,
-    sim.freqs,
-    params.charac_imp,
-)
+sim_data = patch.compute_sim_data(sim, port)
 nf2ff_3d_result = patch.compute_nf2ff_3d(nf2ff, params.resonant_freq)
 patch.plot_s_param(sim_data.freqs, sim_data.s11)
 patch.plot_smith_chart(sim_data.freqs, sim_data.s11)
