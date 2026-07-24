@@ -43,7 +43,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     filter = BandPassQuarterWaveFilter(params, sim)
     filter.print_and_save_params(params, output_path)
     ports = filter.build_band_pass_quarter_wave_filter()
-    filter.add_field_dump(params, sim, output_path)
+    filter.add_field_dump(sim, params, output_path)
     filter.create_mesh()
     filter.write_and_show_structure(sim, output_path)
     sim_data = None

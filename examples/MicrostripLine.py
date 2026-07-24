@@ -31,7 +31,7 @@ microstrip = MicrostripLine(params, sim)
 microstrip.print_and_save_params(params)
 ports = microstrip.build_microstrip_line()
 microstrip.create_mesh()
-microstrip.add_field_dump(params, sim)
+microstrip.add_field_dump(sim, params)
 microstrip.write_and_show_structure(sim)
 # BUILD
 
@@ -40,11 +40,7 @@ microstrip.run_simulation(sim)
 # SIMULATE
 
 # PPROCESS
-sim_data = microstrip.compute_sim_data(
-    ports,
-    sim.freqs,
-    params.charac_imp,
-)
+sim_data = microstrip.compute_sim_data(sim, ports)
 
 microstrip.plot_s_param(sim_data.freqs, sim_data.s11, sim_data.s21)
 microstrip.plot_impedance(sim_data.freqs, sim_data.z11)

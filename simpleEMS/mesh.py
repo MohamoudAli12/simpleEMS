@@ -39,64 +39,92 @@ PREC = 20
 
 
 class Type(Enum):
+    """Material classification of a meshed interval: conductor, non-metal
+    (dielectric or free space treated as bulk material), or open air."""
+
     metal = 0
     nonmetal = 1
     air = 2
 
 
 class BoundedType:
+    """An interval along one mesh dimension tagged with the material
+    (:class:`Type`) that occupies it."""
+
     def __init__(self, prop_type: Type, lower_bound: float, upper_bound: float) -> None:
         self.prop_type = prop_type
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
 
     def get_type(self) -> Type:
+        """Return the :class:`Type` occupying this interval."""
         return self.prop_type
 
     def get_bounds(self) -> list[float]:
+        """Return ``[lower_bound, upper_bound]``."""
         return [self.lower_bound, self.upper_bound]
 
     def get_midpoint(self) -> float:
+        """Return the midpoint of the interval."""
         return np.average([self.lower_bound, self.upper_bound])
 
     def size(self) -> float:
+        """Return the interval's length (``upper_bound - lower_bound``)."""
         return self.upper_bound - self.lower_bound
 
 
 def fp_nearest(val_or_arr: float) -> float:
+    """Round a value (or array) to ``PREC`` decimal places, for stable
+    floating-point comparisons."""
     return np.around(val_or_arr, PREC)
 
 
 def fp_equalp(val1: float, val2: float) -> bool:
+    """Return True if ``val1`` and ``val2`` are equal once rounded to
+    ``PREC`` decimal places."""
     return np.around(val1, PREC) == np.around(val2, PREC)
 
 
 def fp_gtp(val1: float, val2: float) -> bool:
+    """Return True if ``val1`` > ``val2`` once rounded to ``PREC`` decimal
+    places."""
     return np.around(val1, PREC) > np.around(val2, PREC)
 
 
 def fp_gep(val1: float, val2: float) -> bool:
+    """Return True if ``val1`` >= ``val2`` once rounded to ``PREC`` decimal
+    places."""
     return np.around(val1, PREC) >= np.around(val2, PREC)
 
 
 def fp_ltp(val1: float, val2: float) -> bool:
+    """Return True if ``val1`` < ``val2`` once rounded to ``PREC`` decimal
+    places."""
     return np.around(val1, PREC) < np.around(val2, PREC)
 
 
 def fp_lep(val1: float, val2: float) -> bool:
+    """Return True if ``val1`` <= ``val2`` once rounded to ``PREC`` decimal
+    places."""
     return np.around(val1, PREC) <= np.around(val2, PREC)
 
 
 def _prim_metalp(prim: CSPrimitives) -> bool:
+    """Return True if ``prim``'s CSXCAD property is a conductor (metal,
+    conducting sheet, or lumped element/port)."""
     type_str = prim.GetProperty().GetTypeString()
     return type_str in ("Metal", "ConductingSheet", "LumpedElement")
 
 
 def _prim_materialp(prim: CSPrimitives) -> bool:
+    """Return True if ``prim``'s CSXCAD property is a dielectric
+    (``Material``)."""
     return prim.GetProperty().GetTypeString() == "Material"
 
 
 def _get_prim_bounds(prim: CSPrimitives) -> np.ndarray:
+    """Return ``prim``'s axis-aligned bounding box, with its CSXCAD
+    transform applied, as ``[[xmin, xmax], [ymin, ymax], [zmin, zmax]]``."""
     orig_bounds = prim.GetBoundBox()
     tr = prim.GetTransform()
     orig_bounds[0] = np.array(tr.Transform(orig_bounds[0]))
@@ -110,11 +138,19 @@ def _get_prim_bounds(prim: CSPrimitives) -> np.ndarray:
 
 
 def _is_linpoly(prim: CSPrimitives) -> bool:
+    """Return True if ``prim`` is a linear-extrusion polygon or flat polygon
+    primitive."""
     cls = prim.__class__.__name__
     return cls in ("CSPrimLinPoly", "CSPrimPolygon")
 
 
 def _get_linpoly_vertex_bounds(prim: CSPrimitives) -> list[list[float]]:
+    """Return a polygon primitive's vertex coordinates in world space, as
+    ``[x_coords, y_coords, z_coords]``.
+
+    Returns three empty lists (rather than raising) if the primitive's
+    coordinates cannot be read.
+    """
     bounds: list[list[float]] = [[], [], []]
     try:
         coords = prim.GetCoords()
@@ -140,6 +176,9 @@ def _get_linpoly_vertex_bounds(prim: CSPrimitives) -> list[list[float]]:
 
 
 def _physical_prims(prims: list[CSPrimitives]) -> list[CSPrimitives]:
+    """Filter ``prims`` down to the conductor and dielectric primitives that
+    should drive mesh generation (helper/non-physical primitives are
+    excluded)."""
     physical = []
     for prim in prims:
         if _prim_metalp(prim) or _prim_materialp(prim):
@@ -148,6 +187,26 @@ def _physical_prims(prims: list[CSPrimitives]) -> list[CSPrimitives]:
 
 
 def _remove_dups(lst: list, fixed: list | None = None) -> list:
+    """Collapse near-duplicate consecutive values in a sorted list.
+
+    Two consecutive values are duplicates once rounded to ``PREC`` decimal
+    places. Normally the later of a duplicate pair is dropped; if that later
+    value is itself in ``fixed`` (a must-keep value, e.g. an explicit mesh
+    line), the earlier one is dropped instead so the fixed value survives.
+
+    Parameters
+    ----------
+    lst : list
+        Sorted values to deduplicate.
+    fixed : list | None
+        Values that must never be dropped. Default ``None`` (treated as
+        empty).
+
+    Returns
+    -------
+    list
+        ``lst`` with near-duplicates collapsed.
+    """
     if fixed is None:
         fixed = []
     new_lst = []
@@ -166,6 +225,25 @@ def _remove_dups(lst: list, fixed: list | None = None) -> list:
 def _collect_all_bounds(
     prims: list[CSPrimitives], fixed: list[list[float]]
 ) -> list[list[float]]:
+    """Collect candidate mesh-line positions from ``prims``, per dimension.
+
+    Adds both bounding-box edges of every primitive along all three
+    dimensions; for polygon primitives, also adds every vertex coordinate so
+    the mesh conforms to non-rectangular metal edges. Near-duplicates are
+    then removed per dimension via :func:`_remove_dups`.
+
+    Parameters
+    ----------
+    prims : list[CSPrimitives]
+        Physical primitives to collect bounds from.
+    fixed : list[list[float]]
+        Per-dimension must-keep positions, forwarded to :func:`_remove_dups`.
+
+    Returns
+    -------
+    list[list[float]]
+        ``[x_bounds, y_bounds, z_bounds]``, each sorted and deduplicated.
+    """
     dim_bounds: list[list[float]] = [[], [], []]
     for prim in prims:
         prim_bounds = _get_prim_bounds(prim)
@@ -184,10 +262,13 @@ def _collect_all_bounds(
 
 
 def _float_inside(val: float, lower: float, upper: float) -> bool:
+    """Return True if ``lower <= val <= upper``."""
     return lower <= val <= upper
 
 
 def _point_in_poly(px: float, py: float, verts: list[tuple[float, float]]) -> bool:
+    """Return True if point ``(px, py)`` lies inside the polygon defined by
+    ``verts``, using the standard ray-casting (even-odd rule) test."""
     inside = False
     j = len(verts) - 1
     for i in range(len(verts)):
@@ -200,11 +281,41 @@ def _point_in_poly(px: float, py: float, verts: list[tuple[float, float]]) -> bo
 
 
 def _pos_in_bounds(pos: float, lower: float, upper: float) -> bool:
+    """Return True if ``lower <= pos <= upper``, using the floating-point-
+    tolerant comparisons :func:`fp_gep`/:func:`fp_lep`."""
     return fp_gep(pos, lower) and fp_lep(pos, upper)
 
 
 def _type_at_pos(prims: list[CSPrimitives], dim: int, pos: float) -> Type | None:
+    """Classify the material type at a point along one dimension.
+
+    Finds the smallest primitive (by extent along ``dim``) whose bounding
+    box covers ``pos``; metal wins ties against non-metal primitives of the
+    same size. A metal polygon primitive that does not actually cover the
+    transverse position at ``pos`` (e.g. an inset notch cut into a patch) is
+    treated as a gap rather than solid metal; if every primitive covering
+    ``pos`` turns out to be such a notch, the position is reclassified as
+    non-metal.
+
+    Parameters
+    ----------
+    prims : list[CSPrimitives]
+        Physical primitives to test.
+    dim : int
+        Dimension to test along: ``0`` (x), ``1`` (y), or ``2`` (z).
+    pos : float
+        Position along ``dim`` to classify.
+
+    Returns
+    -------
+    Type | None
+        The material type at ``pos``, or ``None`` if no primitive covers it.
+    """
+
     def _covers(prim: CSPrimitives) -> bool:
+        """Return True if polygon primitive ``prim`` actually covers the
+        transverse position at ``pos`` along ``dim`` (tested against its
+        world-space vertex outline), rather than just its bounding box."""
         try:
             coords = prim.GetCoords()
             x_verts = list(coords[0])
@@ -266,6 +377,8 @@ def _type_at_pos(prims: list[CSPrimitives], dim: int, pos: float) -> Type | None
 def _sort_bounded_types(
     bounded_types: list[list[BoundedType]],
 ) -> list[list[BoundedType]]:
+    """Sort each dimension's list of :class:`BoundedType` intervals by
+    increasing size, so meshing processes the finest features first."""
     new_bounded_types = [[], [], []]
     for dim, btype_list in enumerate(bounded_types):
         new_bounded_types[dim] = sorted(btype_list, key=lambda x: x.size())
@@ -273,6 +386,8 @@ def _sort_bounded_types(
 
 
 def _factor_for_num(num: int, smaller_spacing: float, dist: float) -> float:
+    """Solve for the geometric growth factor that spans ``dist`` in exactly
+    ``num`` steps starting from ``smaller_spacing``."""
     roots = scipy.optimize.fsolve(
         func=_geom_dist_zero, x0=1.5, args=(num, smaller_spacing, dist)
     )
@@ -280,10 +395,16 @@ def _factor_for_num(num: int, smaller_spacing: float, dist: float) -> float:
 
 
 def _factor_ubound(num: int, ratio: float, max_factor: float) -> float:
+    """Return ``min(max_factor, ratio ** (1 / (num - 1)))``: the growth
+    factor that would exactly reach a total spacing ratio of ``ratio`` over
+    ``num`` mesh lines, capped at ``max_factor``."""
     return np.min([max_factor, np.power(ratio, 1 / (num - 1))])
 
 
 def _geom_dist(factor: float, num: int, smaller_spacing: float) -> float:
+    """Return the total distance spanned by ``num - 1`` geometrically
+    growing steps, starting at ``smaller_spacing`` and growing by ``factor``
+    each step."""
     powers = np.arange(1, num, 1)
     return smaller_spacing * np.sum(np.power(factor, powers))
 
@@ -291,12 +412,33 @@ def _geom_dist(factor: float, num: int, smaller_spacing: float) -> float:
 def _geom_dist_zero(
     factor: float, num: int, smaller_spacing: float, dist: float
 ) -> float:
+    """Return ``_geom_dist(factor, num, smaller_spacing) - dist``; the
+    root-finding objective used by :func:`_factor_for_num`."""
     return _geom_dist(factor, num, smaller_spacing) - dist
 
 
 def _num_for_factor(
     factor: float, smaller_spacing: float, dist: float
 ) -> tuple[float, int]:
+    """Find the number of geometric-series steps needed to span ``dist``
+    without exceeding growth factor ``factor``, and the exact growth factor
+    for that step count.
+
+    Parameters
+    ----------
+    factor : float
+        Maximum allowed growth factor between consecutive spacings.
+    smaller_spacing : float
+        Spacing of the first step.
+    dist : float
+        Total distance to span.
+
+    Returns
+    -------
+    tuple[float, int]
+        ``(factor, num)`` -- the growth factor that exactly spans ``dist`` in
+        ``num`` steps (``num`` is reduced until this factor is at least 1).
+    """
     dist = float(np.asarray(dist).flat[0])
     num = int(
         np.ceil(
@@ -320,6 +462,16 @@ def _geom_series(
     min_num: int,
     max_factor: float,
 ) -> tuple[float, int]:
+    """Find the number of lines and growth factor for a geometric-series
+    mesh spanning ``dist``, starting at ``smaller_spacing`` and growing
+    (at most ``max_factor`` per step) toward ``larger_spacing``, without
+    dropping below ``min_num`` lines.
+
+    Returns
+    -------
+    tuple[float, int]
+        ``(factor, num)``.
+    """
     num = np.max([int(np.ceil(dist / larger_spacing)) + 1, min_num])
     factor = _factor_for_num(num, smaller_spacing, dist)
     while factor >= _factor_ubound(num, larger_spacing / smaller_spacing, max_factor):
@@ -337,6 +489,33 @@ def _lines_const_factor_in_bounds(
     min_lines: int,
     smooth: float,
 ) -> np.ndarray:
+    """Generate mesh line positions across ``[lower, upper]`` as a single
+    geometric series.
+
+    Uses a uniform grid if ``lower_spacing`` and ``upper_spacing`` are
+    (nearly) equal; otherwise grows geometrically from whichever end has the
+    smaller spacing toward the other end, at a growth factor no larger than
+    ``smooth``.
+
+    Parameters
+    ----------
+    lower, upper : float
+        Interval to fill with mesh lines.
+    lower_spacing, upper_spacing : float
+        Target spacing at each end of the interval.
+    dim : int
+        Dimension being meshed. Unused inside this function; kept only for a
+        uniform call signature with its callers.
+    min_lines : int
+        Minimum number of mesh lines to generate.
+    smooth : float
+        Maximum ratio between adjacent cell sizes.
+
+    Returns
+    -------
+    np.ndarray
+        Mesh line positions from ``lower`` to ``upper`` inclusive.
+    """
     if np.isclose(lower_spacing, upper_spacing, rtol=1e-3, atol=0):
         num_lines = int(np.ceil((upper - lower) / lower_spacing)) + 1
         num_lines = int(np.max([num_lines, min_lines]))
@@ -366,6 +545,8 @@ def _lines_const_factor_in_bounds(
 
 
 def _spacing_at_dist(spacing: float, dist: float, max_factor: float) -> float:
+    """Return the cell spacing reached after growing (at up to ``max_factor``
+    per step) from ``spacing`` across a distance ``dist``."""
     factor, num = _num_for_factor(max_factor, spacing, dist)
     return spacing * (factor ** (num - 1))
 
@@ -377,6 +558,13 @@ def _spacings_at_dist_zero(
     total_dist: float,
     max_factor: float,
 ) -> float:
+    """Return the mismatch between the two spacings that meet if a
+    geometric series grows inward from each end of a ``total_dist``
+    interval and meets at offset ``dist`` from the lower end.
+
+    Root-finding objective used by :func:`_dist_for_max_spacings` to locate
+    the meeting point where both series reach the same cell spacing.
+    """
     spacing1 = _spacing_at_dist(lower_spacing, dist, max_factor)
     spacing2 = _spacing_at_dist(upper_spacing, total_dist - dist, max_factor)
     return spacing2 - spacing1
@@ -385,6 +573,10 @@ def _spacings_at_dist_zero(
 def _dist_for_max_spacings(
     lower_spacing: float, upper_spacing: float, dist: float, max_factor: float
 ) -> float:
+    """Return the offset from the lower end of a ``dist``-long interval
+    where two geometric series (growing inward from each end, at up to
+    ``max_factor`` per step, starting at ``lower_spacing``/``upper_spacing``)
+    meet at the same cell spacing."""
     roots = scipy.optimize.fsolve(
         func=_spacings_at_dist_zero,
         x0=dist / 2,
@@ -396,21 +588,29 @@ def _dist_for_max_spacings(
 class Mesh:
     """Auto-generates an FDTD mesh from CSXCAD primitives.
 
-    Adapts the pyems automatic mesh generation algorithm.  Scans all
+    Adapts the pyems automatic mesh generation algorithm. Scans all
     physical primitives (metal and material), classifies regions by
     type, generates mesh lines using geometric series for smooth
-    transitions, and applies the thirds rule at metal boundaries.
+    transitions, and applies the thirds rule at metal boundaries (mesh
+    lines a third of a cell away from a metal-air interface, which
+    improves FDTD accuracy at conductor edges).
+
+    The mesh is generated immediately on construction and written directly
+    into ``csx``'s grid (via CSXCAD's ``ContinuousStructure.GetGrid()``); the
+    resulting mesh lines are also kept on ``self.mesh_lines`` for inspection.
 
     Parameters
     ----------
     csx : ContinuousStructure
         CSXCAD structure with primitives already added.
     params : SimParams
-        Simulation parameters providing simulation_box, mesh_resolution,
-        metal_mesh_resolution, unit, and main_freq.
+        Simulation parameters; reads ``simulation_box``, ``mesh_resolution``,
+        ``metal_mesh_resolution``, ``unit``, and ``lambda0``.
     smooth_ratio : float
-        Maximum ratio between adjacent cells (default 1.5).
-
+        Maximum ratio between adjacent cell sizes. Default ``1.5``.
+    min_lines : int
+        Minimum number of mesh lines generated across any bounded interval.
+        Default ``5``.
     """
 
     def __init__(
@@ -439,6 +639,8 @@ class Mesh:
         self._generate()
 
     def _generate(self) -> None:
+        """Run the full mesh-generation pipeline and write the result into
+        ``self._csx``'s grid."""
         prims = self._csx.GetAllPrimitives()
         physical_prims = _physical_prims(prims)
         self._set_fixed_lines(physical_prims)
@@ -455,6 +657,9 @@ class Mesh:
         self._clean_close_lines()
 
     def _set_fixed_lines(self, prims: list[CSPrimitives]) -> None:
+        """Add a fixed mesh line for every zero-thickness primitive (a
+        primitive whose bounding box has zero extent along a dimension,
+        e.g. a flat metal sheet), which must be meshed exactly."""
         for prim in prims:
             prim_bounds = _get_prim_bounds(prim)
             for dim in range(3):
@@ -464,12 +669,30 @@ class Mesh:
                 self.fixed_lines[dim] = _remove_dups(self.fixed_lines[dim])
 
     def add_fixed_line(self, dim: int, pos: float) -> None:
+        """Register a must-keep mesh line position at ``pos``.
+
+        Fixed lines are protected from the deduplication/smoothing passes
+        applied to the rest of the mesh. Must be called before the mesh is
+        generated to have any effect, since ``__init__`` runs mesh
+        generation immediately.
+
+        Parameters
+        ----------
+        dim : int
+            Dimension to add the line to: ``0`` (x), ``1`` (y), or ``2`` (z).
+        pos : float
+            Position of the line, in the structure's drawing units.
+        """
         self.fixed_lines[dim].append(pos)
         self.fixed_lines[dim].sort()
 
     def _bounded_types(
         self, bounds: list[list[float]], prims: list[CSPrimitives]
     ) -> list[list[BoundedType]]:
+        """Turn each dimension's sorted candidate positions (``bounds``) into
+        a list of adjacent :class:`BoundedType` intervals, classified via
+        :func:`_type_at_pos`. Zero-length intervals are also emitted at each
+        fixed line, so a fixed position is always its own interval."""
         bounded_types = [[], [], []]
         for dim, dim_bounds in enumerate(bounds):
             last_bound = None
@@ -492,6 +715,10 @@ class Mesh:
         return bounded_types
 
     def _set_sim_bounds_from_geometry(self, dim_bounds: list[list[float]]) -> None:
+        """Grow ``self._sim_box`` (in place) so every dimension pads the
+        geometry's own extent by at least ``lambda0 / 2`` or 15% of the
+        geometry's span, whichever is larger. Dimensions with no geometry
+        keep the simulation box passed in at construction."""
         new_sim_box = []
         for dim in range(3):
             if not dim_bounds[dim]:
@@ -507,6 +734,28 @@ class Mesh:
     def _set_expanded_bounds(
         self, bounded_types: list[list[BoundedType]]
     ) -> list[list[BoundedType]]:
+        """Extend ``bounded_types`` with air intervals so each dimension
+        spans the full simulation box, and record the result in
+        ``self.sim_bounds``.
+
+        Parameters
+        ----------
+        bounded_types : list[list[BoundedType]]
+            Per-dimension intervals covering (at most) the geometry's own
+            extent.
+
+        Returns
+        -------
+        list[list[BoundedType]]
+            ``bounded_types``, padded with air intervals out to the
+            simulation box boundary in each dimension.
+
+        Raises
+        ------
+        ValueError
+            If the simulation box is smaller than the structure's extent in
+            some dimension.
+        """
         for dim in range(3):
             if not bounded_types[dim]:
                 btype = BoundedType(
@@ -538,6 +787,8 @@ class Mesh:
         return bounded_types
 
     def _set_metal_bounds(self, bounded_types: list[list[BoundedType]]) -> None:
+        """Record the (non-degenerate) edges of every metal interval into
+        ``self.metal_bounds``, per dimension."""
         for dim, btypes in enumerate(bounded_types):
             for btype in btypes:
                 if btype.get_type() == Type.metal:
@@ -550,50 +801,74 @@ class Mesh:
             )
 
     def _add_metal_bound(self, dim: int, pos: float) -> None:
+        """Insert ``pos`` into ``self.metal_bounds[dim]``, keeping it sorted."""
         insort_left(self.metal_bounds[dim], pos)
 
     def _is_fixed_line(self, dim: int, pos: float) -> bool:
+        """Return True if ``pos`` is a fixed (must-keep) mesh line in
+        dimension ``dim``."""
         return any(fp_equalp(fp, pos) for fp in self.fixed_lines[dim])
 
     def _is_metal_bound(self, dim: int, pos: float) -> bool:
+        """Return True if ``pos`` is a metal interval edge in dimension
+        ``dim``."""
         return any(fp_equalp(mb, pos) for mb in self.metal_bounds[dim])
 
     def _pos_meshed(self, dim: int, pos: float) -> bool:
+        """Return True if ``pos`` falls inside a dimension-``dim`` interval
+        that has already had mesh lines generated for it."""
         for rng in self.ranges_meshed[dim]:
             if _pos_in_bounds(pos, rng[0], rng[1]):
                 return True
         return False
 
     def _type_below(self, dim: int, upper: float) -> Type | None:
+        """Return the :class:`Type` of the bounded interval whose upper edge
+        is at ``upper`` in dimension ``dim``, or ``None`` if there is none."""
         for btype in self.bounded_types[dim]:
             if fp_equalp(btype.get_bounds()[1], upper):
                 return btype.get_type()
         return None
 
     def _type_below_meshed(self, dim: int, lower: float) -> bool:
+        """Return True if the (non-degenerate) interval immediately below
+        ``lower`` in dimension ``dim`` has already been meshed."""
         for btype in self.bounded_types[dim]:
             if fp_equalp(btype.get_bounds()[1], lower) and btype.size() != 0:
                 return self._pos_meshed(dim, btype.get_midpoint())
         return False
 
     def _type_above(self, dim: int, lower: float) -> Type | None:
+        """Return the :class:`Type` of the bounded interval whose lower edge
+        is at ``lower`` in dimension ``dim``, or ``None`` if there is none."""
         for btype in self.bounded_types[dim]:
             if fp_equalp(btype.get_bounds()[0], lower):
                 return btype.get_type()
         return None
 
     def _type_above_meshed(self, dim: int, upper: float) -> bool:
+        """Return True if the (non-degenerate) interval immediately above
+        ``upper`` in dimension ``dim`` has already been meshed."""
         for btype in self.bounded_types[dim]:
             if fp_equalp(btype.get_bounds()[0], upper) and btype.size() != 0:
                 return self._pos_meshed(dim, btype.get_midpoint())
         return False
 
     def _add_to_ranges_meshed(self, dim: int, lower: float, upper: float) -> None:
+        """Record ``[lower, upper]`` as an already-meshed range in dimension
+        ``dim``."""
         self.ranges_meshed[dim].append([lower, upper])
 
     def _gen_mesh_for_bounded_types(
         self, bounded_types: list[list[BoundedType]]
     ) -> None:
+        """Generate mesh lines for every interval in ``bounded_types``, in
+        the order given.
+
+        Intended to be called with intervals sorted smallest-first (see
+        :func:`_sort_bounded_types`) so finer features are meshed before the
+        coarser intervals that reference their neighbors' spacing.
+        """
         for dim, btypes in enumerate(bounded_types):
             for btype in btypes:
                 lower = btype.get_bounds()[0]
@@ -607,6 +882,8 @@ class Mesh:
                 self._add_to_ranges_meshed(dim, lower, upper)
 
     def _min_spacing(self, dist: float) -> float:
+        """Return the largest cell spacing that still fits at least
+        ``self._min_lines`` mesh lines across a distance of ``dist``."""
         return dist / (self._min_lines - 1)
 
     def _lower_spacing(
@@ -617,6 +894,34 @@ class Mesh:
         dist: float,
         is_metal: bool,
     ) -> float:
+        """Choose the target cell spacing at the lower edge of an interval.
+
+        Starts from the metal or non-metal target resolution (capped so at
+        least ``min_lines`` lines fit across ``dist``); if the interval below
+        has already been meshed, further caps it by the thirds rule against
+        the neighboring cell's spacing (a factor of 1.5 across a metal/
+        non-metal boundary, 3.0 otherwise) so the new interval doesn't open
+        with an abrupt jump in cell size.
+
+        Parameters
+        ----------
+        dim : int
+            Dimension being meshed.
+        lower : float
+            Lower edge of the interval being meshed.
+        line_below : float | None
+            Nearest existing mesh line below ``lower``, if any.
+        dist : float
+            Length of the interval being meshed.
+        is_metal : bool
+            Whether the interval is metal (uses ``metal_mesh_resolution``
+            instead of ``mesh_resolution``).
+
+        Returns
+        -------
+        float
+            Target spacing at the lower edge.
+        """
         lower_spacing = self._metal_res if is_metal else self._mesh_res
         lower_spacing = np.min([lower_spacing, self._min_spacing(dist)])
         if line_below is not None and self._type_below_meshed(dim, lower):
@@ -637,6 +942,8 @@ class Mesh:
         dist: float,
         is_metal: bool,
     ) -> float:
+        """Mirror of :func:`_lower_spacing` for the upper edge of an
+        interval."""
         upper_spacing = self._metal_res if is_metal else self._mesh_res
         upper_spacing = np.min([upper_spacing, self._min_spacing(dist)])
         if line_above is not None and self._type_above_meshed(dim, upper):
@@ -658,6 +965,34 @@ class Mesh:
         line_above: float | None,
         is_metal: bool,
     ) -> None:
+        """Generate and add mesh lines across one bounded interval.
+
+        A degenerate (zero-length) interval gets a single line. A metal
+        interval in z thinner than a quarter of ``metal_mesh_resolution``
+        gets a single line at its midpoint, since it is too thin to resolve
+        with a full metal-resolution grid. Otherwise, generates a
+        geometric-series grid across the interval (:func:`_gen_lines_in_bounds`);
+        for a metal interval, the interval is first shrunk at each edge that
+        is not a fixed line or the outer simulation boundary, by a third (or
+        two-thirds, if the far side is also already-meshed metal) of a cell
+        width -- the "thirds rule", which keeps mesh lines off the metal
+        edge itself for FDTD accuracy -- and the lines regenerated over the
+        shrunk interval; a non-metal interval abutting a metal boundary is
+        instead nudged inward by two-thirds of a cell at that edge and
+        rebuilt.
+
+        Parameters
+        ----------
+        dim : int
+            Dimension being meshed: ``0`` (x), ``1`` (y), or ``2`` (z).
+        lower, upper : float
+            Interval to mesh.
+        line_below, line_above : float | None
+            Nearest existing mesh line outside the interval on each side, if
+            any.
+        is_metal : bool
+            Whether the interval is a metal region.
+        """
         dist = upper - lower
         lower_spacing = self._lower_spacing(dim, lower, line_below, dist, is_metal)
         upper_spacing = self._upper_spacing(dim, upper, line_above, dist, is_metal)
@@ -740,6 +1075,35 @@ class Mesh:
         max_spacing: float,
         dim: int,
     ) -> np.ndarray:
+        """Generate mesh line positions across ``[lower, upper]``.
+
+        If too few lines would fit at the coarser of the two target
+        spacings, or growing from the finer spacing at the allowed
+        smoothing ratio can't reach the coarser one before crossing the
+        full distance, falls back to a single geometric series between the
+        two spacings (:func:`_lines_const_factor_in_bounds`). Otherwise,
+        splits the interval at the point where series grown inward from
+        each end would meet at the same cell size (capped at
+        ``max_spacing``), and generates two series that join there -- so
+        both ends transition smoothly to their target spacing without
+        exceeding ``max_spacing`` in the middle.
+
+        Parameters
+        ----------
+        lower, upper : float
+            Interval to fill with mesh lines.
+        lower_spacing, upper_spacing : float
+            Target cell spacing at each end of the interval.
+        max_spacing : float
+            Largest cell spacing allowed anywhere in the interval.
+        dim : int
+            Dimension being meshed (selects ``self._smooth[dim]``).
+
+        Returns
+        -------
+        np.ndarray
+            Mesh line positions from ``lower`` to ``upper``.
+        """
         dist = upper - lower
         smaller_spacing = np.min([lower_spacing, upper_spacing])
         larger_spacing = np.max([lower_spacing, upper_spacing])
@@ -792,14 +1156,19 @@ class Mesh:
         return _remove_dups(lines, self.fixed_lines[dim])
 
     def _add_lines_to_mesh(self, lines: np.ndarray, dim: int) -> None:
+        """Insert ``lines`` into ``self.mesh_lines[dim]`` (sorted) and remove
+        any resulting near-duplicates."""
         for line in lines:
             self._add_mesh_line(dim, line)
         self.mesh_lines[dim] = _remove_dups(self.mesh_lines[dim], self.fixed_lines[dim])
 
     def _add_mesh_line(self, dim: int, pos: float) -> None:
+        """Insert ``pos`` into ``self.mesh_lines[dim]``, keeping it sorted."""
         insort_left(self.mesh_lines[dim], pos)
 
     def _set_mesh_from_lines(self) -> None:
+        """Write ``self.mesh_lines`` into the CSXCAD grid, replacing any
+        lines already there."""
         grid = self._csx.GetGrid()
         grid.SetDeltaUnit(self._unit)
         for i in range(3):
@@ -810,6 +1179,20 @@ class Mesh:
                 grid.AddLine(ch, fp_nearest(line))
 
     def _clean_close_lines(self, min_spacing: float | None = None) -> None:
+        """Merge mesh lines that ended up closer together than ``min_spacing``.
+
+        Reads the current lines from the CSXCAD grid (after
+        ``SmoothMeshLines`` has run) and, for each dimension, collapses any
+        pair closer than ``min_spacing`` into one -- keeping whichever line
+        of the pair is fixed, or averaging the two if neither is -- then
+        writes the cleaned lines back into the grid.
+
+        Parameters
+        ----------
+        min_spacing : float | None
+            Minimum allowed spacing between adjacent lines. Default ``None``
+            uses 1% of ``self.smallest_res``.
+        """
         if min_spacing is None:
             min_spacing = self.smallest_res * 0.01
         for dim in range(3):
@@ -846,6 +1229,22 @@ class Mesh:
     def nearest_mesh_line(
         self, dim: int, pos: float
     ) -> tuple[int | None, float | None]:
+        """Find the existing mesh line closest to ``pos`` in dimension ``dim``.
+
+        Parameters
+        ----------
+        dim : int
+            Dimension to search: ``0`` (x), ``1`` (y), or ``2`` (z).
+        pos : float
+            Position to search near.
+
+        Returns
+        -------
+        tuple[int | None, float | None]
+            ``(index, position)`` of the nearest line in
+            ``self.mesh_lines[dim]``, or ``(None, None)`` if that dimension
+            has no mesh lines yet.
+        """
         lines = self.mesh_lines[dim]
         if not lines:
             return (None, None)
@@ -863,6 +1262,9 @@ class Mesh:
                 return (bisect_pos, upper)
 
     def _line_below(self, dim: int, pos: float) -> tuple[int | None, float | None]:
+        """Return ``(index, position)`` of the nearest existing mesh line
+        strictly below ``pos`` in dimension ``dim``, or ``(None, None)`` if
+        there is none."""
         idx, act_pos = self.nearest_mesh_line(dim, pos)
         if act_pos is None:
             return (None, None)
@@ -879,6 +1281,9 @@ class Mesh:
         return (None, None)
 
     def _line_above(self, dim: int, pos: float) -> tuple[int | None, float | None]:
+        """Return ``(index, position)`` of the nearest existing mesh line
+        strictly above ``pos`` in dimension ``dim``, or ``(None, None)`` if
+        there is none."""
         idx, act_pos = self.nearest_mesh_line(dim, pos)
         if act_pos is None:
             return (None, None)
@@ -895,4 +1300,6 @@ class Mesh:
         return (None, None)
 
     def _mesh_valid_index(self, dim: int, index: int) -> bool:
+        """Return True if ``index`` is a valid index into
+        ``self.mesh_lines[dim]``."""
         return 0 <= index < len(self.mesh_lines[dim])

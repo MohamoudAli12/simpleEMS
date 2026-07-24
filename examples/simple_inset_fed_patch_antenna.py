@@ -31,7 +31,7 @@ patch.print_and_save_params(params)
 port = patch.build_inset_fed_patch_antenna()
 patch.create_mesh()
 nf2ff = patch.create_nf2ff(sim)
-patch.add_field_dump(params, sim)
+patch.add_field_dump(sim, params)
 patch.write_and_show_structure(sim)
 # BUILD
 

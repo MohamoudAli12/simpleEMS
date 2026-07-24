@@ -76,12 +76,12 @@ def _get_total_length(
 @dataclass
 class QuarterWaveFilterParams(SimParams):
     """
-    Parameters for a quarter-wave stub filter.
+    Parameters for a quarter-wave stub band-pass or band-stop filter.
 
-    This class extends `SimParams` and computes derived geometric
-    parameters required for filter layout and simulation. Supports
-    band-pass and band-stop responses with Bessel, Butterworth, or
-    Chebyshev prototypes.
+    Extends `SimParams` and computes the derived geometric parameters
+    (series line, shunt stub widths and lengths) required to build and
+    simulate a quarter-wave stub filter, using Bessel, Butterworth, or
+    Chebyshev prototype coefficients to size each shunt stub.
 
     Parameters
     ----------
@@ -98,11 +98,13 @@ class QuarterWaveFilterParams(SimParams):
     filter_response : str
         Filter response prototype: ``"bessel"``, ``"butterworth"``, or ``"chebyshev"``.
     filter_order : int
-        Order of the filter.
+        Order of the filter (number of shunt stubs).
     ripple_db : float, optional
-        Passband ripple in dB for Chebyshev response. Default is None.
+        Passband ripple in dB, used only for the Chebyshev response.
+        Default is None, which is treated as 0.1 dB.
     elec_length_deg : int, optional
-        Electrical length of each line section in degrees. Default is 90.
+        Electrical length, in degrees, of the series line section and of
+        each shunt stub. Default is 90 (quarter-wave).
 
     Attributes
     ----------
@@ -115,15 +117,31 @@ class QuarterWaveFilterParams(SimParams):
     shunt_line_length_mm : list of float
         Lengths of each shunt stub in mm.
     line_length_mm : float
-        Physical length of each line section in mm.
+        Physical length of each series line section in mm.
+
+    Raises
+    ------
+    ValueError
+        If `filter_type` is not ``"bandpass"`` or ``"bandstop"``; if the
+        resulting fractional bandwidth is not in (0, 1]; if the series line
+        or any shunt stub width falls below `min_trace_width_mm`; if
+        adjacent shunt stubs would overlap; or if a required characteristic
+        impedance cannot be realized on this substrate.
+
+    Notes
+    -----
+    As a subclass of `SimParams`, this class also accepts all of
+    `SimParams`'s keyword-only constructor arguments (e.g.
+    `substrate_eps_r`, `substrate_tand`, `substrate_thickness_mm`,
+    `charac_imp`); see that class's docstring for details.
     """
 
     min_freq: float
     max_freq: float
     centre_freq: float
     bandwidth_freq: float
-    filter_type: str  # lowpass highpass bandpass
-    filter_response: str  # butterworth chebychev  bessel
+    filter_type: str  # "bandpass" or "bandstop"
+    filter_response: str  # "bessel", "butterworth", or "chebyshev"
     filter_order: int
     ripple_db: float | None = None
     elec_length_deg: int = 90
@@ -153,7 +171,7 @@ class QuarterWaveFilterParams(SimParams):
         Returns
         -------
         float
-            The centre frequency for the filter.
+            The centre frequency of the filter.
         """
         return self.centre_freq
 
@@ -177,6 +195,10 @@ class QuarterWaveFilterParams(SimParams):
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width based on filter geometry.
+
+        Computed as the series line width plus one line-section length,
+        which approximates the space needed for the series line and a
+        shunt stub extending alongside it.
 
         Returns
         -------
@@ -202,7 +224,16 @@ class QuarterWaveFilterParams(SimParams):
         )
 
     def __post_init__(self) -> None:
-        """Compute geometry and validate filter type after init."""
+        """
+        Validate the filter type and bandwidth, then compute filter geometry.
+
+        Raises
+        ------
+        ValueError
+            If `filter_type` is not ``"bandpass"`` or ``"bandstop"``, or if
+            the fractional bandwidth (`bandwidth_freq` / `centre_freq`) is
+            not in (0, 1].
+        """
         super().__post_init__()
         if self.filter_type not in ("bandpass", "bandstop"):
             raise ValueError(f"Quarter-wave filter does not support {self.filter_type}")
@@ -217,7 +248,33 @@ class QuarterWaveFilterParams(SimParams):
         self._compute_geometry()
 
     def _get_shunt_width_and_length(self, idx: int) -> tuple[float, float]:
-        """Calculate the width of a single shunt stub for the given index."""
+        """
+        Compute the microstrip width and quarter-wave length of one shunt stub.
+
+        Looks up the filter prototype coefficient for element `idx`, derives
+        the required shunt stub impedance from it (using a different formula
+        for band-pass vs. band-stop), then converts that impedance to a
+        microstrip trace width and computes the trace length needed for the
+        electrical length given by `elec_length_deg`.
+
+        Parameters
+        ----------
+        idx : int
+            Index of the shunt stub (0-based).
+
+        Returns
+        -------
+        tuple[float, float]
+            ``(width_shunt_mm, length_shunt_mm)`` -- the shunt stub's
+            microstrip width and length, both in mm.
+
+        Raises
+        ------
+        ValueError
+            If the computed stub width is below `min_trace_width_mm`, or if
+            the required shunt impedance cannot be realized on this
+            substrate.
+        """
         g = get_filter_coefficient(
             idx, self.filter_response, self.filter_order, self.ripple_db
         )
@@ -250,13 +307,20 @@ class QuarterWaveFilterParams(SimParams):
     def _compute_geometry(self) -> None:
         """
         Compute all derived geometric parameters for the quarter-wave stub filter.
-        This method calculates the series line width, shunt line widths,
-        and line length based on the characteristic impedance, substrate
-        properties, filter coefficients, and target frequency.
+
+        Calculates the series line width and length, and the width and
+        length of each shunt stub, based on the characteristic impedance,
+        substrate properties, filter coefficients, and target frequency.
 
         Returns
         -------
         None
+
+        Raises
+        ------
+        ValueError
+            If the series line width or any shunt stub width falls below
+            `min_trace_width_mm`, or if adjacent shunt stubs would overlap.
         """
         self.series_line_width_mm, er_eff = microstrip_width_from_impedance(
             self.charac_imp,
@@ -325,7 +389,26 @@ class QuarterWaveFilter(SimTools):
     Base class for quarter-wave stub filter models using openEMS.
 
     Provides methods for creating the substrate and ground plane shared
-    by all quarter-wave stub filter variants.
+    by all quarter-wave stub filter variants. Specific stub terminations
+    (open for band-stop, shorted for band-pass) should be implemented by
+    subclasses.
+
+    Parameters
+    ----------
+    params : QuarterWaveFilterParams
+        Data container holding geometric and material properties (e.g.,
+        substrate thickness, permittivity, and line/stub dimensions).
+    sim : SimSetup
+        Named tuple containing the CSXCAD geometry and openEMS FDTD engine.
+
+    Attributes
+    ----------
+    params : QuarterWaveFilterParams
+        Stored reference to the simulation parameters.
+    CSX : ContinuousStructure
+        Stored reference to the geometry engine (from sim).
+    FDTD : openEMS
+        Stored reference to the simulation engine (from sim).
     """
 
     def __init__(
@@ -378,7 +461,6 @@ class QuarterWaveFilter(SimTools):
         Returns
         -------
         None
-
         """
         ground = self.CSX.AddMetal("ground")
         ground.SetColor("#B87333", 255)
@@ -399,10 +481,13 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
     """
     Band-stop quarter-wave stub filter model.
 
-    This class implements the geometry representation of a band-stop
-    quarter-wave stub filter. It extends `QuarterWaveFilter` by adding
-    the series transmission line sections, shunt stubs, ports, and
-    FDTD mesh.
+    Extends `QuarterWaveFilter` with the series transmission line sections,
+    open-circuited shunt stubs, excitation ports, and FDTD mesh needed for
+    a band-stop (notch) response. Each shunt stub is left open at its far
+    end, which reflects energy near `centre_freq` back into the through
+    line. Use `build_band_stop_quarter_wave_filter` to construct the full
+    geometry, or call the individual ``create_*`` methods directly for
+    finer control.
     """
 
     def create_series_line(self) -> None:
@@ -410,8 +495,8 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         Create the series transmission line sections.
 
         Adds multiple rectangular metal boxes for the series line
-        segments of the band-stop filter, separated by shunt stub
-        locations.
+        segments of the filter, separated by shunt stub locations.
+
         Returns
         -------
         None
@@ -457,6 +542,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         Adds multiple rectangular metal boxes for the shunt stub
         elements of the band-stop filter, connecting from the series
         line to the open-circuit end.
+
         Returns
         -------
         None
@@ -566,13 +652,14 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
         """
         Construct the complete band-stop quarter-wave stub filter geometry.
 
-        This method orchestrates the creation of all filter components
-        including the substrate, ground plane, series transmission line
-        sections, shunt stubs, ports, and mesh.
+        Orchestrates the creation of all filter components, including the
+        substrate, ground plane, series transmission line sections, open
+        shunt stubs, and excitation ports. The mesh must be created
+        separately via ``create_mesh``.
 
         Returns
         -------
-        list
+        list of LumpedPort
             A list of two LumpedPort objects [port1, port2] for
             S-parameter extraction.
         """
@@ -705,10 +792,14 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
     """
     Band-pass quarter-wave stub filter model.
 
-    This class implements the geometry representation of a band-pass
-    quarter-wave stub filter. It extends `QuarterWaveFilter` by adding
-    the series transmission line sections, shunt stubs and shorts, ports, and
-    FDTD mesh.
+    Extends `QuarterWaveFilter` with the series transmission line sections,
+    short-circuited shunt stubs, excitation ports, and FDTD mesh needed for
+    a band-pass response. Each shunt stub is grounded at its far end via a
+    vertical strap (see `create_shunt_line_short`), which presents a high
+    impedance at the junction near `centre_freq` and lets that band through
+    while attenuating frequencies further away. Use
+    `build_band_pass_quarter_wave_filter` to construct the full geometry, or
+    call the individual ``create_*`` methods directly for finer control.
     """
 
     def create_series_line(self) -> None:
@@ -716,8 +807,8 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
         Create the series transmission line sections.
 
         Adds multiple rectangular metal boxes for the series line
-        segments of the band-pass filter, separated by shunt stub
-        locations.
+        segments of the filter, separated by shunt stub locations.
+
         Returns
         -------
         None
@@ -762,7 +853,9 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
 
         Adds multiple rectangular metal boxes for the shunt stub
         elements of the band-pass filter, connecting from the series
-        line to the short-circuit end.
+        line to the point where it is grounded by
+        ``create_shunt_line_short``.
+
         Returns
         -------
         None
@@ -810,10 +903,14 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
 
     def create_shunt_line_short(self) -> None:
         """
-        Create the shunt stub shorts.
+        Create the grounding shorts at the open end of each shunt stub.
 
-        Adds multiple rectangular metal boxes for the band-pass filter
-        shunt stub shorts.
+        Adds a vertical metal box at the far end of each shunt stub,
+        spanning from the ground plane (z=0) up through the substrate to
+        the stub's top copper layer, shorting it to ground. This turns
+        each shunt stub into a short-circuited quarter-wave stub, which is
+        required for the band-pass response.
+
         Returns
         -------
         None
@@ -924,13 +1021,14 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
         """
         Construct the complete band-pass quarter-wave stub filter geometry.
 
-        This method orchestrates the creation of all filter components
-        including the substrate, ground plane, series transmission line
-        sections, shunt stubs, shorted shunt ends, and ports.
+        Orchestrates the creation of all filter components, including the
+        substrate, ground plane, series transmission line sections, shunt
+        stubs with their grounding shorts, and excitation ports. The mesh
+        must be created separately via ``create_mesh``.
 
         Returns
         -------
-        list
+        list of LumpedPort
             A list of two LumpedPort objects [port1, port2] for
             S-parameter extraction.
         """

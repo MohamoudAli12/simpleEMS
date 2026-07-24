@@ -17,7 +17,7 @@
 """
 STEP AP242 export utilities for CSXCAD geometries using CadQuery.
 
-Converts openEMS CSXCAD structures into STEP formatCAD interoperability.
+Converts openEMS CSXCAD structures into STEP format for CAD interoperability.
 Supports box and linear polygon primitives.
 """
 
@@ -116,7 +116,8 @@ def export_step(
     CSX: ContinuousStructure,
     output_path: Path,
 ) -> None:
-    """Export CSXCAD geometry to a coloured, multi-layer STEP AP242 file.
+    """
+    Export CSXCAD geometry to a coloured, multi-layer STEP AP242 file.
 
     Extracts all Material and Metal properties from the CSXCAD
     structure and writes them as separate coloured bodies in a
@@ -127,8 +128,7 @@ def export_step(
     CSX : ContinuousStructure
         The CSXCAD geometry object containing the simulation structure.
     output_path : Path
-        Directory where the STEP file will be saved.
-
+        Directory where the STEP file (``structure.step``) will be saved.
     """
     console.print("-------------------------------------------", style="info")
     console.print("Exporting Geometry to STEP", style="info")
@@ -178,13 +178,13 @@ def export_csxcad_xml_to_step(
     """
     Load a ``structure.xml`` and export it to a STEP file.
 
-
     Parameters
     ----------
     structure_xml_path : str | Path
         Path to the ``structure.xml`` file exported by CSXCAD / openEMS.
     output_path : str | Path
-        Directory where the STEP file will be saved.
+        Directory where the STEP file will be saved. Created if it does
+        not already exist.
     """
     console.print(f"[info]Loading {structure_xml_path}...[/info]")
 

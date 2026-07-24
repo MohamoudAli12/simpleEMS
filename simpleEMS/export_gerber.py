@@ -75,6 +75,7 @@ def gerber_coord(vertices_xy_pos: tuple[float, float]) -> str:
 def primitive_box(file: TextIO, box: CSPrimBox) -> None:
     """
     Export a CSXCAD box primitive to Gerber RS-274X format.
+
     Writes a rectangular aperture as a closed polygon contour
     to the Gerber output file.
 
@@ -109,14 +110,17 @@ def primitive_box(file: TextIO, box: CSPrimBox) -> None:
 def primitive_polygon(file: TextIO, poly: CSPrimPolygon | CSPrimLinPoly) -> None:
     """
     Export a CSXCAD polygon primitive to Gerber RS-274X format.
-    Only exports polygons with a +Z normal direction (XY-plane).
-    Writes the polygon vertices as a closed contour in Gerber format.
+
+    Only exports polygons with a +Z normal direction (XY-plane); polygons
+    with any other normal direction, or fewer than 3 vertices, are skipped
+    with a message printed to stdout. Writes the polygon vertices as a
+    closed contour in Gerber format.
 
     Parameters
     ----------
     file : file object
         Open file handle for writing Gerber output.
-    poly : CSPrimPoly or CSPrimLinPoly
+    poly : CSPrimPolygon or CSPrimLinPoly
         The polygon primitive object containing vertex coordinates.
 
     Returns
@@ -156,9 +160,11 @@ def process_primitives(
 ) -> None:
     """
     Process and export CSXCAD property primitives to Gerber format.
-    This function iterates through a list of CSXCAD properties, filters
-    out ignored ones based on options, and exports supported primitives
-    (boxes and polygons) to a Gerber file.
+
+    Iterates through a list of CSXCAD properties, filters out ignored ones
+    based on ``options``, and exports supported primitives (boxes and
+    polygons) to a Gerber file. Unsupported primitive types are silently
+    skipped.
 
     Parameters
     ----------
@@ -194,7 +200,7 @@ def process_primitives(
         primitives = prop.GetAllPrimitives()
         if not primitives:
             console.print("  no primitives found")
-            break
+            continue
 
         for prim in primitives:
             cls = prim.__class__.__name__
@@ -215,8 +221,10 @@ def export_gerber(
 ) -> None:
     """
     Export openEMS CSX geometry to Gerber RS-274X format (XY-plane only).
-    Extracts all metal properties from the CSXCAD structure and exports
-    their box and polygon primitives to a Gerber layout file.
+
+    Extracts all metal properties (``CSPropMetal``) from the CSXCAD
+    structure and exports their box and polygon primitives to a single
+    Gerber layout file (``gerber_layout.gbr``) under ``output_path``.
 
     Parameters
     ----------

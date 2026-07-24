@@ -93,8 +93,8 @@ class MicrostripLineParams(SimParams):
 
         Returns
         -------
-        tuple of (float, float)
-            A tuple containing (min_freq, max_freq).
+        tuple[float, float]
+            ``(min_freq, max_freq)`` in Hz.
         """
         return self.min_freq, self.max_freq
 
@@ -157,10 +157,20 @@ class MicrostripLineParams(SimParams):
 
     def _compute_geometry(self) -> None:
         """
-        Compute all derived geometric parameters for the microstrip line.
-        This method calculates the microstrip width and length based on
-        the characteristic impedance, substrate properties, and target
-        frequency. It also computes the substrate dimensions.
+        Compute the microstrip trace width and length.
+
+        Calculates ``microstrip_width_mm`` from the target impedance and
+        substrate properties, and ``microstrip_length_mm`` from
+        ``elec_length_deg`` at the effective permittivity that width
+        implies, then rounds both to ``fp_precision`` decimal places.
+        Substrate dimensions are derived separately by the
+        ``substrate_width_mm``/``substrate_length_mm`` properties.
+
+        Raises
+        ------
+        ValueError
+            If the computed ``microstrip_width_mm`` is below
+            ``min_trace_width_mm``.
 
         Returns
         -------
@@ -240,6 +250,7 @@ class MicrostripLine(SimTools):
         This method creates a material using the permittivity and
         loss tangent (kappa) defined in self.params, colors it green,
         and adds a box geometry centered on the XY plane.
+
         Returns
         -------
         None
@@ -273,7 +284,6 @@ class MicrostripLine(SimTools):
         Returns
         -------
         None
-
         """
         ground = self.CSX.AddMetal("ground")
         ground.SetColor("#B87333", 255)
@@ -296,6 +306,7 @@ class MicrostripLine(SimTools):
         transmission line on top of the substrate and registers
         the metal edges with the FDTD grid for accurate field
         calculation.
+
         Returns
         -------
         None
@@ -328,10 +339,9 @@ class MicrostripLine(SimTools):
 
         Returns
         -------
-
-        list
-            A list of two LumpedPort objects [port1, port2] used to
-            retrieve S-parameter and impedance results after the simulation.
+        list[LumpedPort]
+            ``[port_1, port_2]``, used to retrieve S-parameter and
+            impedance results after the simulation.
         """
         port_1_start = [
             self.params.microstrip_width_mm / 2,
@@ -386,9 +396,8 @@ class MicrostripLine(SimTools):
 
         Returns
         -------
-        list
-            A list of two LumpedPort objects [port1, port2] for
-            S-parameter extraction.
+        list[LumpedPort]
+            ``[port_1, port_2]``, for S-parameter extraction.
         """
         self.create_substrate()
         self.create_ground()
@@ -416,6 +425,7 @@ class MicrostripLine(SimTools):
             automatic Mesh class. Default is False.
         smooth_ratio : float, optional
             Maximum ratio between adjacent mesh cells. Default is 1.5.
+
         Returns
         -------
         None

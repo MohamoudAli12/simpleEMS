@@ -4,10 +4,12 @@ import importlib
 import importlib.metadata
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.error
 import urllib.request
 import zipfile
@@ -50,8 +52,12 @@ def _get_dependency_checks_from_pyproject_section(section):
             import_name,
             distribution_names,
         ) in importlib.metadata.packages_distributions().items():
+            if not import_name.isidentifier():
+                continue
             for distribution_name in distribution_names:
-                distribution_to_import[distribution_name.lower()] = import_name
+                distribution_to_import.setdefault(
+                    distribution_name.lower(), import_name
+                )
     except Exception:
         pass
 
@@ -68,7 +74,7 @@ def _get_dependency_checks_from_pyproject_section(section):
             if 'extra == "dev"' not in marker and "extra == 'dev'" not in marker:
                 continue
 
-        for separator in (">", "<", "=", "!", "~", "["):
+        for separator in (">", "<", "=", "!", "~"):
             dep = dep.split(separator)[0]
         pip_name = dep.strip()
         import_name = distribution_to_import.get(pip_name.lower(), pip_name)
@@ -105,6 +111,36 @@ def _default_prefix():
     return Path.home() / "opt" / "openEMS"
 
 
+def _default_getdp_prefix():
+    if sys.platform == "win32":
+        return Path("C:\\getdp")
+    return Path.home() / "opt" / "getdp"
+
+
+# Pinned per-OS/arch download URLs -- getdp.info is a plain Apache directory
+# listing (no releases API like GitHub's), so "latest" can't be resolved at
+# runtime; pin a known-good "stable" build per platform and offer the rolling
+# "git" dev build as the alternative. The "c" variant is the PETSc+MUMPS build,
+# which the FEM solve relies on (direct MUMPS solve in fem_solver.run_getdp).
+_GETDP_ARCHIVES = {
+    "stable": {
+        ("Linux", "x86_64"): "https://getdp.info/bin/Linux/getdp-3.5.0-Linux64c.tgz",
+        ("Darwin", "x86_64"): "https://getdp.info/bin/macOS/getdp-3.5.0-MacOSXc.tgz",
+        ("Darwin", "arm64"): "https://getdp.info/bin/macOS/getdp-4.0.0-MacOSARMc.tgz",
+        (
+            "Windows",
+            "AMD64",
+        ): "https://getdp.info/bin/Windows/getdp-3.5.0-Windows64c.zip",
+    },
+    "git": {
+        ("Linux", "x86_64"): "https://getdp.info/bin/Linux/getdp-git-Linux64c.tgz",
+        ("Darwin", "x86_64"): "https://getdp.info/bin/macOS/getdp-git-MacOSXc.tgz",
+        ("Darwin", "arm64"): "https://getdp.info/bin/macOS/getdp-git-MacOSARMc.tgz",
+        ("Windows", "AMD64"): "https://getdp.info/bin/Windows/getdp-git-Windows64c.zip",
+    },
+}
+
+
 def _ensure_repo(cache_dir, dry_run):
     repo_dir = cache_dir / "openEMS-Project"
     if repo_dir.exists():
@@ -134,29 +170,26 @@ def _run_subprocess(cmd, cwd, dry_run):
     kwargs = {}
     if cwd is not None:
         kwargs["cwd"] = cwd
-    try:
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kwargs
-        )
-    except FileNotFoundError:
-        console.print(f"  ❌ Command not found: {cmd[0]}")
-        raise typer.Exit(code=1)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kwargs
+    )
     for line in process.stdout:
-        console.print(line, end="", markup=False, highlight=False)
+        console.print(line, end="")
     process.wait()
     if process.returncode != 0:
         raise subprocess.CalledProcessError(process.returncode, cmd)
 
 
-def _add_to_path(prefix, dry_run):
+def _add_dir_to_path(bin_dir, dry_run, extra_env_vars=None):
     if sys.platform == "win32":
         import ctypes
         import winreg
 
-        path_value = str(prefix / "openEMS")
+        path_value = str(bin_dir)
 
-        access = winreg.KEY_READ if dry_run else winreg.KEY_ALL_ACCESS
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, access)
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS
+        )
 
         try:
             user_path, reg_type = winreg.QueryValueEx(key, "Path")
@@ -165,22 +198,18 @@ def _add_to_path(prefix, dry_run):
             reg_type = winreg.REG_EXPAND_SZ
 
         dirs = [d.strip() for d in user_path.split(";")] if user_path else []
-        if path_value.lower() not in (d.lower() for d in dirs):
+        if path_value not in dirs:
             new_path = f"{user_path};{path_value}" if user_path else path_value
-            if dry_run:
-                console.print(f"  [yellow]Would add {path_value} to user PATH[/]")
-            else:
+            if not dry_run:
                 winreg.SetValueEx(key, "Path", 0, reg_type, new_path)
-                console.print(f"  [green]Added {path_value} to user PATH[/]")
+            console.print(f"  [green]Added {path_value} to user PATH[/]")
         else:
             console.print(f"  [green]{path_value} already in user PATH[/]")
 
-        for var in ("OPENEMS_INSTALL_PATH", "CSXCAD_INSTALL_PATH"):
-            if dry_run:
-                console.print(f"  [yellow]Would set {var} to {path_value}[/]")
-            else:
-                winreg.SetValueEx(key, var, 0, winreg.REG_SZ, path_value)
-                console.print(f"  [green]Set {var} to {path_value}[/]")
+        for var, value in (extra_env_vars or {}).items():
+            if not dry_run:
+                winreg.SetValueEx(key, var, 0, winreg.REG_SZ, value)
+            console.print(f"  [green]Set {var} to {value}[/]")
 
         winreg.CloseKey(key)
 
@@ -192,20 +221,12 @@ def _add_to_path(prefix, dry_run):
             )
         return
 
-    bin_dir = prefix / "bin"
     line = f'export PATH="{bin_dir}:$PATH"'
-    if "zsh" in os.environ.get("SHELL", ""):
-        rc_files = [
-            Path.home() / ".zshrc",
-            Path.home() / ".bashrc",
-            Path.home() / ".bash_profile",
-        ]
-    else:
-        rc_files = [
-            Path.home() / ".bashrc",
-            Path.home() / ".zshrc",
-            Path.home() / ".bash_profile",
-        ]
+    rc_files = [
+        Path.home() / ".bashrc",
+        Path.home() / ".zshrc",
+        Path.home() / ".bash_profile",
+    ]
     for rc in rc_files:
         if rc.exists():
             content = rc.read_text()
@@ -223,30 +244,18 @@ def _add_to_path(prefix, dry_run):
 
 
 def _download_with_progress(url, dest):
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            total = int(response.headers.get("Content-Length", 0)) or None
-            with Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Downloading...", total=total)
-                with open(dest, "wb") as f:
-                    for chunk in iter(lambda: response.read(8192), b""):
-                        f.write(chunk)
-                        progress.update(task, advance=len(chunk))
-    except OSError as e:
-        dest.unlink(missing_ok=True)
-        console.print(f"  ❌ Download failed: {e}")
-        raise typer.Exit(code=1)
-
-
-def _wheel_version_key(wheel):
-    match = re.match(r"^[^-]+-([^-]+)-", wheel.name)
-    if match is None:
-        return []
-    return [int(part) if part.isdigit() else 0 for part in match.group(1).split(".")]
+    response = urllib.request.urlopen(url)
+    total = int(response.headers.get("Content-Length", 0))
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Downloading...", total=total)
+        with open(dest, "wb") as f:
+            for chunk in iter(lambda: response.read(8192), b""):
+                f.write(chunk)
+                progress.update(task, advance=len(chunk))
 
 
 def _pip_install(package_path, dry_run):
@@ -257,13 +266,13 @@ def _pip_install(package_path, dry_run):
     _run_subprocess(cmd, None, dry_run)
 
 
-def _install_windows(prefix, version, dry_run, force=False):
+def _install_windows(prefix, version, dry_run):
     cache_dir = Path.home() / ".cache" / "simpleems"
     cache_dir.mkdir(parents=True, exist_ok=True)
     console.print(Panel.fit("[bold]Installing openEMS...[/]", border_style="cyan"))
     console.print()
 
-    existing = (prefix / "openEMS" / "AppCSXCAD.exe").exists() and not force
+    existing = (prefix / "openEMS" / "AppCSXCAD.exe").exists()
 
     if not existing:
         console.print("Querying GitHub releases...")
@@ -279,9 +288,9 @@ def _install_windows(prefix, version, dry_run, force=False):
                 req = urllib.request.Request(
                     api_url, headers={"Accept": "application/vnd.github.v3+json"}
                 )
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    release_data = json.loads(response.read())
-            except OSError as e:
+                response = urllib.request.urlopen(req)
+                release_data = json.loads(response.read())
+            except urllib.error.HTTPError as e:
                 console.print(f"  ❌ Failed to fetch release data: {e}")
                 raise typer.Exit(code=1)
             assets = release_data.get("assets", [])
@@ -309,7 +318,6 @@ def _install_windows(prefix, version, dry_run, force=False):
             prefix.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(prefix)
-            zip_path.unlink(missing_ok=True)
             console.print("  ✅ Extraction complete")
             console.print()
     else:
@@ -344,11 +352,18 @@ def _install_windows(prefix, version, dry_run, force=False):
             raise typer.Exit(code=1)
 
         console.print("Installing Python bindings...")
-        _pip_install(str(max(matching_csxcad, key=_wheel_version_key)), dry_run)
-        _pip_install(str(max(matching_openems, key=_wheel_version_key)), dry_run)
+        _pip_install(str(matching_csxcad[0]), dry_run)
+        _pip_install(str(matching_openems[0]), dry_run)
         console.print("  ✅ Python bindings installed")
         console.print()
-    _add_to_path(prefix, dry_run)
+    _add_dir_to_path(
+        prefix / "openEMS",
+        dry_run,
+        extra_env_vars={
+            "OPENEMS_INSTALL_PATH": str(prefix / "openEMS"),
+            "CSXCAD_INSTALL_PATH": str(prefix / "openEMS"),
+        },
+    )
 
     bin_dir = str(prefix / "openEMS")
     current_path = os.environ.get("PATH", "")
@@ -379,12 +394,7 @@ def _install_unix(prefix, dry_run):
     _run_subprocess(["./update_openEMS.sh", str(prefix), "--python"], repo_dir, dry_run)
     console.print("  ✅ Build complete")
     console.print()
-    _add_to_path(prefix, dry_run)
-
-    bin_dir = str(prefix / "bin")
-    current_path = os.environ.get("PATH", "")
-    if bin_dir not in current_path.split(os.pathsep):
-        os.environ["PATH"] = bin_dir + os.pathsep + current_path
+    _add_dir_to_path(prefix / "bin", dry_run)
     console.print()
 
 
@@ -410,16 +420,89 @@ def _install_python_bindings_only(prefix, dry_run):
     console.print()
 
 
-def _print_summary(ok):
+def _find_extracted_binary(root):
+    name = "getdp.exe" if sys.platform == "win32" else "getdp"
+    candidates = [p for p in root.rglob(name) if p.is_file()]
+    for candidate in candidates:
+        if candidate.parent.name == "bin":
+            return candidate
+    return candidates[0] if candidates else None
+
+
+def _install_getdp_archive(prefix, version, dry_run):
+    archives = _GETDP_ARCHIVES.get(version)
+    if archives is None:
+        console.print(f"  ❌ Unknown --version {version!r}. Use 'stable' or 'git'.")
+        raise typer.Exit(code=1)
+
+    key = (platform.system(), platform.machine())
+    url = archives.get(key)
+    if url is None:
+        supported = ", ".join(f"{system}/{machine}" for system, machine in archives)
+        console.print(
+            f"  ❌ No prebuilt getdp binary for {key[0]}/{key[1]}. "
+            f"Supported: {supported}. Install manually from https://getdp.info "
+            "or build from source (https://gitlab.onelab.info/getdp/getdp)."
+        )
+        raise typer.Exit(code=1)
+
+    console.print(Panel.fit("[bold]Installing getdp...[/]", border_style="cyan"))
+    console.print()
+
+    cache_dir = Path.home() / ".cache" / "simpleems"
+    archive_path = cache_dir / url.rsplit("/", 1)[-1]
+
+    console.print(f"Downloading {url}...")
+    if dry_run:
+        console.print(f"  [yellow]Would download to:[/] {archive_path}")
+        console.print(f"  [yellow]Would extract to:[/] {prefix}")
+        console.print("  [yellow]Would add the extracted getdp directory to PATH[/]")
+        return None
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _download_with_progress(url, archive_path)
+    console.print("  ✅ Download complete")
+    console.print()
+
+    console.print("Extracting...")
+    prefix.mkdir(parents=True, exist_ok=True)
+    if url.endswith(".zip"):
+        with zipfile.ZipFile(archive_path) as zf:
+            zf.extractall(prefix)
+    else:
+        with tarfile.open(archive_path, mode="r:gz") as tf:
+            tf.extractall(prefix)
+    console.print("  ✅ Extraction complete")
+    console.print()
+
+    binary = _find_extracted_binary(prefix)
+    if binary is None:
+        console.print(f"  ❌ Could not find a getdp binary under {prefix}")
+        raise typer.Exit(code=1)
+    binary.chmod(binary.stat().st_mode | 0o111)
+
+    bin_dir = binary.parent
+    _add_dir_to_path(bin_dir, dry_run)
+
+    bin_dir_str = str(bin_dir)
+    current_path = os.environ.get("PATH", "")
+    if bin_dir_str not in current_path.split(os.pathsep):
+        os.environ["PATH"] = bin_dir_str + os.pathsep + current_path
+
+    return binary
+
+
+def _print_summary(ok, prefix, label="openEMS"):
     if ok:
         style = "green"
-        message = "✅ openEMS installed successfully"
+        message = f"✅ {label} installed successfully"
     else:
         style = "red"
-        message = "❌ openEMS installation completed with issues"
+        message = f"❌ {label} installation completed with issues"
+
+    lines = [message]
 
     console.print()
-    console.print(Panel.fit(message, border_style=style))
+    console.print(Panel.fit("\n".join(lines), border_style=style))
     raise typer.Exit(code=0 if ok else 1)
 
 
@@ -476,7 +559,7 @@ def checkhealth(
     )
     python_ok = sys.version_info >= (3, 11)
 
-    total_checks = 1 + len(dependency_checks) + 4
+    total_checks = 1 + len(dependency_checks) + 5
 
     results = []
 
@@ -538,6 +621,14 @@ def checkhealth(
             results.append(("openEMS solver", True, path))
         else:
             results.append(("openEMS solver", False, error))
+        progress.advance(task)
+
+        progress.update(task, description="Checking getdp binary (FEM backend)")
+        ok, path, error = _check_system_binary("getdp")
+        if ok:
+            results.append(("getdp solver (FEM)", True, path))
+        else:
+            results.append(("getdp solver (FEM)", False, error))
         progress.advance(task)
 
         progress.update(task, description="Done")
@@ -631,10 +722,11 @@ def install_openems(
                 ok = _verify_installation()
             else:
                 ok = True
-            _print_summary(ok)
+            _print_summary(ok, prefix)
+            return
 
     if sys.platform == "win32":
-        _install_windows(prefix, version, dry_run, force=force)
+        _install_windows(prefix, version, dry_run)
     else:
         _install_unix(prefix, dry_run)
 
@@ -643,7 +735,46 @@ def install_openems(
     else:
         ok = True
 
-    _print_summary(ok)
+    _print_summary(ok, prefix)
+
+
+@install_typer.command(name="getdp")
+def install_getdp(
+    prefix: Path | None = typer.Option(None, "--prefix", help="Install directory"),
+    version: str = typer.Option(
+        "stable",
+        "--version",
+        help="'stable' (pinned release) or 'git' (rolling dev build)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print actions without executing"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Reinstall even if already installed"
+    ),
+):
+    """Install the getdp binary (FEM backend solver)."""
+    if prefix is None:
+        prefix = _default_getdp_prefix()
+
+    if not force and shutil.which("getdp") is not None:
+        console.print("getdp is already installed. Use --force to reinstall.")
+        raise typer.Exit()
+
+    _install_getdp_archive(prefix, version, dry_run)
+
+    if dry_run:
+        _print_summary(True, prefix, label="getdp")
+        return
+
+    ok, path, error = _check_system_binary("getdp")
+    if ok:
+        console.print(f"  ✅ getdp solver: {path}")
+    else:
+        console.print(f"  ❌ getdp solver: {error}")
+    console.print()
+
+    _print_summary(ok, prefix, label="getdp")
 
 
 if __name__ == "__main__":

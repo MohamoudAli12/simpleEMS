@@ -41,7 +41,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     port = patch.build_probe_fed_patch_antenna()
     patch.create_mesh()
     nf2ff = patch.create_nf2ff(sim)
-    patch.add_field_dump(params, sim, output_path)
+    patch.add_field_dump(sim, params, output_path)
     patch.write_and_show_structure(sim, output_path)
     sim_data = None
 

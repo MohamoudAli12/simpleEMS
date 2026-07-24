@@ -56,8 +56,9 @@ class InsetFedPatchParams(SimParams):
     """
     Parameters for an inset-fed rectangular microstrip patch antenna.
 
-    This class extends `SimParams` and computes derived geometric
-    parameters required for antenna layout and simulation.
+    Extends `SimParams` and computes the derived geometric parameters
+    (patch, inset, and feed line dimensions) required to build and
+    simulate an inset-fed patch antenna.
 
     Parameters
     ----------
@@ -67,23 +68,25 @@ class InsetFedPatchParams(SimParams):
         Frequency span used to compute the simulation range around
         the resonant frequency in Hz.
     elec_length_deg : int, optional
-        Electrical length (in degrees) used to compute the feed phase
-        shift length. Default is 90.
+        Electrical length, in degrees, of the feed line's phase-shift
+        (matching) section. Default is 90.
 
     Attributes
     ----------
     patch_length_mm : float
-        Physical length of the patch in millimeters.
+        Physical length of the patch (y-direction) in millimeters.
     patch_width_mm : float
-        Physical width of the patch in millimeters.
+        Physical width of the patch (x-direction) in millimeters.
     inset_length_mm : float
-        Inset depth in millimeters.
+        Depth of the feed inset cut into the patch, in millimeters.
     inset_width_mm : float
-        Inset gap width in millimeters.
+        Width of each of the two inset slots flanking the feed line,
+        in millimeters.
     feed_width_mm : float
-        Width of the feed line in millimeters.
+        Width of the microstrip feed line, in millimeters.
     feed_length_mm : float
-        Computed feed line length in millimeters based on phase shift.
+        Length of the feed line section, in millimeters, computed to give
+        the phase shift specified by `elec_length_deg`.
     substrate_width_mm : float
         Substrate width including margin (lambda0 padding).
     substrate_length_mm : float
@@ -91,6 +94,20 @@ class InsetFedPatchParams(SimParams):
     simulation_box : NDArray
         A 1D array of shape (3,) representing the 3D simulation domain
         size: ``[x_size_mm, y_size_mm, z_size_mm]``.
+
+    Raises
+    ------
+    ValueError
+        If the required inset gap is narrower than `min_trace_spacing_mm`,
+        or if the target `charac_imp` cannot be realized on this substrate
+        (raised by the underlying dimension calculations in `calc.py`).
+
+    Notes
+    -----
+    As a subclass of `SimParams`, this class also accepts all of
+    `SimParams`'s keyword-only constructor arguments (e.g.
+    `substrate_eps_r`, `substrate_tand`, `substrate_thickness_mm`,
+    `charac_imp`); see that class's docstring for details.
     """
 
     resonant_freq: float
@@ -179,13 +196,19 @@ class InsetFedPatchParams(SimParams):
     def _compute_geometry(self) -> None:
         """
         Compute all derived geometric parameters for the inset-fed patch antenna.
-        This method calculates the feed line dimensions, patch width and length,
+
+        Calculates the feed line dimensions, patch width and length,
         inset dimensions, and substrate size based on the resonant frequency,
         substrate properties, and characteristic impedance.
 
         Returns
         -------
         None
+
+        Raises
+        ------
+        ValueError
+            If the computed inset gap is narrower than `min_trace_spacing_mm`.
         """
 
         self.feed_width_mm, er_eff = microstrip_width_from_impedance(
@@ -268,7 +291,7 @@ class PatchAntenna(SimTools):
 
     Attributes
     ----------
-    params :
+    params : InsetFedPatchParams or ProbeFedPatchParams
         Stored reference to the simulation parameters.
     CSX : ContinuousStructure
         Stored reference to the geometry engine (from sim).
@@ -356,19 +379,21 @@ class InsetFedPatchAntenna(PatchAntenna):
     """
     Inset-fed rectangular microstrip patch antenna model.
 
-    This class implements the geometry representation
-    of an inset-fed microstrip patch antenna. It extends `PatchAntenna` class
-    by implementing the inset patch antenna element.
+    Extends `PatchAntenna` with the inset-fed patch element: a rectangular
+    patch with a symmetric notch cut into one radiating edge, a matching
+    microstrip feed line, and the excitation port. Use
+    `build_inset_fed_patch_antenna` to construct the full geometry, or call
+    the individual ``create_*`` methods directly for finer control.
     """
 
     def create_patch_with_inset(self) -> None:
         """
-        Create the patch element with a notched inset for feed line.
+        Create the patch element with a notched inset for the feed line.
 
-        This method defines the patch geometry as a linear polygon (LinPoly)
-        to account for the cutouts where the feed line enters the patch. It
-        also adds the metal edges to the FDTD grid for accurate field
-        calculation at the conductor boundaries.
+        Defines the patch geometry as a linear polygon (LinPoly) to account
+        for the cutouts where the feed line enters the patch, and adds the
+        metal edges to the FDTD grid for accurate field calculation at the
+        conductor boundaries.
 
         Returns
         -------
@@ -415,7 +440,9 @@ class InsetFedPatchAntenna(PatchAntenna):
         """
         Create the microstrip feed line.
 
-        Adds a rectangular metal box for feed element.
+        Adds a rectangular metal box for the feed element, running from the
+        bottom of the inset cut outward past the patch edge for a length of
+        `feed_length_mm`.
 
         Returns
         -------
@@ -423,9 +450,9 @@ class InsetFedPatchAntenna(PatchAntenna):
 
         Notes
         -----
-        The method includes a DRC (Design Rule Check) warning if the
-        `feed_width_mm` is below 0.1 mm, which may exceed standard
-        PCB fabrication capabilities.
+        Prints a DRC (Design Rule Check) warning if `feed_width_mm` is
+        below 0.1 mm, which may exceed standard PCB fabrication
+        capabilities.
         """
         feed = self.CSX.AddMetal("feed")
         feed.SetColor("#B87333", 255)
@@ -455,8 +482,9 @@ class InsetFedPatchAntenna(PatchAntenna):
         """
         Define the excitation lumped port at the end of the feed line.
 
-        The port is placed between the ground plane (z=0) and the top of
-        the feed line metallization.
+        The port spans the substrate vertically at the outer end of the feed
+        line, from the bottom of the ground plane to the top of the feed
+        line metallization.
 
         Returns
         -------
@@ -575,14 +603,17 @@ class InsetFedPatchAntenna(PatchAntenna):
     def build_inset_fed_patch_antenna(self) -> LumpedPort:
         """
         Construct the complete inset-fed patch antenna geometry.
-        This method orchestrates the creation of all antenna components
-        including the patch with inset, feed line, substrate, ground plane,
-        and excitation port. Mesh and NF2FF recording box must be created
-        separately via ``create_mesh`` and ``create_nf2ff``.
+
+        Orchestrates the creation of all antenna components, including the
+        patch with inset, feed line, substrate, ground plane, and excitation
+        port. The mesh and NF2FF recording box must be created separately
+        via ``create_mesh`` and ``create_nf2ff``.
 
         Returns
         -------
-        port : LumpedPort object for S-parameter extraction.
+        port : openEMS.ports.LumpedPort
+            The created lumped port object, used to retrieve S-parameter
+            and impedance results after the simulation.
         """
         self.create_patch_with_inset()
         self.create_feed()
@@ -596,8 +627,10 @@ class InsetFedPatchAntenna(PatchAntenna):
 class ProbeFedPatchParams(SimParams):
     """
     Parameters for a probe-fed rectangular microstrip patch antenna.
-    This class inherits from `SimParams` and computes derived geometric
-    parameters required for antenna layout and simulation.
+
+    Extends `SimParams` and computes the derived geometric parameters
+    (patch dimensions and probe feed position) required to build and
+    simulate a probe-fed patch antenna.
 
     Parameters
     ----------
@@ -610,11 +643,12 @@ class ProbeFedPatchParams(SimParams):
     Attributes
     ----------
     patch_length_mm : float
-        Physical length of the patch in millimeters.
+        Physical length of the patch (y-direction) in millimeters.
     patch_width_mm : float
-        Physical width of the patch in millimeters.
-    probe_pos_mm: float
-        Probe position in y direction. x is set to 0.
+        Physical width of the patch (x-direction) in millimeters.
+    probe_pos_mm : float
+        Feed probe position along y, in millimeters, measured from the
+        patch center; x is fixed at 0.
     substrate_width_mm : float
         Substrate width including margin (lambda0 padding).
     substrate_length_mm : float
@@ -623,6 +657,19 @@ class ProbeFedPatchParams(SimParams):
         3D simulation domain size as:
             [x_size_mm, y_size_mm, z_size_mm]
             Includes lambda0 air padding around the antenna structure.
+
+    Raises
+    ------
+    ValueError
+        If the target `charac_imp` cannot be realized on this substrate
+        (raised by the underlying dimension calculations in `calc.py`).
+
+    Notes
+    -----
+    As a subclass of `SimParams`, this class also accepts all of
+    `SimParams`'s keyword-only constructor arguments (e.g.
+    `substrate_eps_r`, `substrate_tand`, `substrate_thickness_mm`,
+    `charac_imp`); see that class's docstring for details.
     """
 
     resonant_freq: float
@@ -708,12 +755,19 @@ class ProbeFedPatchParams(SimParams):
     def _compute_geometry(self) -> None:
         """
         Compute all derived geometric parameters for the probe-fed patch antenna.
-        This method calculates the patch dimensions, probe position, and
-        substrate size based on the resonant frequency and substrate properties.
+
+        Calculates the patch dimensions, probe position, and substrate size
+        based on the resonant frequency and substrate properties.
 
         Returns
         -------
         None
+
+        Raises
+        ------
+        ValueError
+            If the target `charac_imp` exceeds the patch edge resistance,
+            or if `charac_imp` cannot be realized on this substrate.
         """
         dims = patch_dims(
             self.resonant_freq,
@@ -753,23 +807,24 @@ class ProbeFedPatchAntenna(PatchAntenna):
     """
     Probe-fed rectangular microstrip patch antenna model.
 
-    This class implements the geometry representation
-    of a probe-fed microstrip patch antenna. It extends `PatchAntenna` class
-    by implementing the patch antenna element.
+    Extends `PatchAntenna` with the probe-fed patch element: a plain
+    rectangular patch fed from underneath by a coaxial probe (modeled as a
+    lumped port) at an offset position along the patch's radiating edge.
+    Use `build_probe_fed_patch_antenna` to construct the full geometry, or
+    call the individual ``create_*`` methods directly for finer control.
     """
 
     def create_probe_fed_patch(self) -> None:
         """
         Create the probe-fed patch element.
 
-        This method defines the patch geometry as a linear polygon (LinPoly)
-        and adds the metal edges to the FDTD grid for accurate field
-        calculation at the conductor boundaries.
+        Defines the patch as a rectangular metal box and adds its edges to
+        the FDTD grid for accurate field calculation at the conductor
+        boundaries.
 
         Returns
         -------
         None
-
         """
 
         patch_probe = self.CSX.AddMetal("patch_probe")
@@ -795,7 +850,9 @@ class ProbeFedPatchAntenna(PatchAntenna):
         """
         Define the excitation lumped port at the probe position.
 
-        The port is placed between the ground plane (z=0) and the top of patch element.
+        Models the coaxial feed probe as a 1 mm-wide vertical port at
+        ``y = probe_pos_mm``, spanning from the ground plane (z=0) up to
+        the underside of the patch metallization (z = substrate_thickness_mm).
 
         Returns
         -------
@@ -889,14 +946,17 @@ class ProbeFedPatchAntenna(PatchAntenna):
     def build_probe_fed_patch_antenna(self) -> LumpedPort:
         """
         Construct the complete probe-fed patch antenna geometry.
-        This method orchestrates the creation of all antenna components
-        including the patch element, substrate, ground plane, and excitation
-        port. Mesh and NF2FF recording box must be created separately via
+
+        Orchestrates the creation of all antenna components, including the
+        patch element, substrate, ground plane, and excitation port. The
+        mesh and NF2FF recording box must be created separately via
         ``create_mesh`` and ``create_nf2ff``.
 
         Returns
         -------
-        port : LumpedPort object for S-parameter extraction.
+        port : openEMS.ports.LumpedPort
+            The created lumped port object, used to retrieve S-parameter
+            and impedance results after the simulation.
         """
         self.create_probe_fed_patch()
         self.create_substrate()
