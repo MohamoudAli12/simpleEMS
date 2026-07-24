@@ -64,11 +64,11 @@
   <g>
     <rect x="50" y="188" width="270" height="52" rx="8" class="pipe"/>
     <text x="185" y="209" text-anchor="middle" class="tb">InsetFedPatchParams(&#8230;)</text>
-    <text x="185" y="227" text-anchor="middle" class="s">backend_engine="FEM", num_fem_solve_points, fem_*</text>
+    <text x="185" y="227" text-anchor="middle" class="s">backend_engine="FEM", num_FEM_solve_points</text>
 
     <rect x="50" y="258" width="270" height="52" rx="8" class="pipe"/>
     <text x="185" y="279" text-anchor="middle" class="tb">setup_simulation()</text>
-    <text x="185" y="297" text-anchor="middle" class="s">&#8594; SimSetup(CSX, FDTD, freqs, backend, N, FemOptions)</text>
+    <text x="185" y="297" text-anchor="middle" class="s">FEM_* kwargs &#8594; SimSetup(&#8230;, N, FEMOptions)</text>
 
     <rect x="50" y="328" width="270" height="52" rx="8" class="pipe"/>
     <text x="185" y="349" text-anchor="middle" class="tb">builder.build_&#8230;() / create_mesh()</text>
@@ -100,6 +100,7 @@
     <!-- M1 -->
     <rect x="360" y="396" width="520" height="40" rx="7" class="mod"/>
     <text x="620" y="421" text-anchor="middle" class="t">fem_backend.build_mesh()  &#8594;  structure.msh (+ pyvista mesh view)</text>
+    <text x="870" y="404" text-anchor="end" class="s" fill="#b45309">existing_mesh_path() &#8594; reused if cached</text>
     <rect x="360" y="448" width="520" height="40" rx="7" class="fdtd"/>
     <text x="620" y="473" text-anchor="middle" class="t">openEMS: Write2XML + AppCSXCAD viewer</text>
     <line x1="320" y1="426" x2="358" y2="418" class="eT" marker-end="url(#aT)"/>
@@ -125,7 +126,7 @@
 
     <!-- M4 -->
     <rect x="360" y="672" width="520" height="40" rx="7" class="mod"/>
-    <text x="620" y="697" text-anchor="middle" class="t">fem_radiation.FemNF2FF()  &#8594;  same CalcNF2FF interface</text>
+    <text x="620" y="697" text-anchor="middle" class="t">fem_radiation.FEMNF2FF()  &#8594;  same CalcNF2FF interface</text>
     <rect x="360" y="724" width="520" height="40" rx="7" class="fdtd"/>
     <text x="620" y="749" text-anchor="middle" class="t">openEMS: FDTD.CreateNF2FFBox()</text>
     <line x1="320" y1="702" x2="358" y2="694" class="eT" marker-end="url(#aT)"/>
@@ -135,7 +136,7 @@
   <!-- alt entry (no CSX) -->
   <rect x="912" y="188" width="286" height="104" rx="8" class="mod"/>
   <text x="1055" y="214" text-anchor="middle" class="tb">Alt entry &#8212; no CSX needed</text>
-  <text x="1055" y="238" text-anchor="middle" class="t">fem_backend.simulate_step_fem(</text>
+  <text x="1055" y="238" text-anchor="middle" class="t">fem_backend.simulate_step_FEM(</text>
   <text x="1055" y="256" text-anchor="middle" class="t">step_file, freqs, &#8230;)</text>
   <text x="1055" y="278" text-anchor="middle" class="s">raw STEP &#8594; same 3 stages &#8594; SimData</text>
 
@@ -170,7 +171,7 @@
     <rect x="48" y="1052" width="270" height="118" rx="9" class="mod"/>
     <text x="183" y="1083" text-anchor="middle" class="tb">run_sweep()</text>
     <text x="183" y="1104" text-anchor="middle" class="s">adaptive GetDP frequency sweep</text>
-    <text x="183" y="1138" text-anchor="middle" class="s">&#8804; num_fem_solve_points solves,</text>
+    <text x="183" y="1138" text-anchor="middle" class="s">&#8804; num_FEM_solve_points solves,</text>
     <text x="183" y="1155" text-anchor="middle" class="s">interpolated onto the dense grid</text>
 
     <rect x="48" y="1190" width="270" height="96" rx="9" class="mod"/>
@@ -179,7 +180,7 @@
     <text x="183" y="1268" text-anchor="middle" class="s">conjugate S,Z: exp(-i&#969;t)&#8594;exp(+j&#969;t)</text>
 
     <rect x="48" y="1316" width="270" height="118" rx="9" class="mod"/>
-    <text x="183" y="1347" text-anchor="middle" class="tb">FemNF2FF.CalcNF2FF(f)</text>
+    <text x="183" y="1347" text-anchor="middle" class="tb">FEMNF2FF.CalcNF2FF(f)</text>
     <text x="183" y="1368" text-anchor="middle" class="s">on demand, via create_nf2ff()</text>
     <text x="183" y="1394" text-anchor="middle" class="s">reads fem_mesh.json &#8594; getdp E/H, power</text>
     <text x="183" y="1411" text-anchor="middle" class="s">Huygens box &#8594; far-field pattern</text>
@@ -239,7 +240,7 @@
   <g>
     <rect x="430" y="1316" width="230" height="30" rx="5" class="file"/><text x="545" y="1336" text-anchor="middle" class="t">e.pos / h.pos (near fields)</text>
     <rect x="430" y="1362" width="230" height="46" rx="7" class="res"/>
-    <text x="545" y="1382" text-anchor="middle" class="tb">FemFarField</text>
+    <text x="545" y="1382" text-anchor="middle" class="tb">FEMFarField</text>
     <text x="545" y="1399" text-anchor="middle" class="s">E_norm, Dmax, Prad, Ploss</text>
     <line x1="318" y1="1352" x2="428" y2="1334" class="eT" marker-end="url(#aT)"/>
     <line x1="318" y1="1382" x2="428" y2="1385" class="eT" marker-end="url(#aT)"/>
@@ -326,7 +327,7 @@
   <text x="44" y="1961" class="cap">S(f) of a linear structure is a smooth rational function, so a few full solves reconstruct the whole curve.</text>
 
   <rect x="55" y="2014" width="200" height="60" rx="9" class="pipe"/>
-  <text x="155" y="2040" text-anchor="middle" class="tb">num_fem_solve_points N</text>
+  <text x="155" y="2040" text-anchor="middle" class="tb">num_FEM_solve_points N</text>
   <text x="155" y="2059" text-anchor="middle" class="s">solve budget</text>
 
   <rect x="330" y="1990" width="235" height="48" rx="8" class="mod"/>

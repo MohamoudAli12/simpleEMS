@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,7 +48,7 @@ from CSXCAD import ContinuousStructure
 from . import fem_formulation, fem_geometry, fem_solver, fem_sweep
 from .console import console
 from .export_step import export_step
-from .fem_materials import EPS0, Dielectric, FemOptions, guess_role
+from .fem_materials import EPS0, Dielectric, FEMOptions, guess_role
 
 if TYPE_CHECKING:
     from .sim_tools import SimData
@@ -59,9 +58,10 @@ __all__ = [
     "PortSpec",
     "Problem",
     "build_mesh",
+    "existing_mesh_path",
     "run_sweep",
     "compute_sim_data",
-    "simulate_step_fem",
+    "simulate_step_FEM",
 ]
 
 # The three public functions run in the same order as the FDTD pipeline and,
@@ -80,7 +80,21 @@ _SPARAMS = "fem_sparams.npz"
 
 @dataclass
 class SolidSpec:
-    """One CAD solid and the electromagnetic role assigned to it."""
+    """
+    One CAD solid and the electromagnetic role assigned to it.
+
+    Parameters
+    ----------
+    name : str
+        Solid name (matches the CSXCAD property name / STEP product name).
+    role : str
+        One of ``"dielectric"``, ``"pec"``, ``"impedance"``, ``"port"``, or
+        ``"ignore"`` (excluded from the EM problem). Default ``"ignore"``.
+    dielectric : Dielectric | None
+        Material properties, set when ``role == "dielectric"``. Default ``None``.
+    sigma : float
+        Conductivity in S/m, used when ``role == "impedance"``. Default ``0.0``.
+    """
 
     name: str
     role: str = "ignore"  # 'dielectric' | 'pec' | 'impedance' | 'port' | 'ignore'
@@ -90,7 +104,23 @@ class SolidSpec:
 
 @dataclass
 class PortSpec:
-    """A port on a named solid's terminal sheet."""
+    """
+    A port on a named solid's terminal sheet.
+
+    Parameters
+    ----------
+    solid : str
+        Name of the solid whose footprint sheet becomes the port.
+    number : int
+        1-based port index; sets the row/column order of the S-parameter matrix.
+    z0 : float
+        Reference impedance in ohms. Default ``50.0``.
+    direction : str
+        Excitation E-field axis: ``"x"``, ``"y"``, or ``"z"``. Default ``"z"``.
+    port_type : str
+        ``"lumped"`` (referenced to ``z0``) or ``"wave"`` (referenced to the
+        computed line characteristic impedance). Default ``"lumped"``.
+    """
 
     solid: str
     number: int
@@ -101,7 +131,42 @@ class PortSpec:
 
 @dataclass
 class Problem:
-    """A finite-element problem definition consumed by the FEM backend."""
+    """
+    A finite-element problem definition consumed by the FEM backend.
+
+    Parameters
+    ----------
+    step_file : str
+        Path to the STEP file to mesh and solve.
+    name : str
+        Base name used for the generated mesh/problem files. Default
+        ``"structure"``.
+    boundary : str
+        Outer domain truncation: ``"silver_muller"`` (default, first-order
+        absorbing boundary) or ``"pml"``.
+    solids : dict[str, SolidSpec]
+        Solid name -> role/material assignment.
+    ports : list[PortSpec]
+        Ports found among ``solids``, sorted by port number.
+    freqs : NDArray
+        Frequency grid (Hz) the problem is solved/interpolated over. Default
+        ``[2.45e9]``.
+    fe_order : int
+        Nedelec edge-element order: ``1`` (default) or ``2``.
+    symmetry : tuple | None
+        Optional mirror-symmetry plane ``(axis, kind, at)`` -- see
+        :class:`~simpleEMS.fem_materials.FEMOptions`. ``None`` (default) means
+        no symmetry is applied.
+    air_pad_frac : float
+        Air padding as a fraction of the longest free-space wavelength.
+        Default ``0.2``.
+    elems_per_wavelength : float
+        Target coarse mesh density in open air. Default ``8.0``.
+    mesh_fine_scale : float
+        Multiplier on the near-conductor element size. Default ``1.0``.
+    min_layers : int
+        Minimum element layers through the dielectric thickness. Default ``3``.
+    """
 
     step_file: str
     name: str = "structure"
@@ -131,6 +196,21 @@ def _port_number(name: str, fallback: int) -> int:
     return int(match.group(1)) if match else fallback
 
 
+def _register_port(
+    prob: Problem,
+    seen: set[int],
+    solid: str,
+    number: int,
+    z0: float,
+    direction: str = "z",
+) -> None:
+    """Append a :class:`PortSpec` for ``number`` unless already registered."""
+    if number in seen:
+        return
+    seen.add(number)
+    prob.ports.append(PortSpec(solid=solid, number=number, z0=z0, direction=direction))
+
+
 def _csx_roles(
     csx: ContinuousStructure, centre_freq: float
 ) -> tuple[dict, dict, dict, dict]:
@@ -147,9 +227,13 @@ def _csx_roles(
     Returns
     -------
     tuple[dict, dict, dict, dict]
-        ``role_by_name``, ``dielectric_by_name``, ``port_by_name`` (property name
-        to ``(z0, direction, number)``), and ``sigma_by_name`` (conductivity of
-        each lossy conductor).
+        ``(role_by_name, dielectric_by_name, port_by_name, sigma_by_name)``:
+        ``role_by_name`` maps a property name to its role string (``"pec"``,
+        ``"dielectric"``, ``"impedance"``, or ``"port"``); ``dielectric_by_name``
+        maps a dielectric property's name to its
+        :class:`~simpleEMS.fem_materials.Dielectric`;
+        ``port_by_name`` maps a port property's name to ``(z0, direction, number)``;
+        ``sigma_by_name`` maps a lossy conductor's name to its conductivity in S/m.
     """
     role_by_name: dict[str, str] = {}
     dielectric_by_name: dict[str, Dielectric] = {}
@@ -197,26 +281,26 @@ def _csx_roles(
     return role_by_name, dielectric_by_name, port_by_name, sigma_by_name
 
 
-def _apply_fem_options(prob: Problem, fem_options: FemOptions | None) -> None:
-    """Apply global :class:`FemOptions` to a :class:`Problem` (in place)."""
-    if fem_options is None:
+def _apply_FEM_options(prob: Problem, FEM_options: FEMOptions | None) -> None:
+    """Apply global :class:`FEMOptions` to a :class:`Problem` (in place)."""
+    if FEM_options is None:
         return
-    prob.boundary = fem_options.boundary
-    prob.symmetry = fem_options.symmetry
-    prob.fe_order = fem_options.fe_order
-    prob.air_pad_frac = fem_options.air_pad_frac
-    prob.elems_per_wavelength = fem_options.elems_per_wavelength
-    prob.mesh_fine_scale = fem_options.mesh_fine_scale
-    prob.min_layers = fem_options.min_layers
+    prob.boundary = FEM_options.boundary
+    prob.symmetry = FEM_options.symmetry
+    prob.fe_order = FEM_options.fe_order
+    prob.air_pad_frac = FEM_options.air_pad_frac
+    prob.elems_per_wavelength = FEM_options.elems_per_wavelength
+    prob.mesh_fine_scale = FEM_options.mesh_fine_scale
+    prob.min_layers = FEM_options.min_layers
     for port in prob.ports:
-        port.port_type = fem_options.port_type
+        port.port_type = FEM_options.port_type
 
 
 def _build_problem(
     csx: ContinuousStructure,
     freqs: NDArray,
     output_path: Path,
-    fem_options: FemOptions | None = None,
+    FEM_options: FEMOptions | None = None,
 ) -> Problem:
     """
     Export ``csx`` to STEP and build a :class:`Problem` from its properties.
@@ -229,7 +313,7 @@ def _build_problem(
         Output frequency grid (also sets fmin/fmax for meshing).
     output_path : Path
         Directory to export ``structure.step`` into.
-    fem_options : FemOptions | None
+    FEM_options : FEMOptions | None
         Global solver/mesh options to apply. ``None`` keeps the defaults.
 
     Returns
@@ -269,19 +353,10 @@ def _build_problem(
         )
         if role == "port":
             z0, direction, number = port_by_name[base]
-            if number not in seen_ports:
-                seen_ports.add(number)
-                prob.ports.append(
-                    PortSpec(
-                        solid=solid_name,
-                        number=number,
-                        z0=z0,
-                        direction=direction,
-                    )
-                )
+            _register_port(prob, seen_ports, solid_name, number, z0, direction)
 
     prob.ports.sort(key=lambda p: p.number)
-    _apply_fem_options(prob, fem_options)
+    _apply_FEM_options(prob, FEM_options)
     return prob
 
 
@@ -293,6 +368,20 @@ def _mesh_problem(prob: Problem, output_path: Path, verbose: bool = True) -> str
     Mesh a :class:`Problem`, emit the GetDP ``.pro``, and persist the metadata.
 
     Shared Problem-first core of the CSX and STEP entry points.
+
+    Parameters
+    ----------
+    prob : Problem
+        The FEM problem to mesh.
+    output_path : Path
+        Directory to write the mesh, problem, and metadata files into.
+    verbose : bool
+        Print progress. Default ``True``.
+
+    Returns
+    -------
+    str
+        Path to the generated ``.msh`` file.
 
     Raises
     ------
@@ -306,8 +395,8 @@ def _mesh_problem(prob: Problem, output_path: Path, verbose: bool = True) -> str
 
     # Mesh once (fem_geometry) and emit the matching GetDP problem file
     # (fem_formulation); both are reused for every frequency in the sweep.
-    mesh = fem_geometry.build_mesh(prob, str(output_path), verbose=verbose)
-    pro_path = fem_formulation.write_problem(prob, mesh, str(output_path))
+    mesh = fem_geometry.build_mesh(prob, output_path, verbose=verbose)
+    pro_path = fem_formulation.write_problem(prob, mesh, output_path)
 
     # Persist just what the sweep/compute stages need, so they do not have to
     # re-mesh or re-derive the port reference impedances.
@@ -332,7 +421,7 @@ def build_mesh(
     freqs: NDArray,
     output_path: str | Path,
     verbose: bool = True,
-    fem_options: FemOptions | None = None,
+    FEM_options: FEMOptions | None = None,
 ) -> str:
     """
     Mesh a CSXCAD geometry for the FEM backend.
@@ -350,7 +439,7 @@ def build_mesh(
         Directory for the mesh and problem files.
     verbose : bool
         Print progress. Default ``True``.
-    fem_options : FemOptions | None
+    FEM_options : FEMOptions | None
         Global solver/mesh options. ``None`` keeps the defaults.
 
     Returns
@@ -364,8 +453,33 @@ def build_mesh(
         If the geometry contains no ports.
     """
     output_path = Path(output_path)
-    prob = _build_problem(csx, freqs, output_path, fem_options)
+    prob = _build_problem(csx, freqs, output_path, FEM_options)
     return _mesh_problem(prob, output_path, verbose)
+
+
+def existing_mesh_path(output_path: str | Path) -> str | None:
+    """
+    Return the ``.msh`` path from a previous :func:`build_mesh` call in
+    ``output_path``, if one is still there.
+
+    Lets callers (e.g. re-showing the structure) reuse a mesh instead of
+    re-exporting STEP and re-meshing on every call.
+
+    Parameters
+    ----------
+    output_path : str | Path
+        Directory previously passed to :func:`build_mesh`.
+
+    Returns
+    -------
+    str | None
+        The ``.msh`` path, or ``None`` if no mesh metadata/file is found.
+    """
+    meta_file = Path(output_path) / _MESH_META
+    if not meta_file.exists():
+        return None
+    msh_path = json.loads(meta_file.read_text())["msh_path"]
+    return msh_path if Path(msh_path).exists() else None
 
 
 def _sweep_from_meta(
@@ -379,13 +493,25 @@ def _sweep_from_meta(
 
     Shared sweep core (needs no CSX): reads the mesh/problem metadata, drives
     the adaptive rational sweep, and writes ``fem_sparams.npz``.
+
+    Parameters
+    ----------
+    freqs : NDArray
+        Dense output frequency grid (Hz).
+    num_solve_points : int
+        Number of full FEM solves the adaptive sweep may perform.
+    output_path : Path
+        Directory containing ``fem_mesh.json`` (from :func:`build_mesh`) and
+        receiving the ``fem_sparams.npz`` results.
+    verbose : bool
+        Print progress. Default ``True``.
     """
     meta = json.loads((output_path / _MESH_META).read_text())
 
     pro_path = meta["pro_path"]
     msh_path = meta["msh_path"]
     port_numbers = list(meta["port_numbers"])
-    outdir = os.path.join(os.path.abspath(str(output_path)), "output")
+    outdir = output_path.absolute() / "output"
     idx = {n: i for i, n in enumerate(port_numbers)}  # port number -> matrix index
     npt = len(port_numbers)
     ref_port = port_numbers[0]  # SimData reports V/I/input_power for this port only
@@ -403,7 +529,7 @@ def _sweep_from_meta(
         "Prad.txt",
     ]
     for pattern in stale_patterns:
-        for stale in Path(outdir).glob(pattern):
+        for stale in outdir.glob(pattern):
             stale.unlink()
 
     # freq -> (V, I) of the reference port's own total voltage/current, sampled
@@ -420,21 +546,17 @@ def _sweep_from_meta(
             fem_solver.run_getdp(
                 pro_path,
                 msh_path,
-                str(output_path),
+                output_path,
                 {"FREQ": freq, "ACTIVE_PORT": active},
                 "Get_SParameters",
             )
             for n in port_numbers:
                 s[idx[n], idx[active]] = fem_solver.read_complex(
-                    os.path.join(outdir, f"xS_{n * 10 + active}.txt")
+                    outdir / f"xS_{n * 10 + active}.txt"
                 )
             if active == ref_port:
-                v = fem_solver.read_complex(
-                    os.path.join(outdir, f"V_{active * 10 + active}.txt")
-                )
-                i = fem_solver.read_complex(
-                    os.path.join(outdir, f"I_{active * 10 + active}.txt")
-                )
+                v = fem_solver.read_complex(outdir / f"V_{active * 10 + active}.txt")
+                i = fem_solver.read_complex(outdir / f"I_{active * 10 + active}.txt")
                 vi_solved[freq] = (v, i)
         return s
 
@@ -483,7 +605,7 @@ def run_sweep(
     num_solve_points: int,
     output_path: str | Path,
     verbose: bool = True,
-    fem_options: FemOptions | None = None,
+    FEM_options: FEMOptions | None = None,
 ) -> None:
     """
     Run the adaptive FEM frequency sweep on a CSXCAD geometry.
@@ -504,14 +626,20 @@ def run_sweep(
         Directory holding the mesh/problem files and receiving the results.
     verbose : bool
         Print progress. Default ``True``.
-    fem_options : FemOptions | None
+    FEM_options : FEMOptions | None
         Global solver/mesh options (used only if a mesh must be built here).
+
+    Raises
+    ------
+    RuntimeError
+        If the geometry contains no ports (only possible when a mesh has not
+        been built yet and is created here; see :func:`build_mesh`).
     """
     # Mesh on demand: run_sweep can be called on its own (write_and_show_structure
     # may have been skipped), so build the mesh if the metadata file is absent.
     output_path = Path(output_path)
     if not (output_path / _MESH_META).exists():
-        build_mesh(csx, freqs, output_path, verbose=verbose, fem_options=fem_options)
+        build_mesh(csx, freqs, output_path, verbose=verbose, FEM_options=FEM_options)
     _sweep_from_meta(freqs, num_solve_points, output_path, verbose)
 
 
@@ -534,7 +662,9 @@ def compute_sim_data(
     Returns
     -------
     SimData
-        ``freqs``, ``s11``, ``s21``, ``z11``, ``vswr``, ``input_power``.
+        ``freqs``, ``s11``, ``s21`` (``None`` for a single-port problem),
+        ``z11``, ``vswr``, ``input_power``, ``port_voltage``, ``port_current``,
+        and ``ref_impedance`` -- see :class:`~simpleEMS.sim_tools.SimData`.
 
     Raises
     ------
@@ -580,7 +710,7 @@ def compute_sim_data(
     input_power = 0.5 * np.real(port_voltage * np.conj(port_current))
 
     return SimData(
-        freqs_out, s11, s21, z11, vswr, input_power, port_voltage, port_current
+        freqs_out, s11, s21, z11, vswr, input_power, port_voltage, port_current, z0
     )
 
 
@@ -595,7 +725,7 @@ def _problem_from_step(
     impedance: dict | None,
     ports: dict | None,
     charac_imp: float,
-    fem_options: FemOptions | None,
+    FEM_options: FEMOptions | None,
 ) -> Problem:
     """Build a :class:`Problem` directly from a STEP file (no CSXCAD)."""
     step_file = str(Path(step_file).expanduser())
@@ -626,16 +756,14 @@ def _problem_from_step(
             spec = ports[name]
             prob.solids[name] = SolidSpec(name=name, role="port")
             number = int(spec.get("number", len(prob.ports) + 1))
-            if number not in seen_ports:
-                seen_ports.add(number)
-                prob.ports.append(
-                    PortSpec(
-                        solid=name,
-                        number=number,
-                        z0=float(spec.get("z0", charac_imp)),
-                        direction=spec.get("direction", "z"),
-                    )
-                )
+            _register_port(
+                prob,
+                seen_ports,
+                name,
+                number,
+                float(spec.get("z0", charac_imp)),
+                spec.get("direction", "z"),
+            )
         else:
             role = guess_role(name) or "ignore"
             solid = SolidSpec(name=name, role=role)
@@ -644,19 +772,14 @@ def _problem_from_step(
                 solid.dielectric = Dielectric()
             prob.solids[name] = solid
             if role == "port":
-                number = len(prob.ports) + 1
-                if number not in seen_ports:
-                    seen_ports.add(number)
-                    prob.ports.append(
-                        PortSpec(solid=name, number=number, z0=charac_imp)
-                    )
+                _register_port(prob, seen_ports, name, len(prob.ports) + 1, charac_imp)
 
     prob.ports.sort(key=lambda p: p.number)
-    _apply_fem_options(prob, fem_options)
+    _apply_FEM_options(prob, FEM_options)
     return prob
 
 
-def simulate_step_fem(
+def simulate_step_FEM(
     step_file: str,
     freqs: NDArray,
     *,
@@ -666,7 +789,7 @@ def simulate_step_fem(
     impedance: dict | None = None,
     ports: dict | None = None,
     num_solve_points: int = 10,
-    fem_options: FemOptions | None = None,
+    FEM_options: FEMOptions | None = None,
     charac_imp: float = 50.0,
     output_path: str | Path = "fem_out",
     run: bool = True,
@@ -700,7 +823,7 @@ def simulate_step_fem(
         If omitted, solids whose names look like ports are auto-registered.
     num_solve_points : int
         Number of full FEM solves the adaptive sweep may perform.
-    fem_options : FemOptions | None
+    FEM_options : FEMOptions | None
         Global solver/mesh options (boundary, symmetry, fe_order, mesh tuning,
         port type).
     charac_imp : float
@@ -708,26 +831,32 @@ def simulate_step_fem(
     output_path : str | Path
         Working directory for the mesh/problem/results.
     run : bool
-        If ``False``, mesh and generate the problem but skip the solve.
+        If ``False``, mesh and generate the GetDP problem but skip the solve.
+        The final result is still read back via :func:`compute_sim_data`, so
+        this only succeeds if ``fem_sparams.npz`` already exists in
+        ``output_path`` from an earlier solved run. Default ``True``.
     verbose : bool
         Print progress. Default ``True``.
 
     Returns
     -------
     SimData
-        ``freqs``, ``s11``, ``s21``, ``z11``, ``vswr``, ``input_power``.
+        ``freqs``, ``s11``, ``s21`` (``None`` for a single-port problem),
+        ``z11``, ``vswr``, ``input_power``, ``port_voltage``, ``port_current``,
+        and ``ref_impedance`` -- see :class:`~simpleEMS.sim_tools.SimData`.
 
     Raises
     ------
     RuntimeError
-        If no ports are found or specified.
+        If no ports are found or specified, or (when ``run=False`` with no
+        prior results) if the sweep results file is missing.
     """
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
     freqs = np.asarray(freqs, dtype=float)
 
     prob = _problem_from_step(
-        step_file, freqs, dielectrics, pec, impedance, ports, charac_imp, fem_options
+        step_file, freqs, dielectrics, pec, impedance, ports, charac_imp, FEM_options
     )
     if not prob.ports:
         raise RuntimeError(

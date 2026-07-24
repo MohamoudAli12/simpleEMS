@@ -34,6 +34,7 @@ from openEMS.physical_constants import C0, EPS0
 class SimParams:
     """
     Base class for all openEMS simulation parameters.
+
     This class stores user-defined parameters required for an OpenEMS
     simulation, such as substrate properties, material settings, and mesh
     controls. Several dependent quantities — such as wavelength, dielectric
@@ -51,7 +52,7 @@ class SimParams:
     substrate_eps_r : float
         Relative permittivity of the substrate.
     substrate_tand : float
-        tangent loss of the substrate.
+        Loss tangent of the substrate material.
     substrate_thickness_mm : float
         Substrate thickness in millimeters.
     substrate_width_mm : float
@@ -77,24 +78,29 @@ class SimParams:
     backend_engine : str, optional
         Solver backend to use: ``"FDTD"`` (openEMS, default) or ``"FEM"``
         (Gmsh + GetDP finite-element frequency-domain solver).
-    num_fem_solve_points : int, optional
+    num_FEM_solve_points : int, optional
         Number of full FEM solves the adaptive rational-interpolation sweep is
         allowed to perform (must be ``>= 4``). Ignored by the FDTD backend.
         Default is ``10``.
+
+        Finer FEM mesh/solver tuning (boundary condition, symmetry, element
+        order, port type, ...) is not part of this class -- pass a
+        :class:`~simpleEMS.fem_materials.FEMOptions` instance to
+        :func:`~simpleEMS.sim_tools.setup_simulation` instead.
     fp_precision : int, optional
         Floating-point precision used when generating geometric values.
         Default is ``3``.
     charac_imp : float, optional
-        Feed/port impedance in ohms. Default is ``50 ohms``.
+        Feed/port impedance in ohms. Default is ``50``.
     timestep : int, optional
         FDTD simulation time-step count. Default is ``90000000``.
     end_criteria : float, optional
         Convergence threshold for the stopping criteria. Default is ``1e-4``.
-    mesh_resolution_factor : float, optional
+    mesh_resolution_factor : int, optional
         Division factor used to compute the global mesh resolution
         (``lambda0 / factor``). Default is ``10``.
 
-    metal_mesh_resolution_factor : float, optional
+    metal_mesh_resolution_factor : int, optional
         Division factor used to compute the metal primitives mesh resolution
         (``lambda0 / factor``). Default is ``40``.
 
@@ -105,7 +111,7 @@ class SimParams:
         loss tangent, frequency, and permittivity.
     lambda0 : float
         Effective wavelength in the substrate, computed as
-        ``C0 / (f_ref * sqrt(eps_r) * unit)``.
+        ``C0 / (main_freq * sqrt(eps_r) * unit)``.
     simulation_box : NDArray of shape (3,)
         Bounding box dimensions [x, y, z] for the FDTD domain in mm,
         including lambda0 air padding around the structure.
@@ -114,7 +120,7 @@ class SimParams:
     metal_mesh_resolution : float
         Computed mesh resolution for metal primitives.
     thirds_rule : NDArray
-        Small mesh offsets (2/3 and -1/3 of mesh_resolution) applied
+        Small mesh offsets, ``[2/3, -1/3] * mesh_resolution / 4``, applied
         near metal edges for accurate field resolution.
     """
 
@@ -129,17 +135,7 @@ class SimParams:
     num_points: int = 1000
 
     backend_engine: str = "FDTD"
-    num_fem_solve_points: int = 10
-
-    # FEM-only solver/mesh options (ignored by FDTD)
-    fem_boundary: str = "silver_muller"
-    fem_symmetry: tuple | None = None
-    fem_fe_order: int = 1
-    fem_air_pad_frac: float = 0.2
-    fem_elems_per_wavelength: float = 8.0
-    fem_mesh_fine_scale: float = 1.0
-    fem_min_layers: int = 3
-    fem_port_type: str = "lumped"
+    num_FEM_solve_points: int = 10
 
     copper_thickness_mm: float = 0.035
     min_trace_width_mm: float = 0.1
@@ -161,12 +157,15 @@ class SimParams:
     def freq_range(self) -> tuple[float, float]:
         """
         Return the simulation frequency range.
-        This property must be implemented by subclasses to define the
-        frequency bounds used in the simulation.
+
+        Must be implemented by subclasses to define the frequency bounds
+        used in the simulation.
+
         Returns
         -------
         tuple of (float, float)
-            A tuple containing (f_min, f_max) for the simulation.
+            A tuple containing (f_min, f_max) in Hz for the simulation.
+
         Raises
         ------
         NotImplementedError
@@ -178,12 +177,15 @@ class SimParams:
     def main_freq(self) -> float:
         """
         Return the primary frequency of interest.
-        This property must be implemented by subclasses to define the
-        main frequency used for post-processing and analysis.
+
+        Must be implemented by subclasses to define the main frequency
+        used for post-processing and analysis.
+
         Returns
         -------
         float
-            The main/target frequency.
+            The main/target frequency in Hz.
+
         Raises
         ------
         NotImplementedError
@@ -261,37 +263,28 @@ class SimParams:
         ------
         ValueError
             If ``backend_engine`` is not ``"FDTD"`` or ``"FEM"``, or if
-            ``num_fem_solve_points`` is below the minimum needed for a stable
+            ``num_FEM_solve_points`` is below the minimum needed for a stable
             rational fit.
         """
         if self.backend_engine not in ("FDTD", "FEM"):
             raise ValueError(
                 f"backend_engine must be 'FDTD' or 'FEM', got {self.backend_engine!r}"
             )
-        if self.num_fem_solve_points < 4:
+        if self.num_FEM_solve_points < 4:
             raise ValueError(
-                f"num_fem_solve_points must be >= 4 for a stable rational fit, "
-                f"got {self.num_fem_solve_points}"
-            )
-        if self.fem_boundary not in ("silver_muller", "pml"):
-            raise ValueError(
-                f"fem_boundary must be 'silver_muller' or 'pml', got "
-                f"{self.fem_boundary!r}"
-            )
-        if self.fem_fe_order not in (1, 2):
-            raise ValueError(f"fem_fe_order must be 1 or 2, got {self.fem_fe_order}")
-        if self.fem_port_type not in ("lumped", "wave"):
-            raise ValueError(
-                f"fem_port_type must be 'lumped' or 'wave', got {self.fem_port_type!r}"
+                f"num_FEM_solve_points must be >= 4 for a stable rational fit, "
+                f"got {self.num_FEM_solve_points}"
             )
 
     def _compute_common(self) -> None:
         """
         Compute common simulation parameters shared across all structure types.
-        This method calculates the substrate kappa (dielectric loss),
-        free-space wavelength, global mesh resolution, metal mesh resolution,
-        and the thirds rule for mesh refinement based on the frequency range
-        and material properties.
+
+        Computes the substrate kappa (dielectric loss), free-space
+        wavelength, global mesh resolution, metal mesh resolution, and the
+        thirds rule for mesh refinement, based on the frequency range and
+        material properties.
+
         Returns
         -------
         None
@@ -319,8 +312,11 @@ class SimParams:
         self, x_dir: float, y_dir: float, z_dir: float
     ) -> NDArray:
         """
-        Compute the 3D simulation bounding box from substrate dimensions
-        and lambda0 padding.
+        Assemble the 3D simulation bounding box from its per-axis extents.
+
+        Callers (subclasses) are responsible for computing each extent,
+        typically the structure size plus lambda0 air padding, before
+        passing it in here.
 
         Parameters
         ----------
@@ -335,7 +331,8 @@ class SimParams:
         -------
         NDArray
             A numpy array of shape (3,) containing the [x, y, z]
-            simulation box dimensions in mm, rounded to fp_precision.
+            simulation box dimensions in mm, rounded to ``fp_precision``
+            decimal places.
         """
         simulation_box = np.round(
             np.array(

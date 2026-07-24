@@ -46,7 +46,7 @@ if __name__ == "__main__":
     scripts_to_run = [
         "../examples/InsetFedPatch_24GHz.py",
         "../examples/MicrostripLine.py",
-        # FEM backend (requires the getdp binary on PATH or SIMPLEEMS_GETDP_BIN)
+        # FEM backend (requires the getdp binary on PATH)
         "../examples/InsetFedPatch_24GHz_FEM.py",
         "../examples/MicrostripLine_FEM.py",
     ]

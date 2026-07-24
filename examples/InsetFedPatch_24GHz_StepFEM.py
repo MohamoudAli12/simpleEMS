@@ -3,19 +3,19 @@
 
 Unlike ``InsetFedPatch_24GHz_FEM.py``, no CSXCAD geometry is built here — the
 mesh is generated straight from an existing ``.step`` CAD file via
-``simulate_step_fem()``. It reuses the STEP file exported by
+``simulate_step_FEM()``. It reuses the STEP file exported by
 ``InsetFedPatch_24GHz.py`` (run that script first to generate
 ``InsetFedPatch_24GHz/step/structure.step`` if it doesn't exist yet).
 
-Requires the ``getdp`` binary on ``PATH`` or in ``SIMPLEEMS_GETDP_BIN``.
+Requires the ``getdp`` binary on ``PATH`` (run ``simpleems install getdp``).
 """
 
 from pathlib import Path
 
 import numpy as np
 
-from simpleEMS import FemOptions, SimTools, simulate_step_fem
-from simpleEMS.fem_radiation import FemNF2FF
+from simpleEMS import FEMOptions, SimTools, simulate_step_FEM
+from simpleEMS.fem_radiation import FEMNF2FF
 
 STEP_FILE = Path(__file__).parent / "InsetFedPatch_24GHz" / "step" / "structure.step"
 
@@ -31,25 +31,27 @@ def simulate(output_path: Path) -> None:
     span_freq = 2e9  # Hz
     freqs = np.linspace(resonant_freq - span_freq, resonant_freq + span_freq, 201)
 
-    sim_data = simulate_step_fem(
+    sim_data = simulate_step_FEM(
         str(STEP_FILE),
         freqs,
         dielectrics={"substrate": (3.48, 0.0037)},  # (eps_r, tan_d)
         pec=["patch_inset", "feed", "ground"],
         ports={"port_resist_1": {"z0": 50.0, "direction": "z", "number": 1}},
         num_solve_points=12,
-        fem_options=FemOptions(boundary="silver_muller", port_type="lumped"),
+        FEM_options=FEMOptions(boundary="silver_muller", port_type="lumped"),
         charac_imp=50.0,
         output_path=output_path,
     )
 
     SimTools.plot_s_param(sim_data.freqs, sim_data.s11)
-    SimTools.plot_smith_chart(sim_data.freqs, sim_data.s11)
+    SimTools.plot_smith_chart(
+        sim_data.freqs, sim_data.s11, charac_imp=sim_data.ref_impedance
+    )
     SimTools.plot_vswr(sim_data.freqs, sim_data.vswr)
     SimTools.plot_impedance(sim_data.freqs, sim_data.z11)
 
     # Radiation post-processing at resonance, reusing the existing SimTools plots.
-    nf2ff = FemNF2FF()
+    nf2ff = FEMNF2FF()
     SimTools.plot_2d_directivity(nf2ff, resonant_freq, output_path)
     SimTools.plot_2d_rad_pattern(nf2ff, resonant_freq, output_path)
     nf2ff_3d = SimTools.compute_nf2ff_3d(nf2ff, resonant_freq, output_path)

@@ -30,14 +30,15 @@ that is imprinted into the dielectric/air mesh:
 4. ``fragment`` the dielectric volumes + air box with the conductor sheets so
    the sheets become conforming interior faces.
 5. Classify each resulting volume back to its origin solid.
-6. The outer absorbing boundary is the domain shell minus the PEC/port faces.
+6. The outer absorbing boundary is the domain shell minus the PEC/impedance/
+   port faces.
 7. Assign integer physical groups, refine near conductors, mesh, and write.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gmsh
@@ -52,7 +53,6 @@ from .fem_materials import (
     PML,
     SYM,
     dielectric_region,
-    microstrip_zc,
     port_region,
 )
 
@@ -64,7 +64,35 @@ __all__ = ["PortMesh", "Mesh", "list_solids", "build_mesh"]
 
 @dataclass
 class PortMesh:
-    """Geometric description of a meshed port sheet."""
+    """
+    Geometric description of a meshed port sheet.
+
+    Parameters
+    ----------
+    number : int
+        1-based port index (matches :class:`~simpleEMS.fem_backend.PortSpec.number`).
+    region : int
+        Physical group ID of the port sheet in the ``.msh``/``.pro`` files.
+    direction : str
+        Excitation E-field axis: ``"x"``, ``"y"``, or ``"z"``.
+    z0 : float
+        Lumped-port reference impedance in ohms.
+    gap : float
+        Electrical gap length along ``direction``, in metres.
+    width : float
+        Transverse width of the port sheet, in metres.
+    center : tuple[float, float, float]
+        Centroid of the port sheet's bounding box, in metres.
+    zc : float
+        Computed line characteristic impedance in ohms, used as the port
+        reference when ``port_type == "wave"``. Default ``50.0``.
+    eps_eff : float
+        Effective permittivity of the line, used for de-embedding. Default
+        ``1.0``.
+    port_type : str
+        ``"lumped"`` (impedance ``z0``) or ``"wave"`` (matched to ``zc``).
+        Default ``"lumped"``.
+    """
 
     number: int
     region: int
@@ -84,13 +112,60 @@ class PortMesh:
 
     @property
     def sheet_impedance(self) -> float:
-        """Surface-impedance-sheet value for the port term."""
+        """Impedance (ohms/square) used to model the port as a surface-impedance
+        sheet: ``zc`` directly for a wave port, or ``z0`` scaled by
+        ``width / gap`` for a lumped port."""
         return self.zc if self.port_type == "wave" else self.z0 * self.width / self.gap
 
 
 @dataclass
 class Mesh:
-    """A generated FEM mesh plus the region maps shared with the ``.pro``."""
+    """
+    A generated FEM mesh plus the region maps shared with the ``.pro``.
+
+    Parameters
+    ----------
+    msh_path : str
+        Path to the written ``.msh`` file.
+    dielectric_regions : dict[str, int]
+        Dielectric solid name -> physical group (region) ID.
+    air_region : int
+        Physical group ID of the (non-PML) air volume.
+    pec_region : int
+        Physical group ID of the PEC surfaces.
+    port_regions : dict[int, PortMesh]
+        Port number -> its :class:`PortMesh` description.
+    abc_region : int
+        Physical group ID of the absorbing (Silver-Muller) boundary surfaces.
+    boundary : str
+        Outer truncation used: ``"silver_muller"`` or ``"pml"``.
+    bbox : tuple[float, float, float, float, float, float]
+        Bounding box of the real structure (``x0, y0, z0, x1, y1, z1``), in
+        metres.
+    box_bbox : tuple[float, float, float, float, float, float]
+        Bounding box of the outer meshed domain (air box, or the PML shell's
+        outer face if PML is used), in metres.
+    lambda_min : float
+        Smallest wavelength in the problem (inside the highest-permittivity
+        dielectric, at the highest frequency), in metres. Default ``0.0``.
+    impedance_regions : list[tuple[int, float]]
+        ``[(region_id, sigma), ...]`` for each distinct lossy-conductor
+        conductivity. Default ``[]``.
+    pml_region : int
+        Physical group ID of the PML volume, or ``0`` if no PML is used.
+        Default ``0``.
+    inner_bbox : tuple[float, float, float, float, float, float]
+        Bounding box of the air/PML interface, in metres; PML damping starts
+        here. Empty tuple if there is no PML. Default ``()``.
+    pml_thick : float
+        Thickness of the PML shell, in metres. Default ``0.0``.
+    sym_region : int
+        Physical group ID of the symmetry-plane surface, or ``0`` if no
+        symmetry is applied. Default ``0``.
+    sym_kind : str
+        Symmetry boundary condition: ``"pec"`` or ``"pmc"``, empty if no
+        symmetry is applied. Default ``""``.
+    """
 
     msh_path: str
     dielectric_regions: dict[str, int]  # solid name -> region id
@@ -114,7 +189,8 @@ class Mesh:
 # helpers
 # ----------------------------
 def _short_name(entity_name: str) -> str:
-    """'Shapes/<uuid>/patch_inset/patch_inset' -> 'patch_inset'."""
+    """Return the last path component of a Gmsh entity name, e.g.
+    ``'Shapes/<uuid>/patch_inset/patch_inset'`` -> ``'patch_inset'``."""
     return entity_name.rstrip("/").split("/")[-1] if entity_name else ""
 
 
@@ -156,7 +232,8 @@ def _dielectric_bbox(originals: list) -> tuple:
 
 def _footprint_face(solid_tag: int, diel_bbox: tuple) -> int:
     """Largest face of a thin solid; on a tie (top vs bottom plate) pick the one
-    nearest the dielectric, so the imprinted PEC sheet lands on its surface."""
+    nearest the dielectric, so the imprinted conductor/port sheet lands on its
+    surface."""
     faces = [t for _, t in gmsh.model.getBoundary([(3, solid_tag)], oriented=False)]
     info = []
     for ft in faces:
@@ -196,6 +273,20 @@ def _init() -> None:
     gmsh.option.setNumber("General.Terminal", 0)
 
 
+@dataclass
+class _Faces:
+    """Sheet/boundary face sets threaded between :func:`build_mesh`'s stages."""
+
+    pec: set[int]
+    imped_by_sigma: dict[float, set[int]]
+    port_by_name: dict[str, set[int]]
+    all_port: set[int]
+    all_imped: set[int]
+    ground: set[int]
+    abc: set[int]
+    sym: set[int]
+
+
 def list_solids(step_file: str) -> list[str]:
     """
     Return the short product names of the solids in a STEP file (no meshing).
@@ -225,48 +316,22 @@ def list_solids(step_file: str) -> list[str]:
 
 
 # ----------------------------
-# main entry point
+# build_mesh stages
 # ----------------------------
-def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
-    """
-    Mesh a :class:`~simpleEMS.fem_backend.Problem`'s STEP geometry.
+def _snapshot_solids(problem: Problem) -> tuple[list, tuple, tuple, dict]:
+    """Record each imported solid's role + bbox before any boolean op.
 
-    Parameters
-    ----------
-    problem : Problem
-        The FEM problem definition (solids, ports, boundary, mesh controls).
-    workdir : str
-        Directory to write the ``.msh`` file into.
-    verbose : bool
-        Print progress through the shared console. Default ``True``.
+    The boolean ops below (copy/remove/fragment) destroy and renumber solids,
+    so snapshot each one's role and bounding box now while identities are known.
 
     Returns
     -------
-    Mesh
-        The mesh plus the region maps shared with the GetDP problem file.
+    tuple[list, tuple, tuple, dict]
+        ``(originals, struct, diel_bbox, port_geo)`` -- ``originals`` is
+        ``[(role, name, bbox, bbox_volume), ...]``; ``struct`` is the overall
+        extent of the real (non-ignored) structure; ``diel_bbox`` the combined
+        dielectric bounding box; ``port_geo`` each port solid's bbox by name.
     """
-    fmin = float(problem.freqs.min())
-    fmax = float(problem.freqs.max())
-    # smallest wavelength anywhere (inside the highest-eps dielectric)
-    eps_max = max([d.dielectric.eps_r for d in problem.dielectrics()] + [1.0])
-    lambda_min = C0 / (fmax * (eps_max**0.5))
-    lambda0_max = C0 / fmin  # longest free-space wavelength -> sets air padding
-
-    os.makedirs(workdir, exist_ok=True)
-    _init()
-    if verbose:
-        gmsh.option.setNumber("General.Terminal", 1)
-    gmsh.model.add(problem.name)
-    # STEP may be in mm; OCCTargetUnit converts everything to metres so all the
-    # geometry below (and the wavelengths above) share one unit system.
-    gmsh.option.setString("Geometry.OCCTargetUnit", "M")
-    gmsh.model.occ.importShapes(problem.step_file)
-    gmsh.model.occ.synchronize()
-
-    # ---- record each imported solid's role + bbox before any boolean op -----
-    # The boolean ops below (copy/remove/fragment) destroy and renumber solids,
-    # so snapshot each one's role and bounding box now while identities are known;
-    # `struct` accumulates the overall extent of the real (non-ignored) structure.
     originals = []  # (role, name, bbox, bbox_volume)
     struct = [1e30, 1e30, 1e30, -1e30, -1e30, -1e30]
     for dim, tag in gmsh.model.getEntities(3):
@@ -283,9 +348,20 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
 
     diel_bbox = _dielectric_bbox(originals)
     port_geo = {name: bb for role, name, bb, _v in originals if role == "port"}
+    return originals, struct, diel_bbox, port_geo
 
-    # ---- reduce each thin conductor/port solid to a footprint sheet ---------
-    # (copy the sheet so it survives deletion of the parent solid)
+
+def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) -> list:
+    """Reduce each thin conductor/port solid to a footprint sheet.
+
+    The sheet is copied so it survives deletion of the parent solid. Updates
+    ``port_geo`` in place with each port's clipped-sheet bbox.
+
+    Returns
+    -------
+    list
+        ``sheets`` as ``[(role, name, face_tag), ...]``.
+    """
     port_direction = {p.solid: p.direction for p in problem.ports}
     sheets = []  # (role, name, face_tag)
     metal_solids = []
@@ -310,12 +386,25 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
     if metal_solids:
         gmsh.model.occ.remove(metal_solids, recursive=True)
     gmsh.model.occ.synchronize()
+    return sheets
 
-    # ---- air box (+ optional outer PML shell) around the structure ----------
-    # A radiating structure lives in open space, but FEM needs a finite domain.
-    # Wrap it in an air box padded by ~a wavelength; its outer faces later carry
-    # the absorbing boundary. With PML, add a second outer shell that damps
-    # outgoing waves instead of a first-order absorbing condition.
+
+def _build_air_box(
+    problem: Problem, struct: tuple, lambda0_max: float
+) -> tuple[bool, tuple, tuple, float]:
+    """Wrap the structure in an air box (+ optional outer PML shell).
+
+    A radiating structure lives in open space, but FEM needs a finite domain.
+    Wrap it in an air box padded by a fraction of the longest free-space
+    wavelength (``problem.air_pad_frac``); its outer faces later carry the
+    absorbing boundary. With PML, add a second outer shell that damps
+    outgoing waves instead of a first-order absorbing condition.
+
+    Returns
+    -------
+    tuple[bool, tuple, tuple, float]
+        ``(is_pml, inner_bbox, box_bbox, pml_thick)``.
+    """
     is_pml = problem.boundary == "pml"
     pad = max(problem.air_pad_frac * lambda0_max, 3.0 * (struct[5] - struct[2]))
     ax0, ay0, az0 = struct[0] - pad, struct[1] - pad, struct[2] - pad  # inner box
@@ -332,46 +421,78 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
     else:
         box_bbox = inner_bbox
     gmsh.model.occ.synchronize()
+    return is_pml, inner_bbox, box_bbox, pml_thick
 
-    # ---- symmetry cut: keep the half-space (coord >= plane) -----------------
-    sym_axis_i, sym_plane = None, None
-    if problem.symmetry:
-        s_axis, _s_kind, s_at = problem.symmetry
-        sym_axis_i = {"x": 0, "y": 1, "z": 2}[s_axis]
-        sym_plane = (
-            s_at
-            if s_at is not None
-            else 0.5 * (struct[sym_axis_i] + struct[sym_axis_i + 3])
-        )
-        bb = box_bbox
-        lo = [bb[0] - 1.0, bb[1] - 1.0, bb[2] - 1.0]
-        hi = [bb[3] + 1.0, bb[4] + 1.0, bb[5] + 1.0]
-        lo[sym_axis_i] = sym_plane  # keep coord >= plane
-        halfbox = gmsh.model.occ.addBox(
-            lo[0], lo[1], lo[2], hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]
-        )
-        gmsh.model.occ.synchronize()
-        vol_targets = [(3, t) for _, t in gmsh.model.getEntities(3) if t != halfbox]
-        sheet_targets = [(2, f) for _, _, f in sheets]
-        _o, omap = gmsh.model.occ.intersect(
-            vol_targets + sheet_targets,
-            [(3, halfbox)],
-            removeObject=True,
-            removeTool=True,
-        )
-        gmsh.model.occ.synchronize()
-        new_sheets = []  # sheets were clipped -> pick up new tags from the map
-        for i, (role, name, _f) in enumerate(sheets):
-            faces = [t for d, t in omap[len(vol_targets) + i] if d == 2]
-            if faces:
-                new_sheets.append((role, name, faces[0]))
-        sheets = new_sheets
 
-    # ---- fragment dielectric volumes + air box with the conductor sheets ----
-    # `fragment` imprints the conductor sheets into the volumes: it splits the
-    # volumes along the sheets so the sheets become shared, conforming interior
-    # faces (the mesh will put element faces exactly on the conductors) while the
-    # volumes stay watertight. This is what lets us mesh zero-thickness metals.
+def _apply_symmetry_cut(
+    problem: Problem, struct: tuple, box_bbox: tuple, sheets: list
+) -> tuple[int | None, float | None, list]:
+    """Cut to the half-space ``coord >= plane`` if ``problem.symmetry`` is set.
+
+    Returns
+    -------
+    tuple[int | None, float | None, list]
+        ``(sym_axis_i, sym_plane, sheets)`` -- ``sheets`` passed through
+        unchanged (with ``(None, None, sheets)``) if there is no symmetry,
+        otherwise replaced with the clipped sheet tags.
+    """
+    if not problem.symmetry:
+        return None, None, sheets
+
+    s_axis, _s_kind, s_at = problem.symmetry
+    sym_axis_i = {"x": 0, "y": 1, "z": 2}[s_axis]
+    sym_plane = (
+        s_at
+        if s_at is not None
+        else 0.5 * (struct[sym_axis_i] + struct[sym_axis_i + 3])
+    )
+    bb = box_bbox
+    lo = [bb[0] - 1.0, bb[1] - 1.0, bb[2] - 1.0]
+    hi = [bb[3] + 1.0, bb[4] + 1.0, bb[5] + 1.0]
+    lo[sym_axis_i] = sym_plane  # keep coord >= plane
+    halfbox = gmsh.model.occ.addBox(
+        lo[0], lo[1], lo[2], hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]
+    )
+    gmsh.model.occ.synchronize()
+    vol_targets = [(3, t) for _, t in gmsh.model.getEntities(3) if t != halfbox]
+    sheet_targets = [(2, f) for _, _, f in sheets]
+    _o, omap = gmsh.model.occ.intersect(
+        vol_targets + sheet_targets,
+        [(3, halfbox)],
+        removeObject=True,
+        removeTool=True,
+    )
+    gmsh.model.occ.synchronize()
+    new_sheets = []  # sheets were clipped -> pick up new tags from the map
+    for i, (role, name, _f) in enumerate(sheets):
+        faces = [t for d, t in omap[len(vol_targets) + i] if d == 2]
+        if faces:
+            new_sheets.append((role, name, faces[0]))
+    return sym_axis_i, sym_plane, new_sheets
+
+
+def _fragment_and_classify(
+    sheets: list, originals: list, inner_bbox: tuple, is_pml: bool
+) -> tuple[list, dict, list, list]:
+    """Fragment the dielectric/air volumes with the conductor sheets, then
+    classify every resulting volume back to its origin solid.
+
+    ``fragment`` imprints the conductor sheets into the volumes: it splits the
+    volumes along the sheets so the sheets become shared, conforming interior
+    faces (the mesh will put element faces exactly on the conductors) while the
+    volumes stay watertight. This is what lets us mesh zero-thickness metals.
+
+    A volume is dielectric iff its own bounding box fits inside a dielectric
+    solid's box (a centroid test fails: the enclosing air shell is centred on
+    the structure too). Tolerance is relative to each dielectric's size.
+
+    Returns
+    -------
+    tuple[list, dict, list, list]
+        ``(sheet_faces, diel_vols, air_vols, pml_vols)`` -- ``sheet_faces`` is
+        aligned with ``sheets``; ``diel_vols`` maps dielectric name to volume
+        tags.
+    """
     vols = [(3, t) for _, t in gmsh.model.getEntities(3)]  # dielectrics + box
     sheet_dimtags = [(2, f) for _, _, f in sheets]
     _out, outmap = gmsh.model.occ.fragment(vols, sheet_dimtags)
@@ -383,10 +504,6 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
         entry = outmap[len(vols) + i]
         sheet_faces.append({t for (d, t) in entry if d == 2})
 
-    # ---- classify every resulting volume back to an origin solid ------------
-    # A volume is dielectric iff its own bounding box fits inside a dielectric
-    # solid's box (a centroid test fails: the enclosing air shell is centred on
-    # the structure too). Tolerance is relative to each dielectric's size.
     diel_vols: dict[str, list[int]] = {}
     air_vols: list[int] = []
     pml_vols: list[int] = []
@@ -414,7 +531,21 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
         else:
             air_vols.append(tag)
 
-    # ---- collect PEC / impedance / port sheet faces (still in the model) ----
+    return sheet_faces, diel_vols, air_vols, pml_vols
+
+
+def _collect_faces(
+    problem: Problem,
+    sheets: list,
+    sheet_faces: list,
+    box_bbox: tuple,
+    sym_axis_i: int | None,
+    sym_plane: float | None,
+) -> _Faces:
+    """Collect PEC/impedance/port sheet faces, the ground plane, the outer
+    absorbing shell, and any symmetry-plane faces from the current
+    (post-fragment) model.
+    """
     existing_faces = {t for _, t in gmsh.model.getEntities(2)}
     pec_faces: set[int] = set()
     conductor_faces_by_name: dict[str, set[int]] = {}  # pec + impedance
@@ -444,6 +575,7 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
     if len(conductor_faces_by_name) > 1:
 
         def _area(fs: set) -> float:
+            """Total surface area (m^2) of a set of Gmsh face tags."""
             return sum(gmsh.model.occ.getMass(2, f) for f in fs)
 
         ground_name = max(
@@ -481,10 +613,43 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
         sym_faces = at_plane & abc_faces
         abc_faces -= sym_faces
 
-    # ---- assign physical groups (integer tags shared with the .pro) ---------
-    # These integer tags are the ONLY contract between mesh and solver: GetDP
-    # references each region purely by number (Region[{id}]), so the IDs here
-    # (from fem_materials) must match exactly what fem_formulation emits.
+    return _Faces(
+        pec=pec_faces,
+        imped_by_sigma=imped_faces_by_sigma,
+        port_by_name=port_faces_by_name,
+        all_port=all_port_faces,
+        all_imped=all_imped_faces,
+        ground=ground_faces,
+        abc=abc_faces,
+        sym=sym_faces,
+    )
+
+
+def _assign_physical_groups(
+    problem: Problem,
+    diel_vols: dict,
+    air_vols: list,
+    pml_vols: list,
+    faces: _Faces,
+    port_geo: dict,
+) -> tuple[dict, int, list, dict, int]:
+    """Assign integer physical groups (the mesh<->``.pro`` contract).
+
+    These integer tags are the ONLY contract between mesh and solver: GetDP
+    references each region purely by number (``Region[{id}]``), so the IDs
+    here (from :mod:`~simpleEMS.fem_materials`) must match exactly what
+    :mod:`~simpleEMS.fem_formulation` emits.
+
+    Returns
+    -------
+    tuple[dict, int, list, dict, int]
+        ``(diel_regions, pml_region, impedance_regions, port_regions, sym_region)``.
+    """
+    from .calc import microstrip_impedance  # local: keeps fem_geometry.py
+
+    # gmsh-only for callers that don't need a port's line impedance (calc.py
+    # pulls in sim_tools's matplotlib/PyQt6/pyvista/openEMS/CSXCAD stack).
+
     diel_regions = {}
     for i, (name, tags) in enumerate(sorted(diel_vols.items())):
         rid = dielectric_region(i)
@@ -502,24 +667,24 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
         gmsh.model.addPhysicalGroup(3, pml_vols, pml_region)
         gmsh.model.setPhysicalName(3, pml_region, "pml")
 
-    if pec_faces:
-        gmsh.model.addPhysicalGroup(2, sorted(pec_faces), PEC)
+    if faces.pec:
+        gmsh.model.addPhysicalGroup(2, sorted(faces.pec), PEC)
         gmsh.model.setPhysicalName(2, PEC, "pec")
 
     impedance_regions = []  # [(region_id, sigma), ...]
-    for i, (sig, faces) in enumerate(sorted(imped_faces_by_sigma.items())):
+    for i, (sig, fs) in enumerate(sorted(faces.imped_by_sigma.items())):
         rid = IMPEDANCE + i
-        gmsh.model.addPhysicalGroup(2, sorted(faces), rid)
+        gmsh.model.addPhysicalGroup(2, sorted(fs), rid)
         gmsh.model.setPhysicalName(2, rid, f"impedance_{i}")
         impedance_regions.append((rid, sig))
 
     port_regions: dict[int, PortMesh] = {}
     for pspec in problem.ports:
-        faces = port_faces_by_name.get(pspec.solid, set())
-        if not faces:
+        pfaces = faces.port_by_name.get(pspec.solid, set())
+        if not pfaces:
             raise RuntimeError(f"port solid {pspec.solid!r} produced no boundary faces")
         rid = port_region(pspec.number)
-        gmsh.model.addPhysicalGroup(2, sorted(faces), rid)
+        gmsh.model.addPhysicalGroup(2, sorted(pfaces), rid)
         gmsh.model.setPhysicalName(2, rid, f"port_{pspec.number}")
         bb = port_geo[pspec.solid]
         ax = {"x": 0, "y": 1, "z": 2}[pspec.direction]
@@ -528,7 +693,10 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
         width = max(extents[i] for i in range(3) if i != ax)  # transverse width
         center = ((bb[0] + bb[3]) / 2, (bb[1] + bb[4]) / 2, (bb[2] + bb[5]) / 2)
         eps_sub = max([d.dielectric.eps_r for d in problem.dielectrics()] + [1.0])
-        zc, eps_eff = microstrip_zc(width, gap, eps_sub)  # line char. impedance
+        # line char. impedance; width/gap are metres, calc.py works in mm
+        zc, eps_eff = microstrip_impedance(
+            width * 1000.0, gap * 1000.0, 0.0, eps_sub, 0.0
+        )
         port_regions[pspec.number] = PortMesh(
             number=pspec.number,
             region=rid,
@@ -542,17 +710,38 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
             port_type=pspec.port_type,
         )
 
-    if abc_faces:
-        gmsh.model.addPhysicalGroup(2, sorted(abc_faces), ABC)
+    if faces.abc:
+        gmsh.model.addPhysicalGroup(2, sorted(faces.abc), ABC)
         gmsh.model.setPhysicalName(2, ABC, "abc")
 
     sym_region = 0
-    if sym_faces:
+    if faces.sym:
         sym_region = SYM
-        gmsh.model.addPhysicalGroup(2, sorted(sym_faces), sym_region)
+        gmsh.model.addPhysicalGroup(2, sorted(faces.sym), sym_region)
         gmsh.model.setPhysicalName(2, sym_region, "sym")
 
-    # ---- mesh sizing: fine near the signal conductors, coarse in open air ---
+    return diel_regions, pml_region, impedance_regions, port_regions, sym_region
+
+
+def _mesh_and_write(
+    problem: Problem,
+    originals: list,
+    struct: tuple,
+    lambda_min: float,
+    faces: _Faces,
+    workdir: str | Path,
+    verbose: bool,
+    diel_regions: dict,
+    port_regions: dict,
+) -> str:
+    """Size the mesh (fine near the signal conductors, coarse in open air),
+    generate it, and write the ``.msh``/``.vtk`` files.
+
+    Returns
+    -------
+    str
+        Path to the written ``.msh`` file.
+    """
     diel_min_thick = min(
         [
             min(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
@@ -570,7 +759,7 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
     lc_coarse = lambda_min / problem.elems_per_wavelength
     # Refine near the signal conductors + ports only (exclude the ground plane);
     # extend the fine zone through the substrate so trace-to-ground is resolved.
-    refine_faces = ((pec_faces | all_imped_faces) - ground_faces) | all_port_faces
+    refine_faces = ((faces.pec | faces.all_imped) - faces.ground) | faces.all_port
     dist_max = max(15.0 * lc_fine, 4.0 * diel_min_thick)
     _apply_size_field(refine_faces, lc_fine, lc_coarse, dist_max)
     gmsh.option.setNumber("Mesh.MeshSizeMax", lc_coarse)
@@ -578,10 +767,10 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
     gmsh.option.setNumber("Mesh.Optimize", 1)
 
     gmsh.model.mesh.generate(3)
-    msh_path = os.path.join(os.path.abspath(workdir), f"{problem.name}.msh")
-    gmsh.write(msh_path)
+    msh_path = Path(workdir).absolute() / f"{problem.name}.msh"
+    gmsh.write(str(msh_path))
     # also write a legacy VTK for pyvista display (no meshio dependency needed)
-    gmsh.write(os.path.splitext(msh_path)[0] + ".vtk")
+    gmsh.write(str(msh_path.with_suffix(".vtk")))
 
     if verbose:
         nn = len(gmsh.model.mesh.getNodes()[0])
@@ -591,6 +780,82 @@ def build_mesh(problem: Problem, workdir: str, verbose: bool = True) -> Mesh:
             f"ports={list(port_regions)} abc={ABC}[/info]"
         )
     gmsh.finalize()
+    return str(msh_path)
+
+
+# ----------------------------
+# main entry point
+# ----------------------------
+def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> Mesh:
+    """
+    Mesh a :class:`~simpleEMS.fem_backend.Problem`'s STEP geometry.
+
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem definition (solids, ports, boundary, mesh controls).
+    workdir : str | Path
+        Directory to write the ``.msh`` file into.
+    verbose : bool
+        Print progress through the shared console. Default ``True``.
+
+    Returns
+    -------
+    Mesh
+        The mesh plus the region maps shared with the GetDP problem file.
+
+    Raises
+    ------
+    RuntimeError
+        If a port solid produces no boundary faces after meshing (e.g. it
+        does not touch the rest of the geometry).
+    """
+    fmin = float(problem.freqs.min())
+    fmax = float(problem.freqs.max())
+    # smallest wavelength anywhere (inside the highest-eps dielectric)
+    eps_max = max([d.dielectric.eps_r for d in problem.dielectrics()] + [1.0])
+    lambda_min = C0 / (fmax * (eps_max**0.5))
+    lambda0_max = C0 / fmin  # longest free-space wavelength -> sets air padding
+
+    Path(workdir).mkdir(parents=True, exist_ok=True)
+    _init()
+    if verbose:
+        gmsh.option.setNumber("General.Terminal", 1)
+    gmsh.model.add(problem.name)
+    # STEP may be in mm; OCCTargetUnit converts everything to metres so all the
+    # geometry below (and the wavelengths above) share one unit system.
+    gmsh.option.setString("Geometry.OCCTargetUnit", "M")
+    gmsh.model.occ.importShapes(problem.step_file)
+    gmsh.model.occ.synchronize()
+
+    originals, struct, diel_bbox, port_geo = _snapshot_solids(problem)
+    sheets = _build_footprint_sheets(problem, diel_bbox, port_geo)
+    is_pml, inner_bbox, box_bbox, pml_thick = _build_air_box(
+        problem, struct, lambda0_max
+    )
+    sym_axis_i, sym_plane, sheets = _apply_symmetry_cut(
+        problem, struct, box_bbox, sheets
+    )
+    sheet_faces, diel_vols, air_vols, pml_vols = _fragment_and_classify(
+        sheets, originals, inner_bbox, is_pml
+    )
+    faces = _collect_faces(
+        problem, sheets, sheet_faces, box_bbox, sym_axis_i, sym_plane
+    )
+    diel_regions, pml_region, impedance_regions, port_regions, sym_region = (
+        _assign_physical_groups(problem, diel_vols, air_vols, pml_vols, faces, port_geo)
+    )
+    msh_path = _mesh_and_write(
+        problem,
+        originals,
+        struct,
+        lambda_min,
+        faces,
+        workdir,
+        verbose,
+        diel_regions,
+        port_regions,
+    )
 
     return Mesh(
         msh_path=msh_path,

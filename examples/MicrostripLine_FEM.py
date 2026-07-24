@@ -5,7 +5,7 @@ Same structure as ``MicrostripLine.py``; only ``backend_engine="FEM"`` changes.
 Because it is a 2-port line the FEM sweep produces S21, so the existing
 ``plot_phase`` and ``plot_group_delay`` SimTools methods are reused unchanged.
 
-Requires the ``getdp`` binary on ``PATH`` or in ``SIMPLEEMS_GETDP_BIN``.
+Requires the ``getdp`` binary on ``PATH`` (run ``simpleems install getdp``).
 """
 
 # IMPORTS
@@ -28,7 +28,7 @@ params = MicrostripLineParams(
     charac_imp=50,
     num_points=201,  # interpolated output points
     backend_engine="FEM",  # <-- the only change vs. the FDTD example
-    num_fem_solve_points=8,  # number of full FEM solves
+    num_FEM_solve_points=8,  # number of full FEM solves
 )
 # PARAMS
 

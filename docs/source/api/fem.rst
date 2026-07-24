@@ -7,8 +7,8 @@ setting ``backend_engine="FEM"`` on the simulation parameters; the pipeline
 (``write_and_show_structure`` / ``run_simulation`` / ``compute_sim_data``) then
 routes automatically to these modules and still returns a ``SimData``.
 
-The ``getdp`` binary must be on ``PATH`` or pointed to by the
-``SIMPLEEMS_GETDP_BIN`` environment variable.
+The ``getdp`` binary must be on ``PATH``. Run ``simpleems install getdp`` to
+install it.
 
 .. automodapi:: simpleEMS.fem_backend
    :no-inheritance-diagram:
@@ -26,4 +26,7 @@ The ``getdp`` binary must be on ``PATH`` or pointed to by the
    :no-inheritance-diagram:
 
 .. automodapi:: simpleEMS.fem_materials
+   :no-inheritance-diagram:
+
+.. automodapi:: simpleEMS.fem_radiation
    :no-inheritance-diagram:

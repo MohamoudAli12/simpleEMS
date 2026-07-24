@@ -39,18 +39,16 @@ the ``.pro`` generator from ever disagreeing::
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 __all__ = [
     "Dielectric",
-    "FemOptions",
+    "FEMOptions",
     "EPS0",
     "MU0",
     "C0",
     "ETA0",
     "SIGMA_CU",
-    "microstrip_zc",
     "guess_role",
     "AIR",
     "PML",
@@ -122,7 +120,7 @@ class Dielectric:
 
 
 @dataclass
-class FemOptions:
+class FEMOptions:
     """
     Global FEM solver/mesh options, forwarded to the GetDP problem.
 
@@ -162,6 +160,27 @@ class FemOptions:
     min_layers: int = 3
     port_type: str = "lumped"
 
+    def __post_init__(self) -> None:
+        """
+        Validate the option choices.
+
+        Raises
+        ------
+        ValueError
+            If ``boundary``, ``fe_order``, or ``port_type`` is not one of the
+            supported choices.
+        """
+        if self.boundary not in ("silver_muller", "pml"):
+            raise ValueError(
+                f"boundary must be 'silver_muller' or 'pml', got {self.boundary!r}"
+            )
+        if self.fe_order not in (1, 2):
+            raise ValueError(f"fe_order must be 1 or 2, got {self.fe_order}")
+        if self.port_type not in ("lumped", "wave"):
+            raise ValueError(
+                f"port_type must be 'lumped' or 'wave', got {self.port_type!r}"
+            )
+
 
 # Substring -> role, applied to lowercased solid names for auto-detection.
 _NAME_ROLE_HINTS: tuple[tuple[str, str], ...] = (
@@ -178,42 +197,6 @@ _NAME_ROLE_HINTS: tuple[tuple[str, str], ...] = (
     ("cond", "pec"),
     ("port", "port"),
 )
-
-
-def microstrip_zc(w: float, h: float, eps_r: float) -> tuple[float, float]:
-    """
-    Characteristic impedance and effective permittivity of a microstrip line.
-
-    Uses the Hammerstad-Jensen quasi-static model (accurate to ~1%). This only
-    affects **wave ports** -- it sets the impedance the port is matched to and
-    the eps_eff used for de-embedding; lumped ports use their fixed z0 instead.
-
-    Parameters
-    ----------
-    w : float
-        Trace width in metres.
-    h : float
-        Substrate thickness in metres.
-    eps_r : float
-        Substrate relative permittivity.
-
-    Returns
-    -------
-    tuple[float, float]
-        ``(Zc, eps_eff)`` -- characteristic impedance in ohms and effective
-        permittivity.
-    """
-    u = max(w / h, 1e-6)
-    a = (
-        1
-        + (1 / 49) * math.log((u**4 + (u / 52) ** 2) / (u**4 + 0.432))
-        + (1 / 18.7) * math.log(1 + (u / 18.1) ** 3)
-    )
-    b = 0.564 * ((eps_r - 0.9) / (eps_r + 3)) ** 0.053
-    eps_eff = (eps_r + 1) / 2 + (eps_r - 1) / 2 * (1 + 10 / u) ** (-a * b)
-    f = 6 + (2 * math.pi - 6) * math.exp(-((30.666 / u) ** 0.7528))
-    z01 = (ETA0 / (2 * math.pi)) * math.log(f / u + math.sqrt(1 + (2 / u) ** 2))
-    return z01 / math.sqrt(eps_eff), eps_eff
 
 
 def guess_role(name: str) -> str | None:

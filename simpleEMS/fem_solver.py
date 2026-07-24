@@ -17,16 +17,17 @@
 """
 Drive the GetDP finite-element solver as a subprocess.
 
-Locates the ``getdp`` binary (environment variable, then ``PATH``), runs a
-single frequency/port solve of a generated ``.pro`` file, and reads the
-resulting per-port ``xS_<n><k>.txt`` S-parameter tables.
+Locates the ``getdp`` binary on ``PATH``, runs a single frequency/port solve
+of a generated ``.pro`` file, and reads back the results: per-port
+``xS_<n><k>.txt`` S-parameter tables, or the field-view files and
+dielectric-loss/radiated-power totals from a combined fields-and-power solve.
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import numpy as np
 
@@ -34,20 +35,13 @@ __all__ = [
     "find_getdp",
     "run_getdp",
     "read_complex",
-    "solve_fields",
-    "solve_power",
     "solve_fields_and_power",
 ]
-
-_GETDP_ENV = "SIMPLEEMS_GETDP_BIN"
 
 
 def find_getdp() -> str:
     """
-    Resolve the ``getdp`` binary path.
-
-    Looks first at the ``SIMPLEEMS_GETDP_BIN`` environment variable, then on
-    ``PATH``.
+    Resolve the ``getdp`` binary path from ``PATH``.
 
     Returns
     -------
@@ -59,30 +53,22 @@ def find_getdp() -> str:
     RuntimeError
         If no ``getdp`` binary can be found.
     """
-    env = os.environ.get(_GETDP_ENV)
-    if env:
-        if not os.path.exists(env):
-            raise RuntimeError(
-                f"{_GETDP_ENV} is set to {env!r} but that file does not exist"
-            )
-        return env
     found = shutil.which("getdp")
     if found:
         return found
     raise RuntimeError(
-        "getdp binary not found. Install GetDP (https://getdp.info) and either "
-        f"put it on your PATH or set the {_GETDP_ENV} environment variable to "
-        "its full path."
+        "getdp binary not found. Run `simpleems install getdp`, or install "
+        "GetDP yourself (https://getdp.info) and put it on your PATH."
     )
 
 
-def read_complex(path: str) -> complex:
+def read_complex(path: str | Path) -> complex:
     """
     Read a single complex value from a GetDP Table output file.
 
     Parameters
     ----------
-    path : str
+    path : str | Path
         Path to an ``xS_<n><k>.txt`` file with ``[tag, Re, Im]`` columns. Rows
         accumulate across a sweep (GetDP appends, see ``write_problem``), so
         the most recently solved point is always the last row.
@@ -92,7 +78,7 @@ def read_complex(path: str) -> complex:
     complex
         The last row's complex value, or ``0j`` if the file is missing.
     """
-    if not os.path.exists(path):
+    if not Path(path).exists():
         return 0j
     d = np.loadtxt(path)
     if d.ndim == 1:
@@ -101,9 +87,9 @@ def read_complex(path: str) -> complex:
 
 
 def run_getdp(
-    pro_path: str,
-    msh_path: str,
-    workdir: str,
+    pro_path: str | Path,
+    msh_path: str | Path,
+    workdir: str | Path,
     setnumbers: dict,
     postop: str | list[str] | None,
     resolution: str = "Analysis",
@@ -114,11 +100,11 @@ def run_getdp(
 
     Parameters
     ----------
-    pro_path : str
+    pro_path : str | Path
         Path to the ``.pro`` problem file.
-    msh_path : str
+    msh_path : str | Path
         Path to the ``.msh`` mesh file.
-    workdir : str
+    workdir : str | Path
         Working directory for the run (outputs go under ``workdir/output``).
     setnumbers : dict
         Numeric ``-setnumber`` overrides (e.g. ``{"FREQ": f, "ACTIVE_PORT": k}``).
@@ -148,7 +134,7 @@ def run_getdp(
     #         -solve <Resolution> -pos <PostOperation(s)> -v2
     # i.e. one solve at one frequency driving one port; results are written by
     # the .pro's PostOperation(s) into output/xS_<n><k>.txt.
-    args = [find_getdp(), pro_path, "-msh", msh_path]
+    args = [find_getdp(), str(pro_path), "-msh", str(msh_path)]
     for k, v in setnumbers.items():
         args += ["-setnumber", k, repr(float(v))]
     args += ["-solve", resolution]
@@ -167,89 +153,20 @@ def run_getdp(
     return res
 
 
-def _read_power_value(outdir: str, fname: str) -> float:
+def _read_power_value(outdir: str | Path, fname: str) -> float:
     # rows accumulate across calls (GetDP appends); take the latest one.
-    path = os.path.join(outdir, fname)
-    if not os.path.exists(path):
+    path = Path(outdir) / fname
+    if not path.exists():
         return 0.0
     return float(np.atleast_2d(np.loadtxt(path))[-1, -2])
 
 
-def solve_fields(
-    pro_path: str, msh_path: str, workdir: str, freq: float, active: int = 1
-) -> tuple[str, str]:
-    """
-    Solve at one frequency and write the E/H field views for the radiation step.
-
-    Drives the ``Get_Fields`` post-operation the problem file already emits.
-
-    Parameters
-    ----------
-    pro_path, msh_path : str
-        Paths to the ``.pro`` and ``.msh`` files.
-    workdir : str
-        Working directory (outputs go under ``workdir/output``).
-    freq : float
-        Frequency in Hz.
-    active : int
-        Driven port number. Default ``1``.
-
-    Returns
-    -------
-    tuple[str, str]
-        Paths to the written ``e.pos`` and ``h.pos`` field views.
-    """
-    run_getdp(
-        pro_path,
-        msh_path,
-        workdir,
-        {"FREQ": freq, "ACTIVE_PORT": active},
-        "Get_Fields",
-    )
-    outdir = os.path.join(os.path.abspath(workdir), "output")
-    return os.path.join(outdir, "e.pos"), os.path.join(outdir, "h.pos")
-
-
-def solve_power(
-    pro_path: str, msh_path: str, workdir: str, freq: float, active: int = 1
-) -> tuple[float, float]:
-    """
-    Solve at one frequency and return the dielectric-loss and radiated powers.
-
-    Drives the ``Get_Power`` post-operation the problem file already emits.
-
-    Parameters
-    ----------
-    pro_path, msh_path : str
-        Paths to the ``.pro`` and ``.msh`` files.
-    workdir : str
-        Working directory (outputs go under ``workdir/output``).
-    freq : float
-        Frequency in Hz.
-    active : int
-        Driven port number. Default ``1``.
-
-    Returns
-    -------
-    tuple[float, float]
-        ``(p_loss, p_rad)`` -- dielectric loss and radiated power (field units).
-    """
-    run_getdp(
-        pro_path,
-        msh_path,
-        workdir,
-        {"FREQ": freq, "ACTIVE_PORT": active},
-        "Get_Power",
-    )
-    outdir = os.path.join(os.path.abspath(workdir), "output")
-    return (
-        _read_power_value(outdir, "Ploss.txt"),
-        _read_power_value(outdir, "Prad.txt"),
-    )
-
-
 def solve_fields_and_power(
-    pro_path: str, msh_path: str, workdir: str, freq: float, active: int = 1
+    pro_path: str | Path,
+    msh_path: str | Path,
+    workdir: str | Path,
+    freq: float,
+    active: int = 1,
 ) -> tuple[str, str, float, float]:
     """
     Solve at one frequency and return both the field views and the powers.
@@ -257,14 +174,13 @@ def solve_fields_and_power(
     Drives ``Get_Fields`` and ``Get_Power`` together in a single GetDP
     invocation, so the linear system is assembled and solved only once (both
     post-operations read off the same solved system) instead of once per
-    post-operation as separate calls to :func:`solve_fields` and
-    :func:`solve_power` would do.
+    post-operation as two separate GetDP runs would require.
 
     Parameters
     ----------
-    pro_path, msh_path : str
+    pro_path, msh_path : str | Path
         Paths to the ``.pro`` and ``.msh`` files.
-    workdir : str
+    workdir : str | Path
         Working directory (outputs go under ``workdir/output``).
     freq : float
         Frequency in Hz.
@@ -276,7 +192,9 @@ def solve_fields_and_power(
     tuple[str, str, float, float]
         ``(e_pos, h_pos, p_loss, p_rad)`` -- paths to the written ``e.pos``
         and ``h.pos`` field views, and the dielectric-loss and radiated
-        powers (field units).
+        powers. These are computed directly from the unnormalised field
+        solution, so only their ratio (e.g. radiation efficiency) is
+        physically meaningful, not their absolute magnitude.
     """
     run_getdp(
         pro_path,
@@ -285,10 +203,10 @@ def solve_fields_and_power(
         {"FREQ": freq, "ACTIVE_PORT": active},
         ["Get_Fields", "Get_Power"],
     )
-    outdir = os.path.join(os.path.abspath(workdir), "output")
+    outdir = Path(workdir).absolute() / "output"
     return (
-        os.path.join(outdir, "e.pos"),
-        os.path.join(outdir, "h.pos"),
+        str(outdir / "e.pos"),
+        str(outdir / "h.pos"),
         _read_power_value(outdir, "Ploss.txt"),
         _read_power_value(outdir, "Prad.txt"),
     )

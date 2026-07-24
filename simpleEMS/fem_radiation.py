@@ -19,9 +19,9 @@ FEM far-field radiation, exposed through an openEMS-``nf2ff``-compatible adapter
 
 The GetDP solve gives the near fields; a Gmsh CutBox samples E/H on a box
 enclosing the antenna and the NearToFarField plugin transforms them to the
-far field. :class:`FemNF2FF` wraps that computation behind the same
+far field. :class:`FEMNF2FF` wraps that computation behind the same
 ``CalcNF2FF(output_path, freq, theta, phi, ...)`` interface that
-:class:`openEMS.nf2ff.nf2ff` exposes, returning a :class:`FemFarField` with the
+:class:`openEMS.nf2ff.nf2ff` exposes, returning a :class:`FEMFarField` with the
 attributes (``E_norm``, ``Dmax``, ``Prad``, ``P_rad``, ``theta``, ``phi``) that
 the existing :class:`~simpleEMS.sim_tools.SimTools` 2D/3D radiation plots read.
 That way the FDTD and FEM backends share the same plotting code unchanged.
@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,13 +44,13 @@ from . import fem_solver
 from .console import console
 from .fem_materials import C0
 
-__all__ = ["FemFarField", "FemNF2FF"]
+__all__ = ["FEMFarField", "FEMNF2FF"]
 
 _MESH_META = "fem_mesh.json"
 
 
 @dataclass
-class FemFarField:
+class FEMFarField:
     """Far-field result mirroring the openEMS ``nf2ff`` result surface.
 
     Attributes are named to match what the ``SimTools`` radiation plots read:
@@ -74,11 +73,11 @@ class FemFarField:
 
 
 def compute_pattern(
-    e_pos: str,
-    h_pos: str,
+    e_pos: str | Path,
+    h_pos: str | Path,
     freq: float,
     bbox: tuple,
-    workdir: str,
+    workdir: str | Path,
     domain_bbox: tuple | None = None,
     nphi: int = 72,
     ntheta: int = 36,
@@ -92,13 +91,13 @@ def compute_pattern(
 
     Parameters
     ----------
-    e_pos, h_pos : str
+    e_pos, h_pos : str | Path
         Paths to the GetDP ``e.pos``/``h.pos`` field views.
     freq : float
         Frequency in Hz.
     bbox : tuple
         Structure extents ``(xmin, ymin, zmin, xmax, ymax, zmax)`` in metres.
-    workdir : str
+    workdir : str | Path
         Directory for the intermediate NearToFarField output.
     domain_bbox : tuple | None
         Meshed E/H field extents (the air/PML interface, from
@@ -111,23 +110,26 @@ def compute_pattern(
         silently zeroing the far field (``CutBox``/``OctreePost`` return 0
         for points outside every element, unlike ``gmsh.view.probe``).
     nphi, ntheta : int
-        Far-field angular sampling (azimuth, elevation). The ``NearToFarField``
-        plugin is a triple loop over ``nphi * ntheta * num_surface_elements``
-        (one surface integral per requested direction), so cost scales with
-        their product. Every angle ``SimTools`` ever requests -- even a
-        0.1 deg sweep -- is interpolated from this one grid
+        Far-field angular sampling (azimuth, elevation). Defaults ``72`` and
+        ``36``. The ``NearToFarField`` plugin is a triple loop over
+        ``nphi * ntheta * num_surface_elements`` (one surface integral per
+        requested direction), so cost scales with their product. Every angle
+        ``SimTools`` ever requests -- even a 0.1 deg sweep -- is interpolated
+        from this one grid
         (:class:`~scipy.interpolate.RegularGridInterpolator` in
-        :meth:`FemNF2FF.CalcNF2FF`), so raising these buys smoother
+        :meth:`FEMNF2FF.CalcNF2FF`), so raising these buys smoother
         interpolation of an already-smooth pattern, not more physical
         information; the near field is only resolved at the FEM mesh's own
         element density regardless.
     npts : tuple[int, int, int]
-        CutBox sampling density on each axis of the Huygens box. Determines
-        ``num_surface_elements`` above (``~6*(npts-1)**2`` boundary quads),
-        so it multiplies directly into the ``NearToFarField`` cost.
+        CutBox sampling density on each axis of the Huygens box. Default
+        ``(14, 14, 14)``. Determines ``num_surface_elements`` above
+        (``~6*(npts-1)**2`` boundary quads), so it multiplies directly into
+        the ``NearToFarField`` cost.
     margin_frac : float
         Fallback Huygens-box margin as a fraction of the largest structure
-        dimension, used only when ``domain_bbox`` is ``None``.
+        dimension, used only when ``domain_bbox`` is ``None``. Default
+        ``0.15``.
     safety_frac : float
         Fraction of the per-axis gap between ``bbox`` and ``domain_bbox``
         used for the Huygens-box margin. Default ``0.6``.
@@ -146,8 +148,8 @@ def compute_pattern(
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 1 if verbose else 0)
 
-    gmsh.merge(e_pos)  # view index 0 -> E
-    gmsh.merge(h_pos)  # view index 1 -> H
+    gmsh.merge(str(e_pos))  # view index 0 -> E
+    gmsh.merge(str(h_pos))  # view index 1 -> H
 
     # Huygens box just outside the structure, inside the meshed air region.
     if domain_bbox is not None:
@@ -203,14 +205,14 @@ def compute_pattern(
     gmsh.plugin.setNumber("NearToFarField", "Normalize", 0)
     gmsh.plugin.setNumber("NearToFarField", "dB", 0)
 
-    outdir = os.path.join(os.path.abspath(workdir), "output")
-    os.makedirs(outdir, exist_ok=True)
+    outdir = Path(workdir).absolute() / "output"
+    outdir.mkdir(parents=True, exist_ok=True)
     # The plugin writes an exact regular (phi, theta, farField) grid to this
     # MATLAB file; we read the pattern from there rather than the deformed .pos.
-    mfile = os.path.join(outdir, "pattern_ntf.m")
-    gmsh.plugin.setString("NearToFarField", "MatlabOutputFile", mfile)
+    mfile = outdir / "pattern_ntf.m"
+    gmsh.plugin.setString("NearToFarField", "MatlabOutputFile", str(mfile))
     ntf = gmsh.plugin.run("NearToFarField")
-    gmsh.view.write(ntf, os.path.join(outdir, "pattern_ntf.pos"))
+    gmsh.view.write(ntf, str(outdir / "pattern_ntf.pos"))
 
     grid = _parse_matlab_grid(mfile, nphi, ntheta)
     if grid is not None:
@@ -254,7 +256,7 @@ def compute_pattern(
     return theta_axis, phi_axis, u_grid, directivity_db
 
 
-def _parse_matlab_grid(path: str, nphi: int, ntheta: int) -> tuple | None:
+def _parse_matlab_grid(path: str | Path, nphi: int, ntheta: int) -> tuple | None:
     """Parse the NearToFarField MATLAB dump into ``(phi, theta, val)`` grids.
 
     The plugin writes ``phi``/``theta``/``farField`` as flat row-major matrices
@@ -323,7 +325,7 @@ def _read_scalar_points(
     return theta, phi, val
 
 
-class FemNF2FF:
+class FEMNF2FF:
     """
     openEMS-``nf2ff``-compatible far-field calculator for the FEM backend.
 
@@ -335,6 +337,7 @@ class FemNF2FF:
     """
 
     def __init__(self) -> None:
+        """Create an empty far-field calculator with no cached patterns."""
         self._cache: dict[tuple, tuple] = {}  # (workdir, freq) -> pattern data
 
     def _pattern(self, output_path: str, freq: float) -> tuple:
@@ -372,13 +375,37 @@ class FemNF2FF:
         read_cached: bool = False,
         outfile: str | None = None,
         verbose: int = 0,
-    ) -> FemFarField:
+    ) -> FEMFarField:
         """
         Evaluate the far field on a ``theta``/``phi`` grid (degrees in).
 
         Matches ``openEMS.nf2ff.nf2ff.CalcNF2FF``. ``theta``/``phi`` are in
         degrees (as ``SimTools`` passes them); negative ``theta`` is mapped to
         ``(|theta|, phi + 180)`` so principal-plane cuts spanning -180..180 work.
+
+        Parameters
+        ----------
+        output_path : str | Path
+            FEM output directory containing ``fem_mesh.json`` (written by
+            :func:`~simpleEMS.fem_geometry.build_mesh`); also used as the
+            solve/pattern cache key together with ``freq``.
+        freq : float
+            Frequency in Hz to solve and evaluate the far field at.
+        theta, phi : NDArray
+            Angles in degrees at which to evaluate the pattern; broadcast
+            against each other on a ``[theta, phi]`` grid.
+        read_cached, outfile, verbose
+            Accepted for signature compatibility with
+            ``openEMS.nf2ff.nf2ff.CalcNF2FF`` but not used here: results are
+            never written to ``outfile``, and caching is handled internally
+            (keyed on ``output_path``/``freq``) regardless of
+            ``read_cached``.
+
+        Returns
+        -------
+        FEMFarField
+            The far-field result on the requested grid; see
+            :class:`FEMFarField` for the attributes and their shapes.
         """
         theta_axis, phi_axis, u_grid, dir_db, p_rad, p_loss = self._pattern(
             str(output_path), float(freq)
@@ -399,7 +426,7 @@ class FemNF2FF:
         ph_r = np.deg2rad(ph_q) % (2 * math.pi)
 
         u_vals = np.maximum(interp((ph_r, th_r)), 1e-30)  # [n_theta, n_phi]
-        return FemFarField(
+        return FEMFarField(
             E_norm=np.sqrt(u_vals),
             Dmax=np.array([10.0 ** (dir_db / 10.0)]),
             Prad=np.array([float(p_rad)]),

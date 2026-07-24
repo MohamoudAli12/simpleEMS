@@ -43,7 +43,7 @@ The physics it emits:
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .fem_materials import ABC, AIR, EPS0, MU0, PEC
@@ -65,7 +65,10 @@ def _dir_vector(direction: str) -> str:
 
 
 def write_problem(
-    problem: "Problem", mesh: "Mesh", workdir: str, internal_sweep: bool = False
+    problem: "Problem",
+    mesh: "Mesh",
+    workdir: str | Path,
+    internal_sweep: bool = False,
 ) -> str:
     """
     Write the GetDP ``.pro`` problem file for ``problem`` on ``mesh``.
@@ -76,7 +79,7 @@ def write_problem(
         The FEM problem definition.
     mesh : Mesh
         The generated mesh with its region maps.
-    workdir : str
+    workdir : str | Path
         Directory to write the ``.pro`` file into.
     internal_sweep : bool
         If ``True``, bake the frequency list into the Resolution so one GetDP
@@ -120,7 +123,7 @@ def write_problem(
     # Every scalar (Format Table) result is appended, not overwritten, so a full
     # sweep's per-solve rows all land in the same file (one getdp launch per
     # solve point still shares these files across the whole sweep). Callers
-    # that read these back (fem_solver.read_complex/solve_power) always take
+    # that read these back (fem_solver.read_complex) always take
     # the *last* row. fem_backend._sweep_from_meta clears stale files from any
     # previous run before a sweep starts, so rows never mix across runs.
     xs_file = "File >"
@@ -426,7 +429,6 @@ PostOperation {{
   }}
 }}
 """
-    pro_path = os.path.join(os.path.abspath(workdir), f"{problem.name}.pro")
-    with open(pro_path, "w") as fh:
-        fh.write(pro)
-    return pro_path
+    pro_path = Path(workdir).absolute() / f"{problem.name}.pro"
+    pro_path.write_text(pro)
+    return str(pro_path)

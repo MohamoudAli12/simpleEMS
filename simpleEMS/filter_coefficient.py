@@ -289,6 +289,11 @@ def bessel_value(index: int, order: int) -> float:
     -------
     float
         The normalised Bessel g-value. Returns 1.0 for index out of range.
+
+    Raises
+    ------
+    ValueError
+        If ``order`` is outside the supported range (2 to 19).
     """
     if order < 2 or order > 19:
         raise ValueError(f"Bessel filter order {order} is not supported ")
@@ -335,6 +340,12 @@ def chebyshev_value(index: int, order: int, ripple_db: float) -> float:
     -------
     float
         The normalised Chebyshev g-value. Returns 1.0 for index out of range.
+
+    Raises
+    ------
+    ValueError
+        If ``order`` is even (equal-ripple Chebyshev requires an odd order
+        for a passive realisation).
     """
     if index < 0 or index >= order:
         return 1.0
@@ -389,7 +400,9 @@ def get_filter_coefficient(
     Raises
     ------
     ValueError
-        If filter_response is not one of the supported types.
+        If ``filter_response`` is not one of the supported types, or if the
+        underlying prototype rejects ``filter_order`` (e.g. Bessel order
+        outside 2-19, or an even-order Chebyshev).
     """
     if ripple_db is None:
         ripple_db = 0.1

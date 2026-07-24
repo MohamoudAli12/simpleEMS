@@ -91,8 +91,12 @@ def reconstruct_ports(csx: ContinuousStructure) -> tuple[list[LumpedPort], float
 
     Returns
     -------
-    list[LumpedPort]
-        One ``LumpedPort`` per port number found in the structure.
+    tuple[list[LumpedPort], float]
+        ``(ports, R)`` -- one ``LumpedPort`` per port number found in the
+        structure (sorted by port number), and ``R``, the resistance (ohms)
+        of the last port processed in that order, used by the caller as the
+        reference/characteristic impedance. ``R`` is ``0.0`` if no ports
+        were found.
     """
     lumped_elements: dict[int, object] = {}
     excitations: dict[int, object] = {}
@@ -176,17 +180,15 @@ def simulate_model(
 
     Parameters
     ----------
-    structure_xml_path : str
+    structure_xml_path : str | Path
         Path to the ``structure.xml`` file exported by CSXCAD.
-    output_path : str or Path
+    output_path : str | Path
         Directory where simulation results will be written / already
         exist.
-    charac_imp : float
-        Characteristic (reference) impedance in ohms (default 50).
     num_points : int
-        Number of frequency points for post-processing (default 1000).
+        Number of frequency points for post-processing. Default ``1000``.
     run : bool
-        Whether to execute the FDTD solver (default ``True``).  Set
+        Whether to execute the FDTD solver. Default ``True``. Set
         to ``False`` to only post-process existing results.
 
     Returns
@@ -195,9 +197,15 @@ def simulate_model(
         A tuple containing:
 
         - **sim_data** (*SimData*) -- Named tuple with ``freqs``, ``s11``,
-        ``s21``, ``z11``, ``vswr``, and ``input_power``.
+          ``s21``, ``z11``, ``vswr``, and ``input_power``.
         - **sim** (*SimSetup*) -- Named tuple with ``CSX``, ``FDTD``, and ``freqs``.
-        - **charac_imp** (*float*) -- Characteristic impedance extracted from the model.
+        - **charac_imp** (*float*) -- Characteristic (reference) impedance in
+          ohms, extracted from the loaded model's lumped-port resistance.
+
+    Raises
+    ------
+    RuntimeError
+        If no ports are found in the loaded structure.
     """
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)

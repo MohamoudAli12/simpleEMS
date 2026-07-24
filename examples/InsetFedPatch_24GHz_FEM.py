@@ -4,10 +4,10 @@
 This is the same structure as ``InsetFedPatch_24GHz.py``; the only change is
 ``backend_engine="FEM"`` on the parameters. The pipeline then meshes the
 geometry with Gmsh, solves with GetDP over an adaptive rational-interpolation
-frequency sweep (``num_fem_solve_points`` full solves interpolated onto
+frequency sweep (``num_FEM_solve_points`` full solves interpolated onto
 ``num_points``), and returns the usual ``SimData`` so all plotting works.
 
-Requires the ``getdp`` binary on ``PATH`` or in ``SIMPLEEMS_GETDP_BIN``.
+Requires the ``getdp`` binary on ``PATH`` (run ``simpleems install getdp``).
 """
 
 from pathlib import Path
@@ -28,9 +28,9 @@ def simulate(output_path: Path) -> None:
         substrate_eps_r=3.48,
         substrate_tand=0.0037,
         charac_imp=50.0,
-        num_points=201,  # interpolated output points
+        # num_points=201,  # interpolated output points
         backend_engine="FEM",  # <-- the only change vs. the FDTD example
-        num_fem_solve_points=12,  # number of full FEM solves
+        num_FEM_solve_points=12,  # number of full FEM solves
     )
 
     params.patch_length_mm = 3.15
@@ -39,7 +39,7 @@ def simulate(output_path: Path) -> None:
     params.inset_width_mm = 0.475
     params.feed_width_mm = 0.275
 
-    sim = setup_simulation(params)
+    sim = setup_simulation(params, FEM_port_type="wave")
 
     patch = InsetFedPatchAntenna(params, sim)
     patch.print_and_save_params(params, output_path)
@@ -56,7 +56,9 @@ def simulate(output_path: Path) -> None:
     )
 
     patch.plot_s_param(sim_data.freqs, sim_data.s11)
-    patch.plot_smith_chart(sim_data.freqs, sim_data.s11)
+    patch.plot_smith_chart(
+        sim_data.freqs, sim_data.s11, charac_imp=sim_data.ref_impedance
+    )
     patch.plot_vswr(sim_data.freqs, sim_data.vswr)
     patch.plot_impedance(sim_data.freqs, sim_data.z11)
 

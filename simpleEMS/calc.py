@@ -51,7 +51,8 @@ def calculate_electrical_length_mm(
     frequency : float
         Frequency in Hz.
     radians : bool
-        If True, elec_length_deg_rad is already in radians.
+        If True, ``elec_length_deg_rad`` is already in radians. Default
+        ``False``.
 
     Returns
     -------
@@ -69,6 +70,88 @@ def calculate_electrical_length_mm(
     return length_m * 1e3
 
 
+def microstrip_impedance(
+    w: float,
+    h: float,
+    t: float,
+    er: float,
+    f_hz: float,
+) -> tuple[float, float]:
+    """
+    Calculate microstrip characteristic impedance and effective permittivity
+    at a given frequency using Hammerstad-Jensen equations (thickness
+    correction + frequency dispersion).
+
+    Parameters
+    ----------
+    w, h, t : float
+        Trace width, substrate height, and copper thickness, in mm.
+    er : float
+        Substrate relative permittivity.
+    f_hz : float
+        Frequency in Hz. ``f_hz <= 0`` returns the static (dispersion-free)
+        solution.
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(Z, eps_eff)`` -- characteristic impedance in ohms and effective
+        permittivity.
+    """
+    # Constants
+    eta0 = 376.730313668
+    mue0 = 4 * np.pi * 1e-7
+    h_m = mm_to_m(h)
+
+    if t == 0:
+        t = 1e-6
+
+    # 1. Thickness Correction
+    u = w / h
+    tau = t / h
+    # coth(x) = 1/tanh(x)
+    coth_term = 1.0 / np.tanh(np.sqrt(6.517 * u))
+    delta_u1 = (tau / np.pi) * np.log(1 + (4 * np.e) / (tau * (coth_term**2)))
+    delta_ur = 0.5 * delta_u1 * (1 + 1.0 / np.cosh(np.sqrt(er - 1)))
+
+    # Effective width ratio to be used in all static formulas
+    ur = u + delta_ur
+
+    # 2. Static Impedance (Air-filled Z01)
+    f_ur = 6 + (2 * np.pi - 6) * np.exp(-((30.666 / ur) ** 0.7528))
+    Z01 = (eta0 / (2 * np.pi)) * np.log((f_ur / ur) + np.sqrt(1 + (2 / ur) ** 2))
+
+    # 3. Static Effective Permittivity
+    a_u = (
+        1
+        + (1 / 49) * np.log((ur**4 + (ur / 52) ** 2) / (ur**4 + 0.432))
+        + (1 / 18.7) * np.log(1 + (ur / 18.1) ** 3)
+    )
+    b_er = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
+    er_eff_0 = (er + 1) / 2 + ((er - 1) / 2) * (1 + 10 / ur) ** (-a_u * b_er)
+
+    # 4. Static Impedance
+    Z0 = Z01 / np.sqrt(er_eff_0)
+
+    # 5. Frequency Dispersion
+    if f_hz <= 0:
+        return Z0, er_eff_0
+
+    # Transition frequency (fp) in Hz
+    fp = Z0 / (2 * mue0 * h_m)
+
+    # Dispersion factor G
+    G = (np.pi**2 / 12) * ((er - 1) / er_eff_0) * np.sqrt(2 * np.pi * Z0 / eta0)
+
+    # Frequency-dependent effective permittivity
+    er_eff_f = er - (er - er_eff_0) / (1 + G * (f_hz / fp) ** 2)
+
+    # Frequency-dependent impedance
+    Z_f = Z0 * ((er_eff_f - 1) / (er_eff_0 - 1)) * np.sqrt(er_eff_0 / er_eff_f)
+
+    return Z_f, er_eff_f
+
+
 def microstrip_width_from_impedance(
     charac_imp: float,
     subs_height: float,
@@ -78,31 +161,44 @@ def microstrip_width_from_impedance(
     tolerance: float = 0.01,
 ) -> tuple[float, float]:
     """
-    Calculates microstrip width for a target impedance including dispersion
+    Calculate microstrip width for a target impedance including dispersion
     and thickness using Hammerstad-Jensen equations.
+
+    Solves for the width by binary search over ``microstrip_impedance``,
+    so it inherits that function's thickness correction and (when
+    ``freq_hz > 0``) frequency dispersion.
 
     Parameters
     ----------
-
-    charac_imp: float
-        The required characteristic impedance of the microstrip line
-    subs_height: float
-        The height of the substrate
-    copper_thickness: float
-        The thickness of the copper trace
-    subst_eps_r: float
+    charac_imp : float
+        Required characteristic impedance of the microstrip line, in ohms.
+    subs_height : float
+        Height of the substrate, in mm.
+    copper_thickness : float
+        Thickness of the copper trace, in mm.
+    subst_eps_r : float
         Dielectric constant of the substrate material.
-    freq_hz: float
-        Frequency in Hz
-    tolerance: float
-        Maximum deviation allowed for calculated characteristic impedance
+    freq_hz : float
+        Frequency in Hz. ``freq_hz <= 0`` uses the static (dispersion-free)
+        solution.
+    tolerance : float
+        Maximum allowed deviation, in ohms, between the calculated
+        impedance and ``charac_imp`` before the binary search stops.
+        Default ``0.01``.
 
     Returns
     -------
-    width: float
-        Width of trace for given characteristic impedance in mm.
-    er_eff: float
+    width : float
+        Width of trace for the given characteristic impedance, in mm.
+    er_eff : float
         Effective dielectric constant at the given frequency.
+
+    Raises
+    ------
+    ValueError
+        If ``charac_imp`` is not achievable on this substrate, i.e. it
+        falls outside the impedance range spanned by trace widths from
+        0.001 mm to 100 mm.
 
     Notes
     -----
@@ -110,74 +206,11 @@ def microstrip_width_from_impedance(
     `<https://qucs.github.io/docs/technical/technical.pdf>`_.
     `<https://ieeexplore.ieee.org/document/1124303>`_.
     """
-
-    def get_Z_at_freq(
-        w: float,
-        h: float,
-        t: float,
-        er: float,
-        f_hz: float,
-    ) -> tuple[float, float]:
-        """Calculate microstrip characteristic impedance at a given
-        frequency using Hammerstad-Jensen equations."""
-        # Constants
-        eta0 = 376.730313668
-        mue0 = 4 * np.pi * 1e-7
-        h_m = mm_to_m(h)
-
-        if t == 0:
-            t = 1e-6
-
-        # 1. Thickness Correction
-        u = w / h
-        tau = t / h
-        # coth(x) = 1/tanh(x)
-        coth_term = 1.0 / np.tanh(np.sqrt(6.517 * u))
-        delta_u1 = (tau / np.pi) * np.log(1 + (4 * np.e) / (tau * (coth_term**2)))
-        delta_ur = 0.5 * delta_u1 * (1 + 1.0 / np.cosh(np.sqrt(er - 1)))
-
-        # Effective width ratio to be used in all static formulas
-        ur = u + delta_ur
-
-        # 2. Static Impedance (Air-filled Z01)
-        f_ur = 6 + (2 * np.pi - 6) * np.exp(-((30.666 / ur) ** 0.7528))
-        Z01 = (eta0 / (2 * np.pi)) * np.log((f_ur / ur) + np.sqrt(1 + (2 / ur) ** 2))
-
-        # 3. Static Effective Permittivity
-        a_u = (
-            1
-            + (1 / 49) * np.log((ur**4 + (ur / 52) ** 2) / (ur**4 + 0.432))
-            + (1 / 18.7) * np.log(1 + (ur / 18.1) ** 3)
-        )
-        b_er = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
-        er_eff_0 = (er + 1) / 2 + ((er - 1) / 2) * (1 + 10 / ur) ** (-a_u * b_er)
-
-        # 4. Static Impedance
-        Z0 = Z01 / np.sqrt(er_eff_0)
-
-        # 5. Frequency Dispersion
-        if f_hz <= 0:
-            return Z0
-
-        # Transition frequency (fp) in Hz
-        fp = Z0 / (2 * mue0 * h_m)
-
-        # Dispersion factor G
-        G = (np.pi**2 / 12) * ((er - 1) / er_eff_0) * np.sqrt(2 * np.pi * Z0 / eta0)
-
-        # Frequency-dependent effective permittivity
-        er_eff_f = er - (er - er_eff_0) / (1 + G * (f_hz / fp) ** 2)
-
-        # Frequency-dependent impedance
-        Z_f = Z0 * ((er_eff_f - 1) / (er_eff_0 - 1)) * np.sqrt(er_eff_0 / er_eff_f)
-
-        return Z_f, er_eff_f
-
     # --- Convergence check ---
-    Z_thinnest, _ = get_Z_at_freq(
+    Z_thinnest, _ = microstrip_impedance(
         0.001, subs_height, copper_thickness, subst_eps_r, freq_hz
     )
-    Z_widest, _ = get_Z_at_freq(
+    Z_widest, _ = microstrip_impedance(
         100, subs_height, copper_thickness, subst_eps_r, freq_hz
     )
     Z_min = min(Z_thinnest, Z_widest)
@@ -193,7 +226,7 @@ def microstrip_width_from_impedance(
     mid_w = 0.0
     for _ in range(100):
         mid_w = (low + high) / 2
-        Z_curr, _ = get_Z_at_freq(
+        Z_curr, _ = microstrip_impedance(
             mid_w, subs_height, copper_thickness, subst_eps_r, freq_hz
         )
 
@@ -203,7 +236,7 @@ def microstrip_width_from_impedance(
             low = mid_w
         else:
             high = mid_w
-    _, er_eff = get_Z_at_freq(
+    _, er_eff = microstrip_impedance(
         mid_w, subs_height, copper_thickness, subst_eps_r, freq_hz
     )
 
@@ -212,20 +245,20 @@ def microstrip_width_from_impedance(
 
 def conductance_G1(patch_width: float, frequency: float) -> float:
     """
-    Computes the conductance of patch antenna.
+    Compute the radiation conductance of a single radiating slot of a
+    rectangular patch antenna.
 
     Parameters
     ----------
-
-    patch_width: float
-        width of patch antenna in meters
-    frequency: float
-        frequency in Hz
+    patch_width : float
+        Width of the patch antenna, in meters.
+    frequency : float
+        Frequency in Hz.
 
     Returns
     -------
-    conductance_G1: float
-        conductance of patch antenna
+    float
+        Radiation conductance of one slot, in siemens.
 
     Notes
     -----
@@ -254,31 +287,42 @@ def inset_depth(
     frequency: float,
 ) -> tuple[float, float]:
     """
-    Compute the inset feed depth of an inset fed patch antenna
-    and probe position of probe fed patch antenna.
+    Compute the inset feed depth of an inset-fed patch antenna, which
+    doubles as the probe position of a probe-fed patch antenna.
 
     Parameters
     ----------
-    charac_imp: float
-        characteristic impedance of the antenna.
-    patch_width: float
-        patch antenna width in meters.
-    patch_length: float
-        patch antenna length in meters.
-    frequency: float
-        frequency in Hz.
+    charac_imp : float
+        Characteristic impedance of the feed line, in ohms. The desired
+        input resistance at the feed point.
+    patch_width : float
+        Patch antenna width, in meters.
+    patch_length : float
+        Patch antenna length, in meters.
+    frequency : float
+        Frequency in Hz.
 
     Returns
     -------
-    inset_length: float
-        inset length in meters
-    probe_pos: float
-        probe position in meters. note that probe position is in Y direction and X is 0.
+    inset_length : float
+        Inset depth, in meters, measured inward from the radiating edge
+        along the patch length.
+    probe_pos : float
+        Feed position, in meters, numerically identical to
+        ``inset_length``. Note that this is the coordinate along the
+        patch's Y (length) direction; the feed is assumed centered at
+        X = 0.
+
+    Raises
+    ------
+    ValueError
+        If ``charac_imp`` is greater than the edge resistance
+        ``1 / (2 * G1)``, since the inset feed can only transform the
+        edge resistance down, never up.
 
     Notes
     -----
     Refer to Balanis formula 14-20a
-
     """
 
     G1 = conductance_G1(patch_width, frequency)
@@ -327,33 +371,36 @@ def patch_dims(
     """
     Calculate rectangular microstrip patch dimensions.
 
+    Combines the patch width/length formulas with :func:`inset_depth` and
+    :func:`microstrip_width_from_impedance` to size an inset- or probe-fed
+    rectangular patch antenna in one call.
+
     Parameters
     ----------
-    frequency_hz: float
-        resonant frequency of antenna in Hz.
-    subst_eps_r: float
+    frequency_hz : float
+        Resonant frequency of the antenna, in Hz.
+    subst_eps_r : float
         Dielectric constant of the substrate.
-    subst_height: float
-        Thickness of the substrate.
-    charac_imp: float
-        characteristic impedance of the feed line.
-    copper_thickness: float
-         Thickness of the copper trace.
+    subst_height : float
+        Thickness of the substrate, in meters.
+    charac_imp : float
+        Characteristic impedance of the feed line, in ohms.
+    copper_thickness : float
+        Thickness of the copper trace, in mm.
 
     Returns
     -------
     PatchDims
-        a named tuple with the following attributes.
-            patch_width_mm: float
-                Width of the patch antenna in direction of x in mm.
-            patch_length_mm: float
-                Length of the patch antenna in direction of y in mm
-            inset_length_mm: float
-                Inset length of the patch in direction of y in mm
-            inset_width_mm: float
-                Inset width of the patch in the direction of x in mm
-            probe_pos_mm: float
-                The feed position of probe fed patch antenna in direction of y in mm
+        Named tuple with the computed patch geometry, in mm; see
+        :class:`PatchDims` for field descriptions.
+
+    Raises
+    ------
+    ValueError
+        If ``charac_imp`` exceeds the patch edge resistance (propagated
+        from :func:`inset_depth`) or is not realizable as an inset-line
+        width on this substrate (propagated from
+        :func:`microstrip_width_from_impedance`).
     """
 
     patch_width = C0 / (2 * frequency_hz) * np.sqrt(2 / (subst_eps_r + 1))
