@@ -36,6 +36,13 @@ _NAMES_BY_MODULE = {
         "BandPassQuarterWaveFilter",
     ],
     "standalone_model": ["simulate_model"],
+    "fem_backend": [
+        "simulate_step_FEM",
+        "Problem",
+        "SolidSpec",
+        "PortSpec",
+    ],
+    "fem_materials": ["FEMOptions"],
     "sim_tools": [
         "DumpType",
         "SimTools",
@@ -55,6 +62,30 @@ for _module_name, _names in _NAMES_BY_MODULE.items():
 
 
 def __getattr__(name: str) -> object:
+    """
+    Lazily import and return a public attribute on first access.
+
+    Implements :pep:`562` module-level lazy loading: importing
+    ``simpleEMS`` itself stays cheap, and each name in ``__all__`` is only
+    imported from its owning submodule (see ``_NAMES_BY_MODULE``) the first
+    time it is accessed, e.g. via ``simpleEMS.MicrostripLine``.
+
+    Parameters
+    ----------
+    name : str
+        Attribute name being looked up on the ``simpleEMS`` package.
+
+    Returns
+    -------
+    object
+        The resolved attribute, which is also cached in the module's
+        namespace so subsequent lookups skip this function.
+
+    Raises
+    ------
+    AttributeError
+        If ``name`` is not one of the names in ``__all__``.
+    """
     module_name = _NAME_TO_MODULE.get(name)
     if module_name is not None:
         module = importlib.import_module(f".{module_name}", __package__)
@@ -82,6 +113,11 @@ __all__ = [
     "optimize_s_params",
     "param_sweep",
     "simulate_model",
+    "simulate_step_FEM",
+    "Problem",
+    "SolidSpec",
+    "PortSpec",
+    "FEMOptions",
 ]
 
 __version__ = "0.1.0"

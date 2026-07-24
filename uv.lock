@@ -781,6 +781,17 @@ wheels = [
 ]
 
 [[package]]
+name = "gmsh"
+version = "4.14.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/2f/14608c26f5f31f60530f1567fe5f6135043dd995ced1fd615842f66eb592/gmsh-4.14.1-py2.py3-none-macosx_10_15_x86_64.whl", hash = "sha256:a72525daa895d9dbbf5ef6eb327ef8d5da3c02c5917670216894abb1d95754d3", size = 40126477, upload-time = "2025-09-02T10:42:25.595Z" },
+    { url = "https://files.pythonhosted.org/packages/21/37/a7475d63228d44b64d504b8797b1d65c38690cf5f3d7f32d0759f39ccc05/gmsh-4.14.1-py2.py3-none-macosx_12_0_arm64.whl", hash = "sha256:6bc231b100f561097e89ba075d8ceef082873d407756192011c480305f77140d", size = 36377508, upload-time = "2025-09-02T10:42:29.694Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/81/21caeeb0992d15fcc362577fd027ee7f89a4160c2bb711bec58e188bf4ef/gmsh-4.14.1-py2.py3-none-manylinux_2_24_x86_64.whl", hash = "sha256:95b3e40b38e97db6424a602ac016a9db90012b2134c336b919b4fe2e31c65e4e", size = 39963391, upload-time = "2025-09-02T10:42:33.172Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/af/c08d2073b9c0825ad6c05371ca4f2777550490674c16eba82da4bc0a6ca5/gmsh-4.14.1-py2.py3-none-win_amd64.whl", hash = "sha256:0ef4c2fe022862e88800fcc50ff175e5998a781ed979382dc8500d5c284d9a38", size = 42181447, upload-time = "2025-09-02T10:42:37.119Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2468,6 +2479,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cadquery" },
+    { name = "gmsh" },
     { name = "h5py" },
     { name = "matplotlib" },
     { name = "mplcursors" },
@@ -2499,6 +2511,7 @@ dev = [
 requires-dist = [
     { name = "bump-my-version", marker = "extra == 'dev'", specifier = "==1.4.1" },
     { name = "cadquery", specifier = "==2.8.0" },
+    { name = "gmsh", specifier = "==4.14.1" },
     { name = "h5py", specifier = "==3.15.1" },
     { name = "matplotlib", specifier = "==3.10.8" },
     { name = "mplcursors", specifier = "==0.7" },

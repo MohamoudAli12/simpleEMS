@@ -13,6 +13,8 @@ select = [
 ]
 ignore = []
 
-exclude = ["simpleEMS/cli.py"]
+# fem_formulation.py emits a GetDP .pro template with intentionally long
+# embedded DSL lines that cannot be wrapped without breaking the syntax.
+exclude = ["simpleEMS/cli.py", "simpleEMS/fem_formulation.py"]
 [format]
 quote-style = "double"
