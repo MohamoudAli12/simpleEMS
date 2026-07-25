@@ -78,18 +78,18 @@ class SolidSpec:
     name : str
         Solid name (matches the CSXCAD property name / STEP product name).
     role : str
-        One of ``"dielectric"``, ``"pec"``, ``"impedance"``, ``"port"``, or
+        One of ``"dielectric"``, ``"pec"``, ``"lossy_conductor"``, ``"port"``, or
         ``"ignore"`` (excluded from the EM problem). Default ``"ignore"``.
     dielectric : Dielectric | None
         Material properties, set when ``role == "dielectric"``. Default ``None``.
     sigma : float
-        Conductivity in S/m, used when ``role == "impedance"``. Default ``0.0``.
+        Conductivity in S/m, used when ``role == "lossy_conductor"``. Default ``0.0``.
     """
 
     name: str
-    role: str = "ignore"  # 'dielectric' | 'pec' | 'impedance' | 'port' | 'ignore'
+    role: str = "ignore"  # 'dielectric' | 'pec' | 'lossy_conductor' | 'port' | 'ignore'
     dielectric: Dielectric | None = None
-    sigma: float = 0.0  # conductivity [S/m] for role == 'impedance'
+    sigma: float = 0.0  # conductivity [S/m] for role == 'lossy_conductor'
 
 
 @dataclass
@@ -219,7 +219,7 @@ def _csx_roles(
     tuple[dict, dict, dict, dict]
         ``(role_by_name, dielectric_by_name, port_by_name, sigma_by_name)``:
         ``role_by_name`` maps a property name to its role string (``"pec"``,
-        ``"dielectric"``, ``"impedance"``, or ``"port"``); ``dielectric_by_name``
+        ``"dielectric"``, ``"lossy_conductor"``, or ``"port"``); ``dielectric_by_name``
         maps a dielectric property's name to its
         :class:`~simpleEMS.fem_materials.Dielectric`;
         ``port_by_name`` maps a port property's name to ``(z0, direction, number)``;
@@ -243,7 +243,7 @@ def _csx_roles(
         elif type_string == "ConductingSheet":
             # A conducting sheet is a lossy conductor: its finite conductivity
             # becomes a surface-impedance (Leontovich) boundary in the .pro.
-            role_by_name[name] = "impedance"
+            role_by_name[name] = "lossy_conductor"
             sigma_by_name[name] = float(prop.GetConductivity())
         elif type_string == "Material":
             eps_r = float(prop.GetMaterialProperty("epsilon"))
@@ -712,7 +712,7 @@ def _problem_from_step(
     freqs: NDArray,
     dielectrics: dict | None,
     pec: list | None,
-    impedance: dict | None,
+    lossy_conductor: dict | None,
     ports: dict | None,
     charac_imp: float,
     FEM_options: FEMOptions | None,
@@ -722,7 +722,7 @@ def _problem_from_step(
     freqs = np.asarray(freqs, dtype=float)
     dielectrics = dielectrics or {}
     pec_names = set(pec or [])
-    impedance = impedance or {}
+    lossy_conductor = lossy_conductor or {}
     ports = ports or {}
 
     prob = Problem(step_file=step_file, name="structure", freqs=freqs)
@@ -736,9 +736,9 @@ def _problem_from_step(
                 role="dielectric",
                 dielectric=Dielectric(eps_r=eps_r, tan_d=tan_d),
             )
-        elif name in impedance:
+        elif name in lossy_conductor:
             prob.solids[name] = SolidSpec(
-                name=name, role="impedance", sigma=float(impedance[name])
+                name=name, role="lossy_conductor", sigma=float(lossy_conductor[name])
             )
         elif name in pec_names:
             prob.solids[name] = SolidSpec(name=name, role="pec")
@@ -776,7 +776,7 @@ def simulate_step_FEM(
     unit: str = "mm",
     dielectrics: dict | None = None,
     pec: list | None = None,
-    impedance: dict | None = None,
+    lossy_conductor: dict | None = None,
     ports: dict | None = None,
     num_solve_points: int = 10,
     FEM_options: FEMOptions | None = None,
@@ -806,7 +806,7 @@ def simulate_step_FEM(
         ``{solid_name: (eps_r, tan_d)}`` overrides for dielectric solids.
     pec : list | None
         Solid names to force to perfect electric conductors.
-    impedance : dict | None
+    lossy_conductor : dict | None
         ``{solid_name: sigma}`` lossy (surface-impedance) conductors.
     ports : dict | None
         ``{solid_name: {"z0": ..., "direction": "x|y|z", "number": ...}}``.
@@ -846,7 +846,14 @@ def simulate_step_FEM(
     freqs = np.asarray(freqs, dtype=float)
 
     prob = _problem_from_step(
-        step_file, freqs, dielectrics, pec, impedance, ports, charac_imp, FEM_options
+        step_file,
+        freqs,
+        dielectrics,
+        pec,
+        lossy_conductor,
+        ports,
+        charac_imp,
+        FEM_options,
     )
     if not prob.ports:
         raise RuntimeError(

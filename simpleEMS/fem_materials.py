@@ -58,7 +58,7 @@ SIGMA_CU = 5.8e7  # S/m
 AIR = 200
 PML = 210  # single PML shell (position-based damping handles x/y/z and corners)
 PEC = 300
-IMPEDANCE = 350  # lossy conductor (surface-impedance boundary)
+LOSSY_CONDUCTOR = 350  # lossy conductor (surface-impedance boundary)
 ABC = 500  # outer Silver-Muller / SigmaInf surface
 SYM = 600  # symmetry plane (PEC electric wall, or PMC natural)
 

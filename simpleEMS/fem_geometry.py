@@ -48,7 +48,7 @@ from .fem_materials import (
     ABC,
     AIR,
     C0,
-    IMPEDANCE,
+    LOSSY_CONDUCTOR,
     PEC,
     PML,
     SYM,
@@ -367,7 +367,7 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
         short = _short_name(gmsh.model.getEntityName(dim, tag))
         spec = problem.solids.get(short)
         role = spec.role if spec else "ignore"
-        if role in ("pec", "impedance", "port"):
+        if role in ("pec", "lossy_conductor", "port"):
             face = _footprint_face(tag, diel_bbox)
             cp = gmsh.model.occ.copy([(2, face)])
             face_tag = cp[0][1]
@@ -546,7 +546,7 @@ def _collect_faces(
     """
     existing_faces = {t for _, t in gmsh.model.getEntities(2)}
     pec_faces: set[int] = set()
-    conductor_faces_by_name: dict[str, set[int]] = {}  # pec + impedance
+    conductor_faces_by_name: dict[str, set[int]] = {}  # pec + lossy_conductor
     imped_faces_by_sigma: dict[float, set[int]] = {}  # lossy conductors by sigma
     port_faces_by_name: dict[str, set[int]] = {}
     for (role, name, _f), faces in zip(sheets, sheet_faces, strict=True):
@@ -554,7 +554,7 @@ def _collect_faces(
         if role == "pec":
             pec_faces |= faces
             conductor_faces_by_name.setdefault(name, set()).update(faces)
-        elif role == "impedance":
+        elif role == "lossy_conductor":
             sig = problem.solids[name].sigma
             imped_faces_by_sigma.setdefault(sig, set()).update(faces)
             conductor_faces_by_name.setdefault(name, set()).update(faces)
@@ -671,7 +671,7 @@ def _assign_physical_groups(
 
     impedance_regions = []  # [(region_id, sigma), ...]
     for i, (sig, fs) in enumerate(sorted(faces.imped_by_sigma.items())):
-        rid = IMPEDANCE + i
+        rid = LOSSY_CONDUCTOR + i
         gmsh.model.addPhysicalGroup(2, sorted(fs), rid)
         gmsh.model.setPhysicalName(2, rid, f"impedance_{i}")
         impedance_regions.append((rid, sig))
