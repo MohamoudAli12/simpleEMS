@@ -15,3 +15,6 @@ ref_material/*
 examples/*/
 docs/source/CHANGELOG.md
 docs/source/CONTRIBUTING.md
+
+# LSP config (local only)
+pyrightconfig.json
