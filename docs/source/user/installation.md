@@ -16,7 +16,7 @@ pip install simpleEMS
 
 ## 2. Install openEMS & CSXCAD
 
-simpleEMS needs openEMS and CSXCAD to run simulations. Since these are not
+simpleEMS needs openEMS and CSXCAD to run FDTD simulations, and GetDP to run FEM simulation. Since these are not
 available on PyPI, you need to install them separately.
 
 ### Option A: Using the CLI (recommended)
@@ -87,16 +87,71 @@ source ~/.bashrc
    - `OPENEMS_INSTALL_PATH=C:\openEMS`
    - `CSXCAD_INSTALL_PATH=C:\openEMS`
 
-## 3. Verify Installation
+## 3. Install GetDP
+
+simpleEMS needs the `getdp` binary to run FEM simulations (the FDTD path via
+openEMS/CSXCAD above works without it). GetDP only needs to be on your
+`PATH` — no extra environment variables are required.
+
+### Option A: Using the CLI (recommended)
+
+```bash
+simpleems install getdp
+```
+
+**What it does:** downloads the pinned "c" build (PETSc+MUMPS, required by
+simpleEMS's direct MUMPS solve) for your OS/architecture from
+[getdp.info](https://getdp.info), extracts it to `~/opt/getdp`
+(`C:\getdp` on Windows), and adds its `bin` directory to `PATH` (persisted to
+your shell rc file, or the user registry on Windows).
+
+Useful options:
+
+```bash
+simpleems install getdp --version git     # rolling dev build instead of the pinned stable release
+simpleems install getdp --prefix ~/tools/getdp  # custom install directory
+simpleems install getdp --dry-run         # preview actions without downloading/extracting
+simpleems install getdp --force           # reinstall even if getdp is already on PATH
+```
+
+Prebuilt archives are only available for Linux x86_64, macOS (x86_64/arm64),
+and Windows x86_64. On any other platform, use the manual option below.
+
+### Option B: Manual
+
+1. Download the archive for your platform from
+   [getdp.info](https://getdp.info/bin) — for the FEM backend's direct MUMPS
+   solve, pick a `...c.tgz`/`...c.zip` build (the PETSc+MUMPS variant), not a
+   plain build. If no prebuilt archive exists for your platform, build from
+   source: [gitlab.onelab.info/getdp/getdp](https://gitlab.onelab.info/getdp/getdp).
+2. Extract it, e.g. to `~/opt/getdp` (or `C:\getdp` on Windows).
+3. Add the extracted `bin` directory (containing the `getdp` / `getdp.exe`
+   binary) to your `PATH`:
+
+   ```bash
+   echo 'export PATH="$HOME/opt/getdp/bin:$PATH"' >> ~/.bashrc
+   source ~/.bashrc
+   ```
+
+   On Windows, add the folder containing `getdp.exe` to your system or user
+   PATH via System Properties → Environment Variables.
+4. Verify it resolves:
+
+   ```bash
+   getdp --version
+   ```
+
+## 4. Verify Installation
 
 ```bash
 simpleems checkhealth
 ```
 
 This checks: Python version, all pip dependencies, openEMS and CSXCAD Python
-APIs, AppCSXCAD binary, and the openEMS solver binary.
+APIs, AppCSXCAD binary, the openEMS solver binary, and the getdp solver
+binary (FEM backend).
 
-## 4. Optional: Development Dependencies
+## 5. Optional: Development Dependencies
 
 If you plan to contribute to simpleEMS or build the documentation locally,
 install the optional dev dependencies:
