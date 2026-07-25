@@ -15,7 +15,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-FEM (Gmsh + GetDP) backend glue for the simpleEMS pipeline.
+FEM backend for the simpleEMS pipeline.
 
 Bridges a CSXCAD geometry to the finite-element solver: maps CSX properties to
 material/PEC/port roles, meshes the structure, drives the adaptive
@@ -23,11 +23,6 @@ rational-interpolation frequency sweep, and returns results as the standard
 :class:`~simpleEMS.sim_tools.SimData` named tuple so existing plotting and
 export utilities work unchanged.
 
-The three public functions mirror the FDTD pipeline stages:
-
-- :func:`build_mesh`      -- CSX -> STEP -> tagged ``.msh`` + GetDP ``.pro``.
-- :func:`run_sweep`       -- adaptive GetDP sweep -> interpolated S-parameters.
-- :func:`compute_sim_data` -- read the sweep results into ``SimData``.
 """
 
 from __future__ import annotations
@@ -48,11 +43,12 @@ from CSXCAD import ContinuousStructure
 from . import fem_formulation, fem_geometry, fem_solver, fem_sweep
 from .console import console
 from .export_step import export_step
-from .fem_materials import EPS0, Dielectric, FEMOptions, guess_role
+from .fem_materials import EPS0, Dielectric, guess_role
 
 if TYPE_CHECKING:
     from .sim_tools import SimData
 
+__all__ = ["simulate_step_FEM", "FEMOptions"]
 
 # The three public functions run in the same order as the FDTD pipeline and,
 # like it, hand state between stages through FILES in the output directory
@@ -66,6 +62,69 @@ if TYPE_CHECKING:
 _AXIS_TO_DIR = {0: "x", 1: "y", 2: "z"}
 _MESH_META = "fem_mesh.json"
 _SPARAMS = "fem_sparams.npz"
+
+
+@dataclass
+class FEMOptions:
+    """
+    Global FEM solver/mesh options, forwarded to the GetDP problem.
+
+    Bundles the ``Problem``-level knobs so the simpleEMS entry can carry them
+    without threading many arguments. ``None``/defaults reproduce today's
+    behaviour.
+
+    Parameters
+    ----------
+    boundary : str
+        Outer truncation: ``"silver_muller"`` (default) or ``"pml"``.
+    symmetry : tuple | None
+        Optional mirror-symmetry plane ``(axis, kind, at)`` with ``axis`` in
+        ``x/y/z``, ``kind`` in ``pec/pmc``, ``at`` the plane coordinate (m) or
+        ``None`` for the structure centre. Halves the mesh.
+    fe_order : int
+        Nedelec edge-element order: ``1`` (default) or ``2``.
+    air_pad_frac : float
+        Air padding as a fraction of the longest wavelength. Default ``0.2``.
+    elems_per_wavelength : float
+        Target coarse mesh density in open air. Default ``8.0``.
+    mesh_fine_scale : float
+        Multiplier on the near-conductor element size. Default ``1.0``.
+    min_layers : int
+        Element layers through the dielectric thickness. Default ``3``.
+    port_type : str
+        ``"lumped"`` (impedance z0, default) or ``"wave"`` (matched to the line
+        characteristic impedance) for all ports.
+    """
+
+    boundary: str = "silver_muller"
+    symmetry: tuple | None = None
+    fe_order: int = 1
+    air_pad_frac: float = 0.2
+    elems_per_wavelength: float = 8.0
+    mesh_fine_scale: float = 1.0
+    min_layers: int = 3
+    port_type: str = "lumped"
+
+    def __post_init__(self) -> None:
+        """
+        Validate the option choices.
+
+        Raises
+        ------
+        ValueError
+            If ``boundary``, ``fe_order``, or ``port_type`` is not one of the
+            supported choices.
+        """
+        if self.boundary not in ("silver_muller", "pml"):
+            raise ValueError(
+                f"boundary must be 'silver_muller' or 'pml', got {self.boundary!r}"
+            )
+        if self.fe_order not in (1, 2):
+            raise ValueError(f"fe_order must be 1 or 2, got {self.fe_order}")
+        if self.port_type not in ("lumped", "wave"):
+            raise ValueError(
+                f"port_type must be 'lumped' or 'wave', got {self.port_type!r}"
+            )
 
 
 @dataclass
@@ -145,8 +204,7 @@ class Problem:
         Nedelec edge-element order: ``1`` (default) or ``2``.
     symmetry : tuple | None
         Optional mirror-symmetry plane ``(axis, kind, at)`` -- see
-        :class:`~simpleEMS.fem_materials.FEMOptions`. ``None`` (default) means
-        no symmetry is applied.
+        :class:`FEMOptions`. ``None`` (default) means no symmetry is applied.
     air_pad_frac : float
         Air padding as a fraction of the longest free-space wavelength.
         Default ``0.2``.

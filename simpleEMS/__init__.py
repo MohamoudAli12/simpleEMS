@@ -36,8 +36,8 @@ _NAMES_BY_MODULE = {
         "BandPassQuarterWaveFilter",
     ],
     "standalone_model": ["simulate_model"],
-    "fem_backend": ["simulate_step_FEM"],
-    "fem_materials": ["FEMOptions"],
+    "fem_backend": ["simulate_step_FEM", "FEMOptions"],
+    "fem_radiation": ["FEMNF2FF"],
     "sim_tools": [
         "DumpType",
         "SimTools",
@@ -110,6 +110,7 @@ __all__ = [
     "simulate_model",
     "simulate_step_FEM",
     "FEMOptions",
+    "FEMNF2FF",
 ]
 
 __version__ = "0.1.0"

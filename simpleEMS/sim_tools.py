@@ -63,7 +63,7 @@ from openEMS.nf2ff import nf2ff_results
 from .console import console
 from .export_gerber import export_gerber
 from .export_step import export_step, export_csxcad_xml_to_step
-from .fem_materials import FEMOptions
+from .fem_backend import FEMOptions
 from .sim_params import SimParams
 
 # ----------------------------
@@ -236,7 +236,7 @@ def setup_simulation(
     Creates the ``ContinuousStructure`` and ``openEMS`` objects, applies the
     boundary conditions and Gaussian excitation derived from
     ``params.freq_range``, and (for the FEM backend) bundles the mesh/solver
-    tuning options into a :class:`~simpleEMS.fem_materials.FEMOptions`
+    tuning options into a :class:`~simpleEMS.fem_backend.FEMOptions`
     instance. The returned :class:`SimSetup` is passed to most other
     ``SimTools`` methods.
 
@@ -256,7 +256,7 @@ def setup_simulation(
     FEM_symmetry : tuple, optional
         FEM backend only. Mirror-symmetry plane ``(axis, kind, at)`` used to
         halve the mesh. ``None`` (default) disables symmetry. See
-        :class:`~simpleEMS.fem_materials.FEMOptions`.
+        :class:`~simpleEMS.fem_backend.FEMOptions`.
     FEM_fe_order : int, optional
         FEM backend only. Nedelec edge-element order: ``1`` (default) or
         ``2``.

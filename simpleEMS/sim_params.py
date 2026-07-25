@@ -85,7 +85,7 @@ class SimParams:
 
         Finer FEM mesh/solver tuning (boundary condition, symmetry, element
         order, port type, ...) is not part of this class -- pass a
-        :class:`~simpleEMS.fem_materials.FEMOptions` instance to
+        :class:`~simpleEMS.fem_backend.FEMOptions` instance to
         :func:`~simpleEMS.sim_tools.setup_simulation` instead.
     fp_precision : int, optional
         Floating-point precision used when generating geometric values.

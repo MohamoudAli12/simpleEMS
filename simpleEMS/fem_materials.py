@@ -41,8 +41,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["FEMOptions"]
-
 EPS0 = 8.8541878128e-12  # F/m
 MU0 = 1.25663706212e-6  # H/m
 C0 = 299792458.0  # m/s
@@ -100,69 +98,6 @@ class Dielectric:
             ``eps_r * (1 - 1j * tan_d)``.
         """
         return self.eps_r * (1.0 - 1j * self.tan_d)
-
-
-@dataclass
-class FEMOptions:
-    """
-    Global FEM solver/mesh options, forwarded to the GetDP problem.
-
-    Bundles the ``Problem``-level knobs so the simpleEMS entry can carry them
-    without threading many arguments. ``None``/defaults reproduce today's
-    behaviour.
-
-    Parameters
-    ----------
-    boundary : str
-        Outer truncation: ``"silver_muller"`` (default) or ``"pml"``.
-    symmetry : tuple | None
-        Optional mirror-symmetry plane ``(axis, kind, at)`` with ``axis`` in
-        ``x/y/z``, ``kind`` in ``pec/pmc``, ``at`` the plane coordinate (m) or
-        ``None`` for the structure centre. Halves the mesh.
-    fe_order : int
-        Nedelec edge-element order: ``1`` (default) or ``2``.
-    air_pad_frac : float
-        Air padding as a fraction of the longest wavelength. Default ``0.2``.
-    elems_per_wavelength : float
-        Target coarse mesh density in open air. Default ``8.0``.
-    mesh_fine_scale : float
-        Multiplier on the near-conductor element size. Default ``1.0``.
-    min_layers : int
-        Element layers through the dielectric thickness. Default ``3``.
-    port_type : str
-        ``"lumped"`` (impedance z0, default) or ``"wave"`` (matched to the line
-        characteristic impedance) for all ports.
-    """
-
-    boundary: str = "silver_muller"
-    symmetry: tuple | None = None
-    fe_order: int = 1
-    air_pad_frac: float = 0.2
-    elems_per_wavelength: float = 8.0
-    mesh_fine_scale: float = 1.0
-    min_layers: int = 3
-    port_type: str = "lumped"
-
-    def __post_init__(self) -> None:
-        """
-        Validate the option choices.
-
-        Raises
-        ------
-        ValueError
-            If ``boundary``, ``fe_order``, or ``port_type`` is not one of the
-            supported choices.
-        """
-        if self.boundary not in ("silver_muller", "pml"):
-            raise ValueError(
-                f"boundary must be 'silver_muller' or 'pml', got {self.boundary!r}"
-            )
-        if self.fe_order not in (1, 2):
-            raise ValueError(f"fe_order must be 1 or 2, got {self.fe_order}")
-        if self.port_type not in ("lumped", "wave"):
-            raise ValueError(
-                f"port_type must be 'lumped' or 'wave', got {self.port_type!r}"
-            )
 
 
 # Substring -> role, applied to lowercased solid names for auto-detection.
