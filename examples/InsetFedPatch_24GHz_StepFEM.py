@@ -14,10 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from simpleEMS import FEMOptions, SimTools, simulate_step_FEM
-from simpleEMS.fem_radiation import FEMNF2FF
+from simpleEMS import FEMNF2FF, FEMOptions, SimTools, simulate_step_FEM
 
-STEP_FILE = Path(__file__).parent / "InsetFedPatch_24GHz" / "step" / "structure.step"
+STEP_FILE = Path(__file__).cwd() / "structure.step"
 
 
 def simulate(output_path: Path) -> None:
@@ -32,7 +31,7 @@ def simulate(output_path: Path) -> None:
     freqs = np.linspace(resonant_freq - span_freq, resonant_freq + span_freq, 201)
 
     sim_data = simulate_step_FEM(
-        str(STEP_FILE),
+        STEP_FILE,
         freqs,
         dielectrics={"substrate": (3.48, 0.0037)},  # (eps_r, tan_d)
         pec=["patch_inset", "feed", "ground"],
