@@ -9,7 +9,7 @@
 project = "simpleEMS"
 copyright = "%Y, Mohamoud Ali"
 author = "Mohamoud Ali"
-release = "0.1.0"
+release = "0.2.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
