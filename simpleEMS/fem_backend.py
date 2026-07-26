@@ -525,31 +525,6 @@ def build_mesh(
     return _mesh_problem(prob, output_path, verbose)
 
 
-def existing_mesh_path(output_path: str | Path) -> str | None:
-    """
-    Return the ``.msh`` path from a previous :func:`build_mesh` call in
-    ``output_path``, if one is still there.
-
-    Lets callers (e.g. re-showing the structure) reuse a mesh instead of
-    re-exporting STEP and re-meshing on every call.
-
-    Parameters
-    ----------
-    output_path : str | Path
-        Directory previously passed to :func:`build_mesh`.
-
-    Returns
-    -------
-    str | None
-        The ``.msh`` path, or ``None`` if no mesh metadata/file is found.
-    """
-    meta_file = Path(output_path) / _MESH_META
-    if not meta_file.exists():
-        return None
-    msh_path = json.loads(meta_file.read_text())["msh_path"]
-    return msh_path if Path(msh_path).exists() else None
-
-
 def _sweep_from_meta(
     freqs: NDArray,
     num_solve_points: int,
@@ -678,9 +653,12 @@ def run_sweep(
     """
     Run the adaptive FEM frequency sweep on a CSXCAD geometry.
 
-    Meshes the geometry if it has not been meshed yet, then performs
-    ``num_solve_points`` full GetDP solves, rational-interpolates the dense
-    S-parameter curve, and writes it to ``fem_sparams.npz`` in ``output_path``.
+    (Re-)meshes the geometry from the current ``csx``/``FEM_options`` --
+    ``run_sweep`` can be called on its own (``write_and_show_structure`` may
+    have been skipped) and must not silently reuse a mesh from a previous,
+    differently configured call -- then performs ``num_solve_points`` full
+    GetDP solves, rational-interpolates the dense S-parameter curve, and
+    writes it to ``fem_sparams.npz`` in ``output_path``.
 
     Parameters
     ----------
@@ -695,19 +673,15 @@ def run_sweep(
     verbose : bool
         Print progress. Default ``True``.
     FEM_options : FEMOptions | None
-        Global solver/mesh options (used only if a mesh must be built here).
+        Global solver/mesh options.
 
     Raises
     ------
     RuntimeError
-        If the geometry contains no ports (only possible when a mesh has not
-        been built yet and is created here; see :func:`build_mesh`).
+        If the geometry contains no ports.
     """
-    # Mesh on demand: run_sweep can be called on its own (write_and_show_structure
-    # may have been skipped), so build the mesh if the metadata file is absent.
     output_path = Path(output_path)
-    if not (output_path / _MESH_META).exists():
-        build_mesh(csx, freqs, output_path, verbose=verbose, FEM_options=FEM_options)
+    build_mesh(csx, freqs, output_path, verbose=verbose, FEM_options=FEM_options)
     _sweep_from_meta(freqs, num_solve_points, output_path, verbose)
 
 

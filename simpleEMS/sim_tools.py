@@ -372,14 +372,9 @@ class SimTools:
         Display the simulation geometry.
 
         For the FDTD backend this opens the structure in AppCSXCAD. For the
-        FEM backend it builds (or reuses) the Gmsh mesh and renders it with
+        FEM backend it (re-)exports the STEP geometry, rebuilds the Gmsh mesh
+        from the current ``CSX``/``FEM_options``, and renders it with
         PyVista, coloring cells by their Gmsh physical-group id.
-
-        For the FEM backend, if ``output_path`` already holds a mesh from a
-        previous call (``fem_mesh.json`` + its ``.msh`` file), that mesh is
-        reused instead of re-exporting STEP and re-meshing. Delete
-        ``fem_mesh.json`` (or use a fresh ``output_path``) to force a rebuild
-        after changing the geometry or ``FEM_options``.
 
         Parameters
         ----------
@@ -412,11 +407,9 @@ class SimTools:
 
             pv.set_plot_theme(theme)
 
-            msh_path = fem_backend.existing_mesh_path(output_path)
-            if msh_path is None:
-                msh_path = fem_backend.build_mesh(
-                    sim.CSX, sim.freqs, output_path, FEM_options=sim.FEM_options
-                )
+            msh_path = fem_backend.build_mesh(
+                sim.CSX, sim.freqs, output_path, FEM_options=sim.FEM_options
+            )
             vtk_path = Path(msh_path).with_suffix(".vtk")
             grid = pv.read(str(vtk_path if vtk_path.exists() else msh_path))
 
