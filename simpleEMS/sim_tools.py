@@ -62,7 +62,7 @@ from openEMS.nf2ff import nf2ff_results
 # ----------------------------
 from .console import console
 from .export_gerber import export_gerber
-from .export_step import export_step, export_csxcad_xml_to_step
+from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
 from .fem_backend import FEMOptions
 from .sim_params import SimParams
 
@@ -430,7 +430,10 @@ class SimTools:
         subprocess.run([AppCSXCAD_BIN, str(structure_3d)], check=True)
 
     @staticmethod
-    def export_stl(output_path: Path | None = None) -> None:
+    def export_stl(
+        sim: SimSetup,
+        output_path: Path | None = None,
+    ) -> None:
         """
         Export the CSXCAD structure to STL files (FDTD backend only).
 
@@ -452,21 +455,9 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd()
 
-        structure_3d = output_path / "structure.xml"
-        if not structure_3d.exists():
-            raise ValueError(
-                "3D Structure does not exist. Make sure to call "
-                "write_and_show_structure before exporting STL"
-            )
         stl_path = output_path / "stl"
         stl_path.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            AppCSXCAD_BIN,
-            f"--export-STL={stl_path}",
-            str(structure_3d),
-        ]
-
-        subprocess.run(cmd, check=True)
+        export_stl(CSX=sim.CSX, output_path=stl_path)
 
     @staticmethod
     def run_simulation(sim: SimSetup, output_path: Path | None = None) -> None:

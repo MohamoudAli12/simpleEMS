@@ -42,7 +42,7 @@ from CSXCAD import ContinuousStructure
 
 from . import fem_formulation, fem_geometry, fem_solver, fem_sweep
 from .console import console
-from .export_step import export_step
+from .export_cad import export_step
 from .fem_materials import EPS0, Dielectric, guess_role
 
 if TYPE_CHECKING:

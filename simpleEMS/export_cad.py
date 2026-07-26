@@ -171,6 +171,65 @@ def export_step(
     console.print(f"[success]STEP file written to {filename}[/success]")
 
 
+def export_stl(
+    CSX: ContinuousStructure,
+    output_path: Path,
+) -> None:
+    """
+    Export CSXCAD geometry to a coloured, multi-layer STEP AP242 file.
+
+    Extracts all Material and Metal properties from the CSXCAD
+    structure and writes them as separate coloured bodies in a
+    single ``.step`` file.
+
+    Parameters
+    ----------
+    CSX : ContinuousStructure
+        The CSXCAD geometry object containing the simulation structure.
+    output_path : Path
+        Directory where the STEP file (``structure.step``) will be saved.
+    """
+    console.print("-------------------------------------------", style="info")
+    console.print("Exporting Geometry to STL", style="info")
+    console.print("-------------------------------------------", style="info")
+
+    filename = output_path / "structure.stl"
+
+    all_props = CSX.GetAllProperties()
+
+    physical_types = {"CSPropMetal", "CSPropMaterial", "CSPropLumpedElement"}
+    assy = cq.Assembly()
+    part_count = 0
+
+    for prop in all_props:
+        cls = prop.__class__.__name__
+        if cls not in physical_types:
+            continue
+
+        name = prop.GetName()
+        console.print(f"[info]processing {name}[/info]")
+
+        solids = _process_property(prop)
+        if not solids:
+            continue
+
+        r, g, b, a = prop.GetFillColor()
+        color = cq.Color(r / 255, g / 255, b / 255, min(a / 255, 1.0))
+
+        for i, solid in enumerate(solids):
+            label = f"{name}_{i}" if len(solids) > 1 else name
+            assy.add(solid, name=label, color=color)
+            part_count += 1
+
+    if part_count == 0:
+        console.print("[warning]No physical geometry found to export[/warning]")
+        return
+
+    console.print(f"[info]Writing {part_count} part(s) to STL...[/info]")
+    assy.save(str(filename), exportType="STL")
+    console.print(f"[success]STL file written to {filename}[/success]")
+
+
 def export_csxcad_xml_to_step(
     structure_xml_path: str | Path,
     output_path: str | Path,

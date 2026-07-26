@@ -58,7 +58,7 @@ patch.show_plots()
 # PPROCESS
 
 # EXPORT
-patch.export_stl()
+patch.export_stl(sim)
 patch.export_touchstone(
     sim_data.freqs,
     sim_data.s11,

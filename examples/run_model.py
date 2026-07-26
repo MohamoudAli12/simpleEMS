@@ -31,7 +31,7 @@ SimTools.save_plots(output_path)
 # PPROCESS
 
 # EXPORT
-SimTools.export_stl(output_path)
+SimTools.export_stl(sim, output_path)
 SimTools.export_touchstone(
     sim_data.freqs,
     sim_data.s11,
