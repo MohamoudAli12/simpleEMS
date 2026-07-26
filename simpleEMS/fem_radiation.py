@@ -325,6 +325,41 @@ def _read_scalar_points(
     return theta, phi, val
 
 
+def _check_farfield_margin(
+    bbox: tuple, domain_bbox: tuple, freq: float, symmetry_axis: int | None
+) -> None:
+    """Raise if the air padding is too tight for an accurate far field at ``freq``.
+
+    The Huygens surface needs open air of at least a quarter-wavelength on
+    every face that isn't a symmetry plane; anything tighter risks sitting in
+    the reactive near field, corrupting the near-to-far-field transform. This
+    only bites structures meshed with an explicit ``FEM_air_pad_mm`` (the
+    default ``air_pad_frac`` sizing already targets ~lambda/4, see
+    ``fem_geometry``'s module docstring), so it fires once, at the point a
+    far-field pattern is actually requested, rather than at mesh time -- a
+    small ``FEM_air_pad_mm`` is fine for non-radiating problems that never
+    call ``CalcNF2FF``.
+    """
+    min_gap = 0.25 * (C0 / freq)  # lambda/4 at the requested frequency
+    gaps = {}
+    for i, axis in enumerate("xyz"):
+        if symmetry_axis != i:
+            gaps[f"{axis}-"] = bbox[i] - domain_bbox[i]
+        gaps[f"{axis}+"] = domain_bbox[3 + i] - bbox[3 + i]
+    face, gap = min(gaps.items(), key=lambda kv: kv[1])
+    if gap < min_gap:
+        raise ValueError(
+            f"Air padding too small for an accurate far field at {freq / 1e9:.4f} GHz: "
+            f"the gap between the structure and the meshed domain boundary on the "
+            f"{face} face is {gap * 1e3:.2f} mm, but at least {min_gap * 1e3:.2f} mm "
+            f"(a quarter-wavelength, lambda/4 = c / (4 * f)) is needed for the "
+            f"near-to-far-field transform to be valid. Re-run setup_simulation/"
+            f"build_mesh with FEM_air_pad_mm >= {min_gap * 1e3:.2f}, or drop "
+            f"FEM_air_pad_mm entirely to fall back to the automatic "
+            f"lambda/4-based padding."
+        )
+
+
 class FEMNF2FF:
     """
     openEMS-``nf2ff``-compatible far-field calculator for the FEM backend.
@@ -353,6 +388,10 @@ class FEMNF2FF:
                     "falling back to a structure-relative Huygens box, which "
                     "can land outside the meshed domain and zero out the far "
                     "field. Re-run build_mesh to regenerate it.[/warning]"
+                )
+            else:
+                _check_farfield_margin(
+                    bbox, domain_bbox, freq, meta.get("symmetry_axis")
                 )
             console.print(
                 f"[info]FEM far-field: solving fields at {freq / 1e9:.4f} GHz[/info]"

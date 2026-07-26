@@ -398,13 +398,23 @@ def _build_air_box(
     absorbing boundary. With PML, add a second outer shell that damps
     outgoing waves instead of a first-order absorbing condition.
 
+    If ``problem.air_pad_mm`` is set, it is used verbatim as the padding
+    instead (no wavelength formula, no thickness floor) -- for non-radiating
+    structures whose box shouldn't scale with the sweep's lowest frequency.
+    ``FEMNF2FF.CalcNF2FF`` checks this padding against a quarter-wavelength
+    minimum whenever a far-field pattern is actually requested, and raises
+    if it's too small at that frequency.
+
     Returns
     -------
     tuple[bool, tuple, tuple, float]
         ``(is_pml, inner_bbox, box_bbox, pml_thick)``.
     """
     is_pml = problem.boundary == "pml"
-    pad = max(problem.air_pad_frac * lambda0_max, 3.0 * (struct[5] - struct[2]))
+    if problem.air_pad_mm is not None:
+        pad = problem.air_pad_mm * 1e-3
+    else:
+        pad = max(problem.air_pad_frac * lambda0_max, 3.0 * (struct[5] - struct[2]))
     ax0, ay0, az0 = struct[0] - pad, struct[1] - pad, struct[2] - pad  # inner box
     ax1, ay1, az1 = struct[3] + pad, struct[4] + pad, struct[5] + pad
     inner_bbox = (ax0, ay0, az0, ax1, ay1, az1)

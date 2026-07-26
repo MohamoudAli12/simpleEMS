@@ -85,6 +85,17 @@ class FEMOptions:
         Nedelec edge-element order: ``1`` (default) or ``2``.
     air_pad_frac : float
         Air padding as a fraction of the longest wavelength. Default ``0.2``.
+        Ignored when ``air_pad_mm`` is set.
+    air_pad_mm : float | None
+        Explicit air padding in millimetres, added to every face of the
+        structure's bounding box in place of the ``air_pad_frac`` wavelength
+        formula. Use this for non-radiating structures (e.g. filters) whose
+        box shouldn't scale with a wide S-parameter sweep's lowest frequency.
+        If a far-field pattern is later requested (``CalcNF2FF``) and this
+        padding is too small for an accurate near-to-far-field transform at
+        the requested frequency, ``FEMNF2FF.CalcNF2FF`` raises ``ValueError``
+        naming the minimum padding needed. Default ``None`` (auto, via
+        ``air_pad_frac``).
     elems_per_wavelength : float
         Target coarse mesh density in open air. Default ``8.0``.
     mesh_fine_scale : float
@@ -100,6 +111,7 @@ class FEMOptions:
     symmetry: tuple | None = None
     fe_order: int = 1
     air_pad_frac: float = 0.2
+    air_pad_mm: float | None = None
     elems_per_wavelength: float = 8.0
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
@@ -207,7 +219,10 @@ class Problem:
         :class:`FEMOptions`. ``None`` (default) means no symmetry is applied.
     air_pad_frac : float
         Air padding as a fraction of the longest free-space wavelength.
-        Default ``0.2``.
+        Default ``0.2``. Ignored when ``air_pad_mm`` is set.
+    air_pad_mm : float | None
+        Explicit air padding in millimetres -- see :class:`FEMOptions`.
+        Default ``None``.
     elems_per_wavelength : float
         Target coarse mesh density in open air. Default ``8.0``.
     mesh_fine_scale : float
@@ -226,6 +241,7 @@ class Problem:
     symmetry: tuple | None = None
     # mesh controls
     air_pad_frac: float = 0.2  # air padding as a fraction of the longest wavelength
+    air_pad_mm: float | None = None  # explicit air padding (mm), overrides air_pad_frac
     elems_per_wavelength: float = 8.0  # coarse mesh density in open air
     mesh_fine_scale: float = 1.0  # multiplier on the near-conductor element size
     min_layers: int = 3  # element layers through the dielectric
@@ -337,6 +353,7 @@ def _apply_FEM_options(prob: Problem, FEM_options: FEMOptions | None) -> None:
     prob.symmetry = FEM_options.symmetry
     prob.fe_order = FEM_options.fe_order
     prob.air_pad_frac = FEM_options.air_pad_frac
+    prob.air_pad_mm = FEM_options.air_pad_mm
     prob.elems_per_wavelength = FEM_options.elems_per_wavelength
     prob.mesh_fine_scale = FEM_options.mesh_fine_scale
     prob.min_layers = FEM_options.min_layers
@@ -455,6 +472,9 @@ def _mesh_problem(prob: Problem, output_path: Path, verbose: bool = True) -> str
         "bbox": list(mesh.bbox),  # structure extents (m); needed for far-field box
         "domain_bbox": list(mesh.inner_bbox),  # meshed E/H extents (m); Huygens
         # box must stay strictly inside this or CutBox samples outside the mesh
+        "symmetry_axis": (
+            {"x": 0, "y": 1, "z": 2}[prob.symmetry[0]] if prob.symmetry else None
+        ),  # axis whose min-face sits on the symmetry plane, not open air
         "port_numbers": sorted(pm.number for pm in mesh.port_regions.values()),
         "ref_impedances": {
             str(pm.number): pm.ref_impedance for pm in mesh.port_regions.values()

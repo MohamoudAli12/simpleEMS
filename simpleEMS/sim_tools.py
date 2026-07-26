@@ -224,6 +224,7 @@ def setup_simulation(
     FEM_symmetry: tuple | None = None,
     FEM_fe_order: int = 1,
     FEM_air_pad_frac: float = 0.2,
+    FEM_air_pad_mm: float | None = None,
     FEM_elems_per_wavelength: float = 8.0,
     FEM_mesh_fine_scale: float = 1.0,
     FEM_min_layers: int = 3,
@@ -262,7 +263,18 @@ def setup_simulation(
         ``2``.
     FEM_air_pad_frac : float, optional
         FEM backend only. Air padding as a fraction of the longest
-        wavelength. Default is ``0.2``.
+        wavelength. Default is ``0.2``. Ignored when ``FEM_air_pad_mm`` is
+        set.
+    FEM_air_pad_mm : float, optional
+        FEM backend only. Explicit air padding in millimetres, added to
+        every face of the structure's bounding box in place of the
+        ``FEM_air_pad_frac`` wavelength formula. Use this for non-radiating
+        structures (e.g. filters) whose box shouldn't scale with a wide
+        S-parameter sweep's lowest frequency. If a far-field pattern is
+        later requested and this padding is too small for an accurate
+        near-to-far-field transform at the requested frequency,
+        ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the minimum
+        padding needed. Default is ``None`` (auto, via ``FEM_air_pad_frac``).
     FEM_elems_per_wavelength : float, optional
         FEM backend only. Target coarse mesh density in open air. Default
         is ``8.0``.
@@ -318,6 +330,7 @@ def setup_simulation(
             symmetry=FEM_symmetry,
             fe_order=FEM_fe_order,
             air_pad_frac=FEM_air_pad_frac,
+            air_pad_mm=FEM_air_pad_mm,
             elems_per_wavelength=FEM_elems_per_wavelength,
             mesh_fine_scale=FEM_mesh_fine_scale,
             min_layers=FEM_min_layers,
