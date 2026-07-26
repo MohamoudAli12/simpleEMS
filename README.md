@@ -53,8 +53,18 @@ this library will enable you to design RF circuits easily.
 
 ### **Export Options**
 - Gerber Export
+- STEP Export
 - STL Export
 - Touchstone SnP Export
+
+## Solver Backends
+
+simpleEMS supports two solver backends, selected via `backend_engine` on your sim params:
+
+- **FDTD** (default) — powered by [openEMS](https://openems.readthedocs.io/en/latest/), the original time-domain backend.
+- **FEM** *(experimental)* — a frequency-domain finite-element backend (via [GetDP](https://getdp.info)) available since v0.2.0, for cases where FDTD isn't the right fit. It shares the same plotting, sweep, optimization, and export APIs as the FDTD path, and can also mesh a raw STEP file directly without building a CSXCAD geometry first. API and behavior may still change.
+
+See the [FEM installation guide](https://mohamoudali12.github.io/simpleEMS/user/installation.html) and the [standalone FEM STEP tutorial](https://mohamoudali12.github.io/simpleEMS/user/standalone_fem_step_model.html) in the docs.
 
 ## Demo
 [This example](https://github.com/MohamoudAli12/simpleEMS/blob/master/examples/simple_inset_fed_patch_antenna.py) creates an inset fed patch antenna and simulates the created model.
@@ -64,25 +74,25 @@ this library will enable you to design RF circuits easily.
 
 Below is a visualisation of the model created by the above code
 
-![patch_antenna_2_45GHz.png](./images/patch_antenna_2_45GHz.png)
+![patch_antenna_2_45GHz.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/patch_antenna_2_45GHz.png)
 The result of the simulation
-![s11.png](./images/s11.png)
+![s11.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/s11.png)
 
-![smith_chart.png](./images/smith_chart.png)
+![smith_chart.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/smith_chart.png)
 
-![z11.png](./images/z11.png)
+![z11.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/z11.png)
 
-![vswr.png](./images/vswr.png)
+![vswr.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/vswr.png)
 
-![radiation_pattern.png](./images/radiation_polar.png)
+![radiation_pattern.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/radiation_polar.png)
 
-![directivity_polar.png](./images/directivity_polar.png)
+![directivity_polar.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/directivity_polar.png)
 
-![3d_directivity.png](./images/3d_directivity.png)
+![3d_directivity.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/3d_directivity.png)
 
-![3d_gain.png](./images/3d_gain.png)
+![3d_gain.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/3d_gain.png)
 
-![3d_power.png](./images/3d_power_pattern.png)
+![3d_power.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/3d_power_pattern.png)
 
 
 
