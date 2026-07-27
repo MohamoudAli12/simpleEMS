@@ -27,10 +27,11 @@ export utilities work unchanged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -428,7 +429,39 @@ def _build_problem(
 # ----------------------------
 # pipeline stages
 # ----------------------------
-def _mesh_problem(prob: Problem, output_path: Path, verbose: bool = True) -> str:
+def _mesh_fingerprint(
+    csx: ContinuousStructure, freqs: NDArray, FEM_options: FEMOptions | None
+) -> str:
+    """Cheap hash of everything that affects the mesh, for cache invalidation.
+
+    Reads primitive coordinates directly off the live CSXCAD properties (the
+    same box/polygon data ``export_cad.py`` extracts) rather than exporting
+    STEP or meshing, so this costs nothing close to an actual rebuild --
+    letting every FEM entry point call :func:`build_mesh` unconditionally
+    and still mesh only when something has actually changed.
+    """
+    parts = []
+    for prop in csx.GetAllProperties():
+        parts.append(f"{prop.__class__.__name__}:{prop.GetName()}")
+        for prim in prop.GetAllPrimitives():
+            cls = prim.__class__.__name__
+            if cls == "CSPrimBox":
+                parts.append(f"box:{prim.GetStart()}:{prim.GetStop()}")
+            elif cls == "CSPrimLinPoly":
+                parts.append(
+                    f"linpoly:{prim.GetCoords()}:{prim.GetElevation()}:"
+                    f"{prim.GetNormDir()}:{prim.GetLength()}"
+                )
+            else:
+                parts.append(cls)
+    parts.append(f"freqs:{np.asarray(freqs, dtype=float).tobytes()!r}")
+    parts.append(f"FEM_options:{asdict(FEM_options) if FEM_options else None}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def _mesh_problem(
+    prob: Problem, output_path: Path, verbose: bool = True, fingerprint: str = ""
+) -> str:
     """
     Mesh a :class:`Problem`, emit the GetDP ``.pro``, and persist the metadata.
 
@@ -442,6 +475,10 @@ def _mesh_problem(prob: Problem, output_path: Path, verbose: bool = True) -> str
         Directory to write the mesh, problem, and metadata files into.
     verbose : bool
         Print progress. Default ``True``.
+    fingerprint : str
+        Mesh-input fingerprint (see :func:`_mesh_fingerprint`) to persist
+        alongside the mesh, so a later :func:`build_mesh` call can tell
+        whether it's still valid. Default ``""`` (no cache validation).
 
     Returns
     -------
@@ -479,6 +516,7 @@ def _mesh_problem(prob: Problem, output_path: Path, verbose: bool = True) -> str
         "ref_impedances": {
             str(pm.number): pm.ref_impedance for pm in mesh.port_regions.values()
         },
+        "fingerprint": fingerprint,
     }
     (output_path / _MESH_META).write_text(json.dumps(meta, indent=2))
     return mesh.msh_path
@@ -492,10 +530,20 @@ def build_mesh(
     FEM_options: FEMOptions | None = None,
 ) -> str:
     """
-    Mesh a CSXCAD geometry for the FEM backend.
+    Mesh a CSXCAD geometry for the FEM backend, reusing a matching mesh if any.
 
     Exports the geometry to STEP, builds the tagged tetrahedral mesh and the
     GetDP problem file, and records the port metadata for later stages.
+
+    Before doing any of that, checks a cheap fingerprint of ``csx``/``freqs``/
+    ``FEM_options`` (see :func:`_mesh_fingerprint`) against whatever mesh
+    metadata is already in ``output_path``. If they match and the ``.msh``
+    file is still there, that mesh is returned unchanged; otherwise a full
+    rebuild runs. This makes it safe for every FEM entry point
+    (``write_and_show_structure``, ``run_sweep``, ``simulate_step_FEM``) to
+    call ``build_mesh`` unconditionally: an unchanged rerun meshes once, and
+    a sweep/optimize loop that changes geometry between calls into the same
+    ``output_path`` is remeshed exactly when it needs to be.
 
     Parameters
     ----------
@@ -513,7 +561,7 @@ def build_mesh(
     Returns
     -------
     str
-        Path to the generated ``.msh`` file.
+        Path to the ``.msh`` file (existing or freshly built).
 
     Raises
     ------
@@ -521,8 +569,22 @@ def build_mesh(
         If the geometry contains no ports.
     """
     output_path = Path(output_path)
+    fingerprint = _mesh_fingerprint(csx, freqs, FEM_options)
+    meta_file = output_path / _MESH_META
+    if meta_file.exists():
+        meta = json.loads(meta_file.read_text())
+        msh_path = meta.get("msh_path")
+        if (
+            meta.get("fingerprint") == fingerprint
+            and msh_path is not None
+            and Path(msh_path).exists()
+        ):
+            if verbose:
+                console.print(f"[info]reusing unchanged FEM mesh: {msh_path}[/info]")
+            return msh_path
+
     prob = _build_problem(csx, freqs, output_path, FEM_options)
-    return _mesh_problem(prob, output_path, verbose)
+    return _mesh_problem(prob, output_path, verbose, fingerprint)
 
 
 def _sweep_from_meta(
@@ -653,12 +715,13 @@ def run_sweep(
     """
     Run the adaptive FEM frequency sweep on a CSXCAD geometry.
 
-    (Re-)meshes the geometry from the current ``csx``/``FEM_options`` --
-    ``run_sweep`` can be called on its own (``write_and_show_structure`` may
-    have been skipped) and must not silently reuse a mesh from a previous,
-    differently configured call -- then performs ``num_solve_points`` full
-    GetDP solves, rational-interpolates the dense S-parameter curve, and
-    writes it to ``fem_sparams.npz`` in ``output_path``.
+    Always calls :func:`build_mesh` first -- cheap when nothing has changed
+    since a prior call (it reuses the existing mesh via a fingerprint check
+    rather than remeshing), and safe when it has, e.g. a sweep/optimize loop
+    that calls ``run_sweep`` directly (without ``write_and_show_structure``)
+    across iterations with changing geometry. Then performs
+    ``num_solve_points`` full GetDP solves, rational-interpolates the dense
+    S-parameter curve, and writes it to ``fem_sparams.npz`` in ``output_path``.
 
     Parameters
     ----------

@@ -372,9 +372,11 @@ class SimTools:
         Display the simulation geometry.
 
         For the FDTD backend this opens the structure in AppCSXCAD. For the
-        FEM backend it (re-)exports the STEP geometry, rebuilds the Gmsh mesh
-        from the current ``CSX``/``FEM_options``, and renders it with
-        PyVista, coloring cells by their Gmsh physical-group id.
+        FEM backend it (re-)meshes the current ``CSX``/``FEM_options`` with
+        Gmsh -- reusing the existing mesh instead of rebuilding if neither
+        has changed since the last call on this ``output_path`` -- and
+        renders it with PyVista, coloring cells by their Gmsh
+        physical-group id.
 
         Parameters
         ----------
@@ -473,7 +475,14 @@ class SimTools:
         Dispatches to the FDTD engine (``FDTD.Run``) or, for the FEM
         backend, to the adaptive GetDP frequency sweep
         (``fem_backend.run_sweep``), which performs up to
-        ``sim.num_FEM_solve_points`` full solves.
+        ``sim.num_FEM_solve_points`` full solves. For the FEM backend this
+        always (re-)meshes first, reusing the existing mesh if
+        ``sim.CSX``/``sim.FEM_options`` haven't changed since the last mesh
+        in this ``output_path`` (e.g. a prior ``write_and_show_structure``
+        call) and rebuilding if they have -- so a sweep/optimize loop that
+        calls this directly, varying the geometry across iterations into
+        the same ``output_path``, still gets a fresh mesh each time the
+        geometry actually changes.
 
         Parameters
         ----------
