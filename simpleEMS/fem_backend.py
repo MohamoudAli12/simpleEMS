@@ -794,9 +794,9 @@ def compute_sim_data(
     # real axis, i.e. inductive <-> capacitive / top <-> bottom). port_voltage/
     # port_current are linear in the same field solution, so they need the same
     # conjugation.
-    s = np.conj(data["S"])
-    port_voltage = np.conj(data["port_voltage"])
-    port_current = np.conj(data["port_current"])
+    s = data["S"]
+    port_voltage = data["port_voltage"]
+    port_current = data["port_current"]
     freqs_out = data["freqs"]
     ref_impedances = data["ref_impedances"]
     nports = s.shape[1]
@@ -804,7 +804,7 @@ def compute_sim_data(
     # Derive the same engineering quantities the FDTD path exposes, so the
     # existing SimTools plotting/exports work unchanged. Formulas are the
     # standard 1-port relations; s21 is only meaningful for multi-port runs.
-    s11 = s[:, 0, 0]
+    s11 = np.conj(s[:, 0, 0])
     s21 = s[:, 1, 0] if nports >= 2 else None
     z0 = float(ref_impedances[0]) if ref_impedances.size else charac_imp
     z11 = z0 * (1 + s11) / (1 - s11)  # input impedance from the reflection coeff
