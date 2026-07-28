@@ -210,6 +210,7 @@ class SimParams:
             mesh_fine_scale=self.FEM_mesh_fine_scale,
             min_layers=self.FEM_min_layers,
             port_type=self.FEM_port_type,
+            num_solve_points=self.FEM_num_solve_points,
         )
 
     @property

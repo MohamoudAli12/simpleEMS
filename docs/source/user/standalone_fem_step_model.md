@@ -23,13 +23,11 @@ First create a file named `inset_fed_patch_step_fem.py` in your favourite editor
 :end-before: IMPORTS
 ```
 
-`simulate_step_FEM` and `FEMOptions` come from the FEM backend, `FEMNF2FF` is
-the FEM backend's near-field-to-far-field transform, and `SimTools` is the
-same postprocessing/plotting toolkit used across simpleEMS.
+`simulate_step_FEM` comes from the FEM backend, and `SimTools` is the same
+postprocessing/plotting toolkit used across simpleEMS.
 
 ```{seealso}
 - {func}`simpleEMS.fem_backend.simulate_step_FEM`
-- {class}`simpleEMS.fem_backend.FEMOptions`
 ```
 
 ## Model Structure
@@ -82,11 +80,12 @@ output frequency grid centred on the resonant frequency.
 
 {func}`simpleEMS.fem_backend.simulate_step_FEM` meshes the STEP geometry,
 generates the GetDP problem, runs the adaptive frequency sweep, and reads the
-results back -- all in one call. `FEM_options` bundles solver/mesh tuning
-(outer boundary type, symmetry, element order, port type, mesh density, ...)
-into a single {class}`simpleEMS.fem_backend.FEMOptions` instance. It returns a
-single `SimData` named tuple with `freqs`, `s11`, `s21` (`None` for a
-single-port problem), `z11`, `vswr`, `input_power`, `port_voltage`,
+results back -- all in one call. Solver/mesh tuning (outer boundary type,
+symmetry, element order, port type, mesh density, number of adaptive solve
+points, ...) is set directly via the flat `FEM_*` keyword arguments, the same
+way `SimParams` exposes them -- no separate options object to build. It
+returns a single `SimData` named tuple with `freqs`, `s11`, `s21` (`None` for
+a single-port problem), `z11`, `vswr`, `input_power`, `port_voltage`,
 `port_current`, and `ref_impedance`.
 
 ## Postprocessing
@@ -98,10 +97,10 @@ single-port problem), `z11`, `vswr`, `input_power`, `port_voltage`,
 ```
 
 This plots S11, the Smith chart, VSWR, and input impedance with the same
-`SimTools` methods used across simpleEMS. For radiation patterns, wrap the
-results with `FEMNF2FF` and feed it into the usual `plot_2d_directivity` /
-`plot_2d_rad_pattern` / `plot_3d_directivity` / `plot_3d_gain` /
-`plot_3d_power` helpers.
+`SimTools` methods used across simpleEMS. For radiation patterns, get the
+NF2FF adapter from `SimTools.create_nf2ff()` and feed it into the usual
+`plot_2d_directivity` / `plot_2d_rad_pattern` / `plot_3d_directivity` /
+`plot_3d_gain` / `plot_3d_power` helpers.
 
 ```{seealso}
 - {class}`simpleEMS.sim_tools.SimTools`

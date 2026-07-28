@@ -202,18 +202,15 @@ class SimSetup(NamedTuple):
         backend these are the interpolated output points, not the solve points.
     backend_engine : str
         Solver backend, either ``"FDTD"`` (default) or ``"FEM"``.
-    num_FEM_solve_points : int
-        Number of full FEM solves the adaptive sweep may perform (FEM only).
     FEM_options : FEMOptions | None
         Global FEM solver/mesh options (boundary, symmetry, fe_order, mesh
-        tuning, port type). ``None`` for FDTD.
+        tuning, port type, num_solve_points). ``None`` for FDTD.
     """
 
     CSX: ContinuousStructure
     FDTD: openEMS
     freqs: NDArray
     backend_engine: str
-    num_FEM_solve_points: int = 10
     FEM_options: FEMOptions | None = None
     charac_imp: float = 50
 
@@ -237,8 +234,9 @@ def setup_simulation(
     params : SimParams
         Parameter object that holds all simulation parameters, including
         ``freq_range``, ``num_points``, ``FDTD_timestep``,
-        ``FDTD_end_criteria``, ``backend_engine``, ``FEM_num_solve_points``,
-        the flat ``FEM_*`` mesh/solver tuning fields, and ``charac_imp``.
+        ``FDTD_end_criteria``, ``backend_engine``, the flat ``FEM_*``
+        mesh/solver tuning fields (including ``FEM_num_solve_points``), and
+        ``charac_imp``.
     FDTD_boundary : list[str], optional
         Six openEMS boundary-condition strings, one per box face in the
         order ``[xmin, xmax, ymin, ymax, zmin, zmax]``. Only used by the
@@ -249,8 +247,7 @@ def setup_simulation(
     SimSetup
         Named tuple with ``CSX`` (CSXCAD geometry), ``FDTD`` (openEMS FDTD
         object), ``freqs`` (frequency array), ``backend_engine``,
-        ``num_FEM_solve_points``, ``FEM_options`` (``None`` for FDTD), and
-        ``charac_imp``.
+        ``FEM_options`` (``None`` for FDTD), and ``charac_imp``.
     """
     if FDTD_boundary is None:
         FDTD_boundary = [
@@ -282,7 +279,6 @@ def setup_simulation(
         FDTD=FDTD,
         freqs=freqs,
         backend_engine=params.backend_engine,
-        num_FEM_solve_points=params.FEM_num_solve_points,
         FEM_options=FEM_options,
         charac_imp=params.charac_imp,
     )
@@ -415,8 +411,8 @@ class SimTools:
         Dispatches to the FDTD engine (``FDTD.Run``) or, for the FEM
         backend, to the adaptive GetDP frequency sweep
         (``fem_backend.run_sweep``), which performs up to
-        ``sim.num_FEM_solve_points`` full solves. For the FEM backend this
-        always (re-)meshes first, reusing the existing mesh if
+        ``sim.FEM_options.num_solve_points`` full solves. For the FEM backend
+        this always (re-)meshes first, reusing the existing mesh if
         ``sim.CSX``/``sim.FEM_options`` haven't changed since the last mesh
         in this ``output_path`` (e.g. a prior ``write_and_show_structure``
         call) and rebuilding if they have -- so a sweep/optimize loop that
@@ -441,7 +437,6 @@ class SimTools:
             fem_backend.run_sweep(
                 sim.CSX,
                 sim.freqs,
-                sim.num_FEM_solve_points,
                 output_path,
                 FEM_options=sim.FEM_options,
             )
@@ -454,23 +449,27 @@ class SimTools:
             os.chdir(cwd)
 
     @staticmethod
-    def create_nf2ff(sim: SimSetup) -> nf2ff:
+    def create_nf2ff(sim: SimSetup | None = None) -> nf2ff:
         """
         Create the near-field-to-far-field (NF2FF) recording box.
 
         Parameters
         ----------
-        sim : SimSetup
+        sim : SimSetup, optional
             Simulation setup named tuple returned by ``setup_simulation``.
+            Omit for the standalone STEP-FEM workflow (``simulate_step_FEM``),
+            which has no ``SimSetup`` -- ``None`` always returns a
+            ``FEMNF2FF`` adapter.
 
         Returns
         -------
         nf2ff : object
-            NF2FF object. For the FEM backend this is a ``FEMNF2FF`` adapter that
-            exposes the same ``CalcNF2FF`` interface, so the radiation-plotting
-            methods work identically for both backends.
+            NF2FF object. For the FEM backend (or when ``sim`` is omitted)
+            this is a ``FEMNF2FF`` adapter that exposes the same
+            ``CalcNF2FF`` interface, so the radiation-plotting methods work
+            identically for both backends.
         """
-        if sim.backend_engine == "FEM":
+        if sim is None or sim.backend_engine == "FEM":
             from .fem_radiation import FEMNF2FF
 
             return FEMNF2FF()

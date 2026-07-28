@@ -108,6 +108,9 @@ class FEMOptions:
     port_type : str
         ``"lumped"`` (impedance z0, default) or ``"wave"`` (matched to the line
         characteristic impedance) for all ports.
+    num_solve_points : int
+        Number of full FEM solves the adaptive rational-interpolation sweep is
+        allowed to perform (must be ``>= 4``). Default ``10``.
     """
 
     boundary: str = "silver_muller"
@@ -119,6 +122,7 @@ class FEMOptions:
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
     port_type: str = "lumped"
+    num_solve_points: int = 10
 
     def __post_init__(self) -> None:
         """
@@ -128,7 +132,8 @@ class FEMOptions:
         ------
         ValueError
             If ``boundary``, ``fe_order``, or ``port_type`` is not one of the
-            supported choices.
+            supported choices, or if ``num_solve_points`` is below the minimum
+            needed for a stable rational fit.
         """
         if self.boundary not in ("silver_muller", "pml"):
             raise ValueError(
@@ -140,6 +145,16 @@ class FEMOptions:
             raise ValueError(
                 f"port_type must be 'lumped' or 'wave', got {self.port_type!r}"
             )
+        if self.num_solve_points < 4:
+            raise ValueError(
+                f"num_solve_points must be >= 4 for a stable rational fit, "
+                f"got {self.num_solve_points}"
+            )
+
+
+_FEM_DEFAULTS = (
+    FEMOptions()
+)  # single source of truth for simulate_step_FEM's flat defaults
 
 
 @dataclass
@@ -272,6 +287,11 @@ class Problem:
     def min_layers(self) -> int:
         """Minimum element layers through the dielectric thickness."""
         return self.options.min_layers
+
+    @property
+    def num_solve_points(self) -> int:
+        """Number of full FEM solves the adaptive sweep may perform."""
+        return self.options.num_solve_points
 
 
 # ----------------------------
@@ -721,7 +741,6 @@ def _sweep_from_meta(
 def run_sweep(
     csx: ContinuousStructure,
     freqs: NDArray,
-    num_solve_points: int,
     output_path: str | Path,
     verbose: bool = True,
     FEM_options: FEMOptions | None = None,
@@ -734,8 +753,9 @@ def run_sweep(
     rather than remeshing), and safe when it has, e.g. a sweep/optimize loop
     that calls ``run_sweep`` directly (without ``write_and_show_structure``)
     across iterations with changing geometry. Then performs
-    ``num_solve_points`` full GetDP solves, rational-interpolates the dense
-    S-parameter curve, and writes it to ``fem_sparams.npz`` in ``output_path``.
+    ``FEM_options.num_solve_points`` full GetDP solves, rational-interpolates
+    the dense S-parameter curve, and writes it to ``fem_sparams.npz`` in
+    ``output_path``.
 
     Parameters
     ----------
@@ -743,14 +763,13 @@ def run_sweep(
         The CSXCAD geometry.
     freqs : NDArray
         Dense output frequency grid.
-    num_solve_points : int
-        Number of full FEM solves the adaptive sweep may perform.
     output_path : str | Path
         Directory holding the mesh/problem files and receiving the results.
     verbose : bool
         Print progress. Default ``True``.
     FEM_options : FEMOptions | None
-        Global solver/mesh options.
+        Global solver/mesh options, including ``num_solve_points``. ``None``
+        keeps the defaults.
 
     Raises
     ------
@@ -759,6 +778,7 @@ def run_sweep(
     """
     output_path = Path(output_path)
     build_mesh(csx, freqs, output_path, verbose=verbose, FEM_options=FEM_options)
+    num_solve_points = (FEM_options or FEMOptions()).num_solve_points
     _sweep_from_meta(freqs, num_solve_points, output_path, verbose)
 
 
@@ -907,8 +927,16 @@ def simulate_step_FEM(
     pec: list | None = None,
     lossy_conductor: dict | None = None,
     ports: dict | None = None,
-    num_solve_points: int = 10,
-    FEM_options: FEMOptions | None = None,
+    FEM_boundary: str = _FEM_DEFAULTS.boundary,
+    FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry,
+    FEM_fe_order: int = _FEM_DEFAULTS.fe_order,
+    FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac,
+    FEM_air_pad_mm: float | None = _FEM_DEFAULTS.air_pad_mm,
+    FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength,
+    FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale,
+    FEM_min_layers: int = _FEM_DEFAULTS.min_layers,
+    FEM_port_type: str = _FEM_DEFAULTS.port_type,
+    FEM_num_solve_points: int = _FEM_DEFAULTS.num_solve_points,
     charac_imp: float = 50.0,
     output_path: str | Path = "Sim_Path",
     run: bool = True,
@@ -940,11 +968,31 @@ def simulate_step_FEM(
     ports : dict | None
         ``{solid_name: {"z0": ..., "direction": "x|y|z", "number": ...}}``.
         If omitted, solids whose names look like ports are auto-registered.
-    num_solve_points : int
-        Number of full FEM solves the adaptive sweep may perform.
-    FEM_options : FEMOptions | None
-        Global solver/mesh options (boundary, symmetry, fe_order, mesh tuning,
-        port type).
+    FEM_boundary : str
+        Outer truncation: ``"silver_muller"`` (default) or ``"pml"``.
+    FEM_symmetry : tuple | None
+        Optional mirror-symmetry plane ``(axis, kind, at)``. See
+        :class:`FEMOptions`. Default ``None``.
+    FEM_fe_order : int
+        Nedelec edge-element order: ``1`` (default) or ``2``.
+    FEM_air_pad_frac : float
+        Air padding as a fraction of the longest wavelength. Default ``0.25``.
+        Ignored when ``FEM_air_pad_mm`` is set.
+    FEM_air_pad_mm : float | None
+        Explicit air padding in millimetres. Default ``None`` (auto, via
+        ``FEM_air_pad_frac``). See :class:`FEMOptions`.
+    FEM_elems_per_wavelength : float
+        Target coarse mesh density in open air. Default ``8.0``.
+    FEM_mesh_fine_scale : float
+        Multiplier on the near-conductor element size. Default ``1.0``.
+    FEM_min_layers : int
+        Element layers through the dielectric thickness. Default ``3``.
+    FEM_port_type : str
+        ``"lumped"`` (default, impedance ``charac_imp``) or ``"wave"``
+        (matched to the line's characteristic impedance) for all ports.
+    FEM_num_solve_points : int
+        Number of full FEM solves the adaptive rational-interpolation sweep is
+        allowed to perform (must be ``>= 4``). Default ``10``.
     charac_imp : float
         Default/fallback port reference impedance in ohms.
     output_path : str | Path
@@ -974,6 +1022,18 @@ def simulate_step_FEM(
     output_path.mkdir(parents=True, exist_ok=True)
     freqs = np.asarray(freqs, dtype=float)
 
+    FEM_options = FEMOptions(
+        boundary=FEM_boundary,
+        symmetry=FEM_symmetry,
+        fe_order=FEM_fe_order,
+        air_pad_frac=FEM_air_pad_frac,
+        air_pad_mm=FEM_air_pad_mm,
+        elems_per_wavelength=FEM_elems_per_wavelength,
+        mesh_fine_scale=FEM_mesh_fine_scale,
+        min_layers=FEM_min_layers,
+        port_type=FEM_port_type,
+        num_solve_points=FEM_num_solve_points,
+    )
     prob = _problem_from_step(
         step_file,
         freqs,
@@ -992,5 +1052,5 @@ def simulate_step_FEM(
 
     _mesh_problem(prob, output_path, verbose)
     if run:
-        _sweep_from_meta(freqs, num_solve_points, output_path, verbose)
+        _sweep_from_meta(freqs, prob.num_solve_points, output_path, verbose)
     return compute_sim_data(freqs, charac_imp, output_path)

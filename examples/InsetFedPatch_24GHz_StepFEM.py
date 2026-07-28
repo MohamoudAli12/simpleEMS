@@ -4,7 +4,7 @@
 # IMPORTS
 from pathlib import Path
 import numpy as np
-from simpleEMS import FEMNF2FF, FEMOptions, SimTools, simulate_step_FEM
+from simpleEMS import SimTools, simulate_step_FEM
 # IMPORTS
 
 # PARAMS
@@ -22,8 +22,9 @@ sim_data = simulate_step_FEM(
     dielectrics={"substrate": (3.48, 0.0037)},  # (eps_r, tan_d)
     pec=["patch_inset", "feed", "ground"],
     ports={"port_resist_1": {"z0": 50.0, "direction": "z", "number": 1}},
-    num_solve_points=12,
-    FEM_options=FEMOptions(boundary="silver_muller", port_type="lumped"),
+    FEM_boundary="silver_muller",
+    FEM_port_type="lumped",
+    FEM_num_solve_points=12,
     charac_imp=50.0,
 )
 # SIMULATE
@@ -36,7 +37,7 @@ SimTools.plot_smith_chart(
 SimTools.plot_vswr(sim_data.freqs, sim_data.vswr)
 SimTools.plot_impedance(sim_data.freqs, sim_data.z11)
 
-nf2ff = FEMNF2FF()
+nf2ff = SimTools.create_nf2ff()
 SimTools.plot_2d_directivity(nf2ff, resonant_freq)
 SimTools.plot_2d_rad_pattern(nf2ff, resonant_freq)
 nf2ff_3d = SimTools.compute_nf2ff_3d(nf2ff, resonant_freq)
