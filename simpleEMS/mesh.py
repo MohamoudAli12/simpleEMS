@@ -604,8 +604,8 @@ class Mesh:
     csx : ContinuousStructure
         CSXCAD structure with primitives already added.
     params : SimParams
-        Simulation parameters; reads ``simulation_box``, ``mesh_resolution``,
-        ``metal_mesh_resolution``, ``unit``, and ``lambda0``.
+        Simulation parameters; reads ``simulation_box``, ``FDTD_mesh_resolution``,
+        ``FDTD_metal_mesh_resolution``, ``unit``, and ``lambda0``.
     smooth_ratio : float
         Maximum ratio between adjacent cell sizes. Default ``1.5``.
     min_lines : int
@@ -621,8 +621,8 @@ class Mesh:
         min_lines: int = 5,
     ) -> None:
         self._csx = csx
-        self._mesh_res = float(params.mesh_resolution)
-        self._metal_res = float(params.metal_mesh_resolution)
+        self._mesh_res = float(params.FDTD_mesh_resolution)
+        self._metal_res = float(params.FDTD_metal_mesh_resolution)
         self._smooth = (smooth_ratio, smooth_ratio, smooth_ratio)
         self._unit = float(params.unit)
         self._lambda0 = float(params.lambda0)
@@ -914,8 +914,8 @@ class Mesh:
         dist : float
             Length of the interval being meshed.
         is_metal : bool
-            Whether the interval is metal (uses ``metal_mesh_resolution``
-            instead of ``mesh_resolution``).
+            Whether the interval is metal (uses ``FDTD_metal_mesh_resolution``
+            instead of ``FDTD_mesh_resolution``).
 
         Returns
         -------
@@ -968,7 +968,7 @@ class Mesh:
         """Generate and add mesh lines across one bounded interval.
 
         A degenerate (zero-length) interval gets a single line. A metal
-        interval in z thinner than a quarter of ``metal_mesh_resolution``
+        interval in z thinner than a quarter of ``FDTD_metal_mesh_resolution``
         gets a single line at its midpoint, since it is too thin to resolve
         with a full metal-resolution grid. Otherwise, generates a
         geometric-series grid across the interval (:func:`_gen_lines_in_bounds`);

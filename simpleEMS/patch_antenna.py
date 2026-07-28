@@ -265,9 +265,9 @@ class InsetFedPatchParams(SimParams):
             "feed_width_mm",
             "feed_length_mm",
             "lambda0",
-            "mesh_resolution",
-            "metal_mesh_resolution",
-            "thirds_rule",
+            "FDTD_mesh_resolution",
+            "FDTD_metal_mesh_resolution",
+            "FDTD_thirds_rule",
         ]:
             setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
 
@@ -433,7 +433,7 @@ class InsetFedPatchAntenna(PatchAntenna):
         self.FDTD.AddEdges2Grid(
             dirs="xy",
             properties=patch_inset,
-            metal_edge_res=self.params.metal_mesh_resolution,
+            metal_edge_res=self.params.FDTD_metal_mesh_resolution,
         )
 
     def create_feed(self) -> None:
@@ -475,7 +475,9 @@ class InsetFedPatchAntenna(PatchAntenna):
         ]
         feed.AddBox(priority=6, start=feed_start, stop=feed_stop)
         self.FDTD.AddEdges2Grid(
-            dirs="xy", properties=feed, metal_edge_res=self.params.metal_mesh_resolution
+            dirs="xy",
+            properties=feed,
+            metal_edge_res=self.params.FDTD_metal_mesh_resolution,
         )
 
     def create_port(self) -> LumpedPort:
@@ -570,15 +572,25 @@ class InsetFedPatchAntenna(PatchAntenna):
                 ],
             )
             # Add mesh lines for patch and feed
-            mesh.AddLine("x", -self.params.patch_width_mm / 2 - self.params.thirds_rule)
-            mesh.AddLine("x", self.params.patch_width_mm / 2 + self.params.thirds_rule)
             mesh.AddLine(
-                "y", -self.params.patch_length_mm / 2 - self.params.thirds_rule
+                "x", -self.params.patch_width_mm / 2 - self.params.FDTD_thirds_rule
             )
-            mesh.AddLine("y", self.params.patch_length_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "x", self.params.patch_width_mm / 2 + self.params.FDTD_thirds_rule
+            )
+            mesh.AddLine(
+                "y", -self.params.patch_length_mm / 2 - self.params.FDTD_thirds_rule
+            )
+            mesh.AddLine(
+                "y", self.params.patch_length_mm / 2 + self.params.FDTD_thirds_rule
+            )
 
-            mesh.AddLine("x", -self.params.feed_width_mm / 2 - self.params.thirds_rule)
-            mesh.AddLine("x", self.params.feed_width_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "x", -self.params.feed_width_mm / 2 - self.params.FDTD_thirds_rule
+            )
+            mesh.AddLine(
+                "x", self.params.feed_width_mm / 2 + self.params.FDTD_thirds_rule
+            )
             mesh.AddLine(
                 "y", -self.params.patch_length_mm / 2 - self.params.feed_length_mm
             )
@@ -596,7 +608,7 @@ class InsetFedPatchAntenna(PatchAntenna):
                 ),
             )
 
-            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+            mesh.SmoothMeshLines("all", self.params.FDTD_mesh_resolution, 1.5)
         else:
             Mesh(self.CSX, self.params)
 
@@ -796,9 +808,9 @@ class ProbeFedPatchParams(SimParams):
             "patch_length_mm",
             "probe_pos_mm",
             "lambda0",
-            "mesh_resolution",
-            "metal_mesh_resolution",
-            "thirds_rule",
+            "FDTD_mesh_resolution",
+            "FDTD_metal_mesh_resolution",
+            "FDTD_thirds_rule",
         ]:
             setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
 
@@ -843,7 +855,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
         self.FDTD.AddEdges2Grid(
             dirs="xy",
             properties=patch_probe,
-            metal_edge_res=self.params.metal_mesh_resolution,
+            metal_edge_res=self.params.FDTD_metal_mesh_resolution,
         )
 
     def create_port(self) -> LumpedPort:
@@ -923,12 +935,18 @@ class ProbeFedPatchAntenna(PatchAntenna):
                     self.params.simulation_box[2] * 2 / 3,
                 ],
             )
-            mesh.AddLine("x", -self.params.patch_width_mm / 2 - self.params.thirds_rule)
-            mesh.AddLine("x", self.params.patch_width_mm / 2 + self.params.thirds_rule)
             mesh.AddLine(
-                "y", -self.params.patch_length_mm / 2 - self.params.thirds_rule
+                "x", -self.params.patch_width_mm / 2 - self.params.FDTD_thirds_rule
             )
-            mesh.AddLine("y", self.params.patch_length_mm / 2 + self.params.thirds_rule)
+            mesh.AddLine(
+                "x", self.params.patch_width_mm / 2 + self.params.FDTD_thirds_rule
+            )
+            mesh.AddLine(
+                "y", -self.params.patch_length_mm / 2 - self.params.FDTD_thirds_rule
+            )
+            mesh.AddLine(
+                "y", self.params.patch_length_mm / 2 + self.params.FDTD_thirds_rule
+            )
             mesh.AddLine(
                 "z",
                 np.linspace(
@@ -939,7 +957,7 @@ class ProbeFedPatchAntenna(PatchAntenna):
                 ),
             )
 
-            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 1.5)
+            mesh.SmoothMeshLines("all", self.params.FDTD_mesh_resolution, 1.5)
         else:
             Mesh(self.CSX, self.params)
 

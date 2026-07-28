@@ -8,7 +8,7 @@ from simpleEMS import FEMNF2FF, FEMOptions, SimTools, simulate_step_FEM
 # IMPORTS
 
 # PARAMS
-STEP_FILE = Path(__file__).cwd() / "structure.step"
+STEP_FILE = Path(__file__).parent / "structure.step"
 
 resonant_freq = 24.125e9  # Hz
 span_freq = 2e9  # Hz

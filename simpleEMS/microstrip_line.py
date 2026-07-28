@@ -212,9 +212,9 @@ class MicrostripLineParams(SimParams):
             "microstrip_width_mm",
             "microstrip_length_mm",
             "lambda0",
-            "mesh_resolution",
-            "metal_mesh_resolution",
-            "thirds_rule",
+            "FDTD_mesh_resolution",
+            "FDTD_metal_mesh_resolution",
+            "FDTD_thirds_rule",
         ]:
             setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
 
@@ -327,7 +327,7 @@ class MicrostripLine(SimTools):
         self.FDTD.AddEdges2Grid(
             dirs="xy",
             properties=microstrip_line,
-            metal_edge_res=self.params.metal_mesh_resolution,
+            metal_edge_res=self.params.FDTD_metal_mesh_resolution,
         )
 
     def create_ports(self) -> list[LumpedPort]:
@@ -466,16 +466,17 @@ class MicrostripLine(SimTools):
             )
             # Add mesh lines for patch and feed
             mesh.AddLine(
-                "x", -self.params.microstrip_width_mm / 2 - self.params.thirds_rule
+                "x", -self.params.microstrip_width_mm / 2 - self.params.FDTD_thirds_rule
             )
             mesh.AddLine(
-                "x", self.params.microstrip_width_mm / 2 + self.params.thirds_rule
+                "x", self.params.microstrip_width_mm / 2 + self.params.FDTD_thirds_rule
             )
             mesh.AddLine(
-                "y", -self.params.microstrip_length_mm / 2 - self.params.thirds_rule
+                "y",
+                -self.params.microstrip_length_mm / 2 - self.params.FDTD_thirds_rule,
             )
             mesh.AddLine(
-                "y", self.params.microstrip_length_mm / 2 + self.params.thirds_rule
+                "y", self.params.microstrip_length_mm / 2 + self.params.FDTD_thirds_rule
             )
 
             mesh.AddLine(
@@ -488,6 +489,6 @@ class MicrostripLine(SimTools):
                 ),
             )
 
-            mesh.SmoothMeshLines("all", self.params.mesh_resolution, smooth_ratio)
+            mesh.SmoothMeshLines("all", self.params.FDTD_mesh_resolution, smooth_ratio)
         else:
             Mesh(self.CSX, self.params)

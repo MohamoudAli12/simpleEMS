@@ -21,7 +21,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_eps_r=3.48,
         substrate_tand=0.0037,
         charac_imp=50.0,
-        end_criteria=1e-5,
+        FDTD_end_criteria=1e-5,
     )
 
     params.patch_length_mm = 3.15

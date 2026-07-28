@@ -29,6 +29,10 @@ import numpy as np
 from numpy.typing import NDArray
 from openEMS.physical_constants import C0, EPS0
 
+from .fem_backend import FEMOptions
+
+_FEM_DEFAULTS = FEMOptions()  # single source of truth for the FEM_* defaults below
+
 
 @dataclass(kw_only=True)
 class SimParams:
@@ -82,25 +86,56 @@ class SimParams:
         Number of full FEM solves the adaptive rational-interpolation sweep is
         allowed to perform (must be ``>= 4``). Ignored by the FDTD backend.
         Default is ``10``.
-
-        Finer FEM mesh/solver tuning (boundary condition, symmetry, element
-        order, port type, ...) is not part of this class -- pass a
-        :class:`~simpleEMS.fem_backend.FEMOptions` instance to
-        :func:`~simpleEMS.sim_tools.setup_simulation` instead.
+    FEM_boundary : str, optional
+        FEM backend only. Outer truncation: ``"silver_muller"`` (default)
+        or ``"pml"``.
+    FEM_symmetry : tuple, optional
+        FEM backend only. Mirror-symmetry plane ``(axis, kind, at)`` used to
+        halve the mesh. ``None`` (default) disables symmetry.
+    FEM_fe_order : int, optional
+        FEM backend only. Nedelec edge-element order: ``1`` (default) or
+        ``2``.
+    FEM_air_pad_frac : float, optional
+        FEM backend only. Air padding as a fraction of the longest
+        wavelength. Defaults to :attr:`FEMOptions.air_pad_frac`. Ignored
+        when ``FEM_air_pad_mm`` is set.
+    FEM_air_pad_mm : float, optional
+        FEM backend only. Explicit air padding in millimetres, added to
+        every face of the structure's bounding box in place of the
+        ``FEM_air_pad_frac`` wavelength formula. Use this for non-radiating
+        structures (e.g. filters) whose box shouldn't scale with a wide
+        S-parameter sweep's lowest frequency. If a far-field pattern is
+        later requested and this padding is too small for an accurate
+        near-to-far-field transform at the requested frequency,
+        ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the minimum
+        padding needed. Default is ``None`` (auto, via ``FEM_air_pad_frac``).
+    FEM_elems_per_wavelength : float, optional
+        FEM backend only. Target coarse mesh density in open air. Default
+        is ``8.0``.
+    FEM_mesh_fine_scale : float, optional
+        FEM backend only. Multiplier on the near-conductor element size.
+        Default is ``1.0``.
+    FEM_min_layers : int, optional
+        FEM backend only. Element layers through the dielectric thickness.
+        Default is ``3``.
+    FEM_port_type : str, optional
+        FEM backend only. ``"lumped"`` (default, impedance ``charac_imp``)
+        or ``"wave"`` (matched to the line's characteristic impedance) for
+        all ports.
     fp_precision : int, optional
         Floating-point precision used when generating geometric values.
         Default is ``3``.
     charac_imp : float, optional
         Feed/port impedance in ohms. Default is ``50``.
-    timestep : int, optional
+    FDTD_timestep : int, optional
         FDTD simulation time-step count. Default is ``90000000``.
-    end_criteria : float, optional
+    FDTD_end_criteria : float, optional
         Convergence threshold for the stopping criteria. Default is ``1e-4``.
-    mesh_resolution_factor : int, optional
+    FDTD_mesh_resolution_factor : int, optional
         Division factor used to compute the global mesh resolution
         (``lambda0 / factor``). Default is ``10``.
 
-    metal_mesh_resolution_factor : int, optional
+    FDTD_metal_mesh_resolution_factor : int, optional
         Division factor used to compute the metal primitives mesh resolution
         (``lambda0 / factor``). Default is ``40``.
 
@@ -115,11 +150,11 @@ class SimParams:
     simulation_box : NDArray of shape (3,)
         Bounding box dimensions [x, y, z] for the FDTD domain in mm,
         including lambda0 air padding around the structure.
-    mesh_resolution : float
+    FDTD_mesh_resolution : float
         Computed global mesh resolution.
-    metal_mesh_resolution : float
+    FDTD_metal_mesh_resolution : float
         Computed mesh resolution for metal primitives.
-    thirds_rule : NDArray
+    FDTD_thirds_rule : NDArray
         Small mesh offsets, ``[2/3, -1/3] * mesh_resolution / 4``, applied
         near metal edges for accurate field resolution.
     """
@@ -135,23 +170,47 @@ class SimParams:
     num_points: int = 1000
 
     backend_engine: str = "FDTD"
-    num_FEM_solve_points: int = 10
+
+    FEM_num_solve_points: int = 10
+    FEM_boundary: str = _FEM_DEFAULTS.boundary
+    FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry
+    FEM_fe_order: int = _FEM_DEFAULTS.fe_order
+    FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac
+    FEM_air_pad_mm: float | None = _FEM_DEFAULTS.air_pad_mm
+    FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength
+    FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale
+    FEM_min_layers: int = _FEM_DEFAULTS.min_layers
+    FEM_port_type: str = _FEM_DEFAULTS.port_type
+
+    FDTD_timestep: int = 90000000
+    FDTD_end_criteria: float = 1e-4
+    FDTD_mesh_resolution_factor: int = 10
+    FDTD_metal_mesh_resolution_factor: int = 40
+    FDTD_mesh_resolution: float = field(init=False)
+    FDTD_metal_mesh_resolution: float = field(init=False)
+    FDTD_thirds_rule: NDArray = field(init=False)
 
     copper_thickness_mm: float = 0.035
     min_trace_width_mm: float = 0.1
     min_trace_spacing_mm: float = 0.089
     fp_precision: int = 3
     charac_imp: float = 50
-    timestep: int = 90000000
-    end_criteria: float = 1e-4
-
-    mesh_resolution_factor: int = 10
-    metal_mesh_resolution_factor: int = 40
-    mesh_resolution: float = field(init=False)
-    metal_mesh_resolution: float = field(init=False)
-
     lambda0: float = field(init=False)
-    thirds_rule: NDArray = field(init=False)
+
+    @property
+    def fem_options(self) -> FEMOptions:
+        """Bundle the flat ``FEM_*`` fields into a :class:`FEMOptions` instance."""
+        return FEMOptions(
+            boundary=self.FEM_boundary,
+            symmetry=self.FEM_symmetry,
+            fe_order=self.FEM_fe_order,
+            air_pad_frac=self.FEM_air_pad_frac,
+            air_pad_mm=self.FEM_air_pad_mm,
+            elems_per_wavelength=self.FEM_elems_per_wavelength,
+            mesh_fine_scale=self.FEM_mesh_fine_scale,
+            min_layers=self.FEM_min_layers,
+            port_type=self.FEM_port_type,
+        )
 
     @property
     def freq_range(self) -> tuple[float, float]:
@@ -270,10 +329,10 @@ class SimParams:
             raise ValueError(
                 f"backend_engine must be 'FDTD' or 'FEM', got {self.backend_engine!r}"
             )
-        if self.num_FEM_solve_points < 4:
+        if self.FEM_num_solve_points < 4:
             raise ValueError(
                 f"num_FEM_solve_points must be >= 4 for a stable rational fit, "
-                f"got {self.num_FEM_solve_points}"
+                f"got {self.FEM_num_solve_points}"
             )
 
     def _compute_common(self) -> None:
@@ -301,11 +360,16 @@ class SimParams:
 
         self.lambda0 = C0 / (self.main_freq * np.sqrt(self.substrate_eps_r) * self.unit)
 
-        self.mesh_resolution = self.lambda0 / self.mesh_resolution_factor
-        self.metal_mesh_resolution = self.lambda0 / self.metal_mesh_resolution_factor
+        self.FDTD_mesh_resolution = self.lambda0 / self.FDTD_mesh_resolution_factor
+        self.FDTD_metal_mesh_resolution = (
+            self.lambda0 / self.FDTD_metal_mesh_resolution_factor
+        )
 
-        self.thirds_rule = (
-            np.array([2 * self.mesh_resolution / 3, -self.mesh_resolution / 3]) / 4
+        self.FDTD_thirds_rule = (
+            np.array(
+                [2 * self.FDTD_mesh_resolution / 3, -self.FDTD_mesh_resolution / 3]
+            )
+            / 4
         )
 
     def _create_simulation_box(

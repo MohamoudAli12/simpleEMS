@@ -218,21 +218,9 @@ class SimSetup(NamedTuple):
     charac_imp: float = 50
 
 
-_FEM_DEFAULTS = FEMOptions()  # single source of truth for the FEM_* defaults below
-
-
 def setup_simulation(
     params: SimParams,
     FDTD_boundary: list[str] | None = None,
-    FEM_boundary: str = _FEM_DEFAULTS.boundary,
-    FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry,
-    FEM_fe_order: int = _FEM_DEFAULTS.fe_order,
-    FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac,
-    FEM_air_pad_mm: float | None = _FEM_DEFAULTS.air_pad_mm,
-    FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength,
-    FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale,
-    FEM_min_layers: int = _FEM_DEFAULTS.min_layers,
-    FEM_port_type: str = _FEM_DEFAULTS.port_type,
 ) -> SimSetup:
     """
     Build the CSXCAD geometry container and configure the openEMS/FDTD
@@ -240,61 +228,21 @@ def setup_simulation(
 
     Creates the ``ContinuousStructure`` and ``openEMS`` objects, applies the
     boundary conditions and Gaussian excitation derived from
-    ``params.freq_range``, and (for the FEM backend) bundles the mesh/solver
-    tuning options into a :class:`~simpleEMS.fem_backend.FEMOptions`
-    instance. The returned :class:`SimSetup` is passed to most other
-    ``SimTools`` methods.
+    ``params.freq_range``, and (for the FEM backend) carries
+    ``params.fem_options`` through to the returned :class:`SimSetup`, which
+    is passed to most other ``SimTools`` methods.
 
     Parameters
     ----------
     params : SimParams
         Parameter object that holds all simulation parameters, including
-        ``freq_range``, ``num_points``, ``timestep``, ``end_criteria``,
-        ``backend_engine``, ``num_FEM_solve_points``, and ``charac_imp``.
+        ``freq_range``, ``num_points``, ``FDTD_timestep``,
+        ``FDTD_end_criteria``, ``backend_engine``, ``FEM_num_solve_points``,
+        the flat ``FEM_*`` mesh/solver tuning fields, and ``charac_imp``.
     FDTD_boundary : list[str], optional
         Six openEMS boundary-condition strings, one per box face in the
         order ``[xmin, xmax, ymin, ymax, zmin, zmax]``. Only used by the
         FDTD backend. Defaults to ``["PML_8"] * 6``.
-    FEM_boundary : str, optional
-        FEM backend only. Outer truncation: ``"silver_muller"`` (default)
-        or ``"pml"``.
-    FEM_symmetry : tuple, optional
-        FEM backend only. Mirror-symmetry plane ``(axis, kind, at)`` used to
-        halve the mesh. ``None`` (default) disables symmetry. See
-        :class:`~simpleEMS.fem_backend.FEMOptions`.
-    FEM_fe_order : int, optional
-        FEM backend only. Nedelec edge-element order: ``1`` (default) or
-        ``2``.
-    FEM_air_pad_frac : float, optional
-        FEM backend only. Air padding as a fraction of the longest
-        wavelength. Defaults to :attr:`FEMOptions.air_pad_frac`. Ignored
-        when ``FEM_air_pad_mm`` is set.
-    FEM_air_pad_mm : float, optional
-        FEM backend only. Explicit air padding in millimetres, added to
-        every face of the structure's bounding box in place of the
-        ``FEM_air_pad_frac`` wavelength formula. Use this for non-radiating
-        structures (e.g. filters) whose box shouldn't scale with a wide
-        S-parameter sweep's lowest frequency. If a far-field pattern is
-        later requested and this padding is too small for an accurate
-        near-to-far-field transform at the requested frequency,
-        ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the minimum
-        padding needed. Default is ``None`` (auto, via ``FEM_air_pad_frac``).
-    FEM_elems_per_wavelength : float, optional
-        FEM backend only. Target coarse mesh density in open air. Default
-        is ``8.0``.
-    FEM_mesh_fine_scale : float, optional
-        FEM backend only. Multiplier on the near-conductor element size.
-        Default is ``1.0``.
-    FEM_min_layers : int, optional
-        FEM backend only. Element layers through the dielectric thickness.
-        Default is ``3``.
-    FEM_port_type : str, optional
-        FEM backend only. ``"lumped"`` (default, impedance ``charac_imp``)
-        or ``"wave"`` (matched to the line's characteristic impedance) for
-        all ports.
-
-    All ``FEM_*`` arguments are ignored when ``params.backend_engine`` is
-    ``"FDTD"``.
 
     Returns
     -------
@@ -314,7 +262,7 @@ def setup_simulation(
             "PML_8",
         ]
     CSX = ContinuousStructure()
-    FDTD = openEMS(NrTS=params.timestep, EndCriteria=params.end_criteria)
+    FDTD = openEMS(NrTS=params.FDTD_timestep, EndCriteria=params.FDTD_end_criteria)
 
     FDTD.SetBoundaryCond(FDTD_boundary)
     FDTD.SetCSX(CSX)
@@ -327,26 +275,14 @@ def setup_simulation(
 
     freqs = np.linspace(fmin, fmax, params.num_points)
 
-    FEM_options = None
-    if params.backend_engine == "FEM":
-        FEM_options = FEMOptions(
-            boundary=FEM_boundary,
-            symmetry=FEM_symmetry,
-            fe_order=FEM_fe_order,
-            air_pad_frac=FEM_air_pad_frac,
-            air_pad_mm=FEM_air_pad_mm,
-            elems_per_wavelength=FEM_elems_per_wavelength,
-            mesh_fine_scale=FEM_mesh_fine_scale,
-            min_layers=FEM_min_layers,
-            port_type=FEM_port_type,
-        )
+    FEM_options = params.fem_options if params.backend_engine == "FEM" else None
 
     return SimSetup(
         CSX=CSX,
         FDTD=FDTD,
         freqs=freqs,
         backend_engine=params.backend_engine,
-        num_FEM_solve_points=params.num_FEM_solve_points,
+        num_FEM_solve_points=params.FEM_num_solve_points,
         FEM_options=FEM_options,
         charac_imp=params.charac_imp,
     )

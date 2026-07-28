@@ -377,9 +377,9 @@ class QuarterWaveFilterParams(SimParams):
             "shunt_line_length_mm",
             "frac_bandwidth",
             "lambda0",
-            "mesh_resolution",
-            "metal_mesh_resolution",
-            "thirds_rule",
+            "FDTD_mesh_resolution",
+            "FDTD_metal_mesh_resolution",
+            "FDTD_thirds_rule",
         ]:
             setattr(self, attr, np.round(getattr(self, attr), self.fp_precision))
 
@@ -782,7 +782,7 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                     ),
                 )
 
-            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2.5)
+            mesh.SmoothMeshLines("all", self.params.FDTD_mesh_resolution, 2.5)
 
         else:
             Mesh(self.CSX, self.params)
@@ -1152,7 +1152,7 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
                     ),
                 )
 
-            mesh.SmoothMeshLines("all", self.params.mesh_resolution, 2.5)
+            mesh.SmoothMeshLines("all", self.params.FDTD_mesh_resolution, 2.5)
 
         else:
             Mesh(self.CSX, self.params)

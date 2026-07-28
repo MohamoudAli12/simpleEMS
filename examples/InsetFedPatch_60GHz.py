@@ -22,7 +22,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         substrate_eps_r=3.00,
         substrate_tand=0.001,
         charac_imp=50.0,
-        end_criteria=1e-4,
+        FDTD_end_criteria=1e-4,
         min_trace_spacing_mm=0.05,
     )
 
