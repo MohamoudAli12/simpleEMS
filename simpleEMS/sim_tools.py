@@ -27,6 +27,7 @@ unit conversion helpers.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from typing import NamedTuple
@@ -452,7 +453,7 @@ class SimTools:
         ----------
         output_path : Path, optional
             Directory containing ``structure.xml``. STL files are written
-            to a ``stl`` subdirectory. Defaults to ``cwd``.
+            to a ``stl`` subdirectory. Defaults to ``cwd / "Sim_Path"``.
 
         Raises
         ------
@@ -461,7 +462,7 @@ class SimTools:
             ``write_and_show_structure`` was not called first).
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         stl_path = output_path / "stl"
         stl_path.mkdir(parents=True, exist_ok=True)
@@ -507,7 +508,11 @@ class SimTools:
             )
             return
 
-        sim.FDTD.Run(output_path)
+        cwd = os.getcwd()
+        try:
+            sim.FDTD.Run(output_path)
+        finally:
+            os.chdir(cwd)
 
     @staticmethod
     def create_nf2ff(sim: SimSetup) -> nf2ff:
@@ -594,17 +599,13 @@ class SimTools:
                 Reference impedance ``charac_imp`` (from ``sim``) that S11
                 and Z11 were computed against.
         """
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+
         if sim.backend_engine == "FEM":
             from . import fem_backend
 
-            # match the default used by write_and_show_structure / run_simulation
-            # so the FEM results are read from where they were written.
-            if output_path is None:
-                output_path = Path.cwd() / "Sim_Path"
             return fem_backend.compute_sim_data(sim.freqs, sim.charac_imp, output_path)
-
-        if output_path is None:
-            output_path = Path.cwd()
 
         if isinstance(port, list):
             for p in port:
@@ -1047,7 +1048,7 @@ class SimTools:
             Must be a scalar.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
         read_cached : bool, optional
             If True, read cached NF2FF results instead of re-computing.
             Default is False.
@@ -1064,7 +1065,7 @@ class SimTools:
             If ``freq`` is not a scalar (e.g. an array of frequencies).
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         if not np.isscalar(freq):
             raise TypeError(
@@ -1179,7 +1180,7 @@ class SimTools:
             be a scalar.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
         read_cached : bool, optional
             If True, read cached NF2FF results instead of re-computing.
             Default is False.
@@ -1198,7 +1199,7 @@ class SimTools:
             the peak.
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         if not np.isscalar(freq):
             raise TypeError(
@@ -1341,7 +1342,7 @@ class SimTools:
             evaluated. Must be a scalar.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
         read_cached : bool, optional
             If True, read cached NF2FF results instead of re-computing.
             Default is False.
@@ -1359,7 +1360,7 @@ class SimTools:
             If ``freq`` is not a scalar (e.g. an array of frequencies).
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         if not np.isscalar(freq):
             raise TypeError(
@@ -1404,7 +1405,7 @@ class SimTools:
             evaluated. Must be a scalar; used only for plot/file labeling.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
 
         Returns
         -------
@@ -1418,7 +1419,7 @@ class SimTools:
             If ``freq`` is not a scalar (e.g. an array of frequencies).
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         if not np.isscalar(freq):
             raise TypeError(
@@ -1493,7 +1494,7 @@ class SimTools:
             normalize directivity into realized gain.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
 
         Returns
         -------
@@ -1502,7 +1503,7 @@ class SimTools:
             ``3D_plots/3D_Gain.vtk``; does not return a value.
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         e_field = np.squeeze(nf2ff_3d_result.E_norm)
         e_field /= np.max(e_field)  # normalize
@@ -1567,7 +1568,7 @@ class SimTools:
             for plot/file labeling.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
 
         Returns
         -------
@@ -1576,7 +1577,7 @@ class SimTools:
             ``3D_plots/3D_Power.vtk``; does not return a value.
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
@@ -1626,7 +1627,7 @@ class SimTools:
         ----------
         output_path : Path, optional
             Directory to save the ``plots`` subdirectory under. Defaults
-            to the current working directory.
+            to ``cwd / "Sim_Path"``.
         file_format : str, optional
             File format to save the plots as (e.g. ``"png"``, ``"jpg"``,
             ``"pdf"``). Default is ``"png"``.
@@ -1641,7 +1642,7 @@ class SimTools:
         the plot windows are closed.
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         plot_path = output_path / "plots"
         plot_path.mkdir(parents=True, exist_ok=True)
@@ -1779,7 +1780,7 @@ class SimTools:
             Default is ``50.0``.
         output_path : Path, optional
             Directory to save the ``touchstone`` subdirectory under.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
         filename : str, optional
             Base name of the exported file (extension is added
             automatically). Default is ``"s_param"``.
@@ -1800,7 +1801,7 @@ class SimTools:
         console.print("-------------------------------------------", style="info")
 
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         touchstone_path = output_path / "touchstone"
         touchstone_path.mkdir(parents=True, exist_ok=True)
@@ -1833,7 +1834,7 @@ class SimTools:
             Simulation setup named tuple returned by ``setup_simulation``.
         output_path : Path, optional
             Directory to save the ``gerber`` subdirectory under. Defaults
-            to the current working directory.
+            to ``cwd / "Sim_Path"``.
         options : dict[str, list], optional
             Dictionary of export options. Defaults to
             ``{"ignore": ["ground"]}``.
@@ -1855,7 +1856,7 @@ class SimTools:
             options = {"ignore": ["ground"]}
 
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         gerber_path = output_path / "gerber"
         gerber_path.mkdir(parents=True, exist_ok=True)
@@ -1881,14 +1882,14 @@ class SimTools:
             Simulation setup named tuple returned by ``setup_simulation``.
         output_path : Path, optional
             Directory to save the ``step`` subdirectory under. Defaults to
-            the current working directory.
+            ``cwd / "Sim_Path"``.
 
         Returns
         -------
         None
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         step_path = output_path / "step"
         step_path.mkdir(parents=True, exist_ok=True)
@@ -1916,7 +1917,7 @@ class SimTools:
             Path to the ``structure.xml`` file exported by CSXCAD / openEMS.
         output_path : Path, optional
             Directory to save the ``step`` subdirectory under. Defaults to
-            the current working directory.
+            ``cwd / "Sim_Path"``.
 
         Returns
         -------
@@ -1924,7 +1925,7 @@ class SimTools:
         """
 
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         step_path = output_path / "step"
         step_path.mkdir(parents=True, exist_ok=True)
@@ -1969,7 +1970,7 @@ class SimTools:
             Parameter object whose dataclass fields are printed and saved.
         output_path : Path, optional
             Directory to save the ``params`` subdirectory under. Defaults
-            to the current working directory.
+            to ``cwd / "Sim_Path"``.
 
         Returns
         -------
@@ -1978,7 +1979,7 @@ class SimTools:
         """
 
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         params_path = output_path / "params"
         params_path.mkdir(parents=True, exist_ok=True)
@@ -2045,7 +2046,7 @@ class SimTools:
             Default is ``None`` for single-port structures.
         output_path : Path, optional
             Directory where simulation results and exports will be saved.
-            Defaults to the current working directory.
+            Defaults to ``cwd / "Sim_Path"``.
 
         Returns
         -------
@@ -2057,7 +2058,7 @@ class SimTools:
         STL/Touchstone/Gerber exports run only after the plots are closed.
         """
         if output_path is None:
-            output_path = Path.cwd()
+            output_path = Path.cwd() / "Sim_Path"
 
         target_freq = params.main_freq
 

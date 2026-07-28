@@ -896,7 +896,7 @@ def simulate_step_FEM(
     num_solve_points: int = 10,
     FEM_options: FEMOptions | None = None,
     charac_imp: float = 50.0,
-    output_path: str | Path = "fem_out",
+    output_path: str | Path = "Sim_Path",
     run: bool = True,
     verbose: bool = True,
 ) -> SimData:
