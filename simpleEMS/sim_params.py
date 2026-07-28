@@ -82,7 +82,7 @@ class SimParams:
     backend_engine : str, optional
         Solver backend to use: ``"FDTD"`` (openEMS, default) or ``"FEM"``
         (Gmsh + GetDP finite-element frequency-domain solver).
-    num_FEM_solve_points : int, optional
+    FEM_num_solve_points : int, optional
         Number of full FEM solves the adaptive rational-interpolation sweep is
         allowed to perform (must be ``>= 4``). Ignored by the FDTD backend.
         Default is ``10``.
@@ -322,7 +322,7 @@ class SimParams:
         ------
         ValueError
             If ``backend_engine`` is not ``"FDTD"`` or ``"FEM"``, or if
-            ``num_FEM_solve_points`` is below the minimum needed for a stable
+            ``FEM_num_solve_points`` is below the minimum needed for a stable
             rational fit.
         """
         if self.backend_engine not in ("FDTD", "FEM"):
@@ -331,7 +331,7 @@ class SimParams:
             )
         if self.FEM_num_solve_points < 4:
             raise ValueError(
-                f"num_FEM_solve_points must be >= 4 for a stable rational fit, "
+                f"FEM_num_solve_points must be >= 4 for a stable rational fit, "
                 f"got {self.FEM_num_solve_points}"
             )
 
