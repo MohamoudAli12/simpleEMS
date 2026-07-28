@@ -218,18 +218,21 @@ class SimSetup(NamedTuple):
     charac_imp: float = 50
 
 
+_FEM_DEFAULTS = FEMOptions()  # single source of truth for the FEM_* defaults below
+
+
 def setup_simulation(
     params: SimParams,
     FDTD_boundary: list[str] | None = None,
-    FEM_boundary: str = "silver_muller",
-    FEM_symmetry: tuple | None = None,
-    FEM_fe_order: int = 1,
-    FEM_air_pad_frac: float = 0.2,
-    FEM_air_pad_mm: float | None = None,
-    FEM_elems_per_wavelength: float = 8.0,
-    FEM_mesh_fine_scale: float = 1.0,
-    FEM_min_layers: int = 3,
-    FEM_port_type: str = "lumped",
+    FEM_boundary: str = _FEM_DEFAULTS.boundary,
+    FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry,
+    FEM_fe_order: int = _FEM_DEFAULTS.fe_order,
+    FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac,
+    FEM_air_pad_mm: float | None = _FEM_DEFAULTS.air_pad_mm,
+    FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength,
+    FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale,
+    FEM_min_layers: int = _FEM_DEFAULTS.min_layers,
+    FEM_port_type: str = _FEM_DEFAULTS.port_type,
 ) -> SimSetup:
     """
     Build the CSXCAD geometry container and configure the openEMS/FDTD
@@ -264,8 +267,8 @@ def setup_simulation(
         ``2``.
     FEM_air_pad_frac : float, optional
         FEM backend only. Air padding as a fraction of the longest
-        wavelength. Default is ``0.2``. Ignored when ``FEM_air_pad_mm`` is
-        set.
+        wavelength. Defaults to :attr:`FEMOptions.air_pad_frac`. Ignored
+        when ``FEM_air_pad_mm`` is set.
     FEM_air_pad_mm : float, optional
         FEM backend only. Explicit air padding in millimetres, added to
         every face of the structure's bounding box in place of the

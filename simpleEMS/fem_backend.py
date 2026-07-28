@@ -85,8 +85,10 @@ class FEMOptions:
     fe_order : int
         Nedelec edge-element order: ``1`` (default) or ``2``.
     air_pad_frac : float
-        Air padding as a fraction of the longest wavelength. Default ``0.2``.
-        Ignored when ``air_pad_mm`` is set.
+        Air padding as a fraction of the longest wavelength. Default ``0.25``
+        (a quarter-wavelength, the minimum the near-to-far-field transform
+        needs -- see ``FEMNF2FF.CalcNF2FF``). Ignored when ``air_pad_mm`` is
+        set.
     air_pad_mm : float | None
         Explicit air padding in millimetres, added to every face of the
         structure's bounding box in place of the ``air_pad_frac`` wavelength
@@ -111,7 +113,7 @@ class FEMOptions:
     boundary: str = "silver_muller"
     symmetry: tuple | None = None
     fe_order: int = 1
-    air_pad_frac: float = 0.2
+    air_pad_frac: float = 0.25
     air_pad_mm: float | None = None
     elems_per_wavelength: float = 8.0
     mesh_fine_scale: float = 1.0
@@ -203,9 +205,6 @@ class Problem:
     name : str
         Base name used for the generated mesh/problem files. Default
         ``"structure"``.
-    boundary : str
-        Outer domain truncation: ``"silver_muller"`` (default, first-order
-        absorbing boundary) or ``"pml"``.
     solids : dict[str, SolidSpec]
         Solid name -> role/material assignment.
     ports : list[PortSpec]
@@ -213,43 +212,66 @@ class Problem:
     freqs : NDArray
         Frequency grid (Hz) the problem is solved/interpolated over. Default
         ``[2.45e9]``.
-    fe_order : int
-        Nedelec edge-element order: ``1`` (default) or ``2``.
-    symmetry : tuple | None
-        Optional mirror-symmetry plane ``(axis, kind, at)`` -- see
-        :class:`FEMOptions`. ``None`` (default) means no symmetry is applied.
-    air_pad_frac : float
-        Air padding as a fraction of the longest free-space wavelength.
-        Default ``0.2``. Ignored when ``air_pad_mm`` is set.
-    air_pad_mm : float | None
-        Explicit air padding in millimetres -- see :class:`FEMOptions`.
-        Default ``None``.
-    elems_per_wavelength : float
-        Target coarse mesh density in open air. Default ``8.0``.
-    mesh_fine_scale : float
-        Multiplier on the near-conductor element size. Default ``1.0``.
-    min_layers : int
-        Minimum element layers through the dielectric thickness. Default ``3``.
+    options : FEMOptions
+        Global solver/mesh knobs -- boundary, element order, symmetry, air
+        padding, mesh density. :class:`FEMOptions` is the single place these
+        defaults are declared; ``Problem`` only holds an instance and exposes
+        read-only pass-through properties (below) so the rest of the FEM
+        backend can keep reading e.g. ``problem.air_pad_frac`` unchanged.
     """
 
     step_file: str
     name: str = "structure"
-    boundary: str = "silver_muller"  # or "pml"
     solids: dict[str, SolidSpec] = field(default_factory=dict)
     ports: list[PortSpec] = field(default_factory=list)
     freqs: NDArray = field(default_factory=lambda: np.array([2.45e9]))
-    fe_order: int = 1
-    symmetry: tuple | None = None
-    # mesh controls
-    air_pad_frac: float = 0.2  # air padding as a fraction of the longest wavelength
-    air_pad_mm: float | None = None  # explicit air padding (mm), overrides air_pad_frac
-    elems_per_wavelength: float = 8.0  # coarse mesh density in open air
-    mesh_fine_scale: float = 1.0  # multiplier on the near-conductor element size
-    min_layers: int = 3  # element layers through the dielectric
+    options: FEMOptions = field(default_factory=FEMOptions)
 
     def dielectrics(self) -> list[SolidSpec]:
         """Return the solids assigned the dielectric role."""
         return [s for s in self.solids.values() if s.role == "dielectric"]
+
+    # Read-only pass-throughs onto `options` -- FEMOptions is the only place
+    # that declares these defaults; Problem never redeclares them.
+    @property
+    def boundary(self) -> str:
+        """Outer domain truncation: ``"silver_muller"`` or ``"pml"``."""
+        return self.options.boundary
+
+    @property
+    def fe_order(self) -> int:
+        """Nedelec edge-element order: ``1`` or ``2``."""
+        return self.options.fe_order
+
+    @property
+    def symmetry(self) -> tuple | None:
+        """Optional mirror-symmetry plane ``(axis, kind, at)``, or ``None``."""
+        return self.options.symmetry
+
+    @property
+    def air_pad_frac(self) -> float:
+        """Air padding as a fraction of the longest free-space wavelength."""
+        return self.options.air_pad_frac
+
+    @property
+    def air_pad_mm(self) -> float | None:
+        """Explicit air padding in millimetres, or ``None`` for the auto formula."""
+        return self.options.air_pad_mm
+
+    @property
+    def elems_per_wavelength(self) -> float:
+        """Target coarse mesh density in open air."""
+        return self.options.elems_per_wavelength
+
+    @property
+    def mesh_fine_scale(self) -> float:
+        """Multiplier on the near-conductor element size."""
+        return self.options.mesh_fine_scale
+
+    @property
+    def min_layers(self) -> int:
+        """Minimum element layers through the dielectric thickness."""
+        return self.options.min_layers
 
 
 # ----------------------------
@@ -348,18 +370,10 @@ def _csx_roles(
 
 def _apply_FEM_options(prob: Problem, FEM_options: FEMOptions | None) -> None:
     """Apply global :class:`FEMOptions` to a :class:`Problem` (in place)."""
-    if FEM_options is None:
-        return
-    prob.boundary = FEM_options.boundary
-    prob.symmetry = FEM_options.symmetry
-    prob.fe_order = FEM_options.fe_order
-    prob.air_pad_frac = FEM_options.air_pad_frac
-    prob.air_pad_mm = FEM_options.air_pad_mm
-    prob.elems_per_wavelength = FEM_options.elems_per_wavelength
-    prob.mesh_fine_scale = FEM_options.mesh_fine_scale
-    prob.min_layers = FEM_options.min_layers
+    if FEM_options is not None:
+        prob.options = FEM_options
     for port in prob.ports:
-        port.port_type = FEM_options.port_type
+        port.port_type = prob.options.port_type
 
 
 def _build_problem(
