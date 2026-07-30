@@ -36,7 +36,7 @@ from .calc import (
 )
 from .sim_params import SimParams
 from .sim_tools import SimTools, SimSetup
-from .mesh import Mesh
+from .fdtd_mesh import Mesh
 
 # ----------------------------
 # Public APIS

@@ -37,7 +37,7 @@ from .calc import (
 )
 from .console import console
 from .sim_params import SimParams
-from .mesh import Mesh
+from .fdtd_mesh import Mesh
 from .sim_tools import SimTools, SimSetup, mm_to_m
 
 # ----------------------------

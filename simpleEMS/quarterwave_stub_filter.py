@@ -33,7 +33,7 @@ from openEMS.ports import LumpedPort
 
 from simpleEMS.sim_tools import SimTools, SimSetup
 from .sim_params import SimParams
-from .mesh import Mesh
+from .fdtd_mesh import Mesh
 from .calc import microstrip_width_from_impedance, calculate_electrical_length_mm
 from .filter_coefficient import get_filter_coefficient
 

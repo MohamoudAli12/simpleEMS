@@ -210,7 +210,7 @@ class SimSetup(NamedTuple):
     CSX: ContinuousStructure
     FDTD: openEMS
     freqs: NDArray
-    backend_engine: str
+    backend_engine: str = "FDTD"
     FEM_options: FEMOptions | None = None
     charac_imp: float = 50
 

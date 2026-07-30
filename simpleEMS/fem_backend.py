@@ -945,7 +945,7 @@ def simulate_step_FEM(
     """
     Solve a raw STEP geometry with the FEM backend, returning ``SimData``.
 
-    A CSX-free entry point mirroring :func:`standalone_model.simulate_model`:
+    A CSX-free entry point mirroring :func:`fdtd_standalone_model.simulate_model`:
     it meshes the STEP, generates the GetDP problem, runs the adaptive sweep,
     and returns the standard results bundle so all ``SimTools`` post-processing
     applies.
