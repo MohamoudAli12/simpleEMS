@@ -1,6 +1,6 @@
 Standalone Model
 ================
 
-.. automodapi:: simpleEMS.standalone_model
+.. automodapi:: simpleEMS.fdtd_standalone_model
    :no-inheritance-diagram:
 
