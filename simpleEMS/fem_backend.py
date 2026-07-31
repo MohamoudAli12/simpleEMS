@@ -702,7 +702,9 @@ def _sweep_from_meta(
     # GetDP appends to these Format Table files (write_problem's xs_file =
     # "File >") instead of overwriting, so a sweep's per-solve rows accumulate
     # in one file. Clear any left over from a previous sweep/run first, or
-    # this run's rows would land after stale ones from before.
+    # this run's rows would land after stale ones from before -- and since each
+    # solve point is now identified by *position* (its last `npt` rows), stale
+    # rows would misalign the whole S-matrix rather than just being ignored.
     stale_patterns = [
         "intPort.txt",
         "xS_*.txt",
@@ -721,26 +723,35 @@ def _sweep_from_meta(
     # that already produces xS_<n> at each (freq, active-port) solve).
     vi_solved: dict[float, tuple[complex, complex]] = {}
 
-    # One full FEM solve at a single frequency: drive each port in turn and read
-    # back the column of the S-matrix it produces (S[:, active]).
+    # One full FEM solve at a single frequency, producing the whole S-matrix.
+    #
+    # A single getdp launch drives every port: the .pro's Analysis resolution
+    # assembles and factorises once, then rebuilds only the right-hand side for
+    # each subsequent port (GenerateRightHandSideGroup + SolveAgain). That
+    # replaces one process, one assembly and one factorisation *per port* with
+    # one of each per frequency -- the factorisation dominates, so an N-port
+    # sweep costs roughly what a 1-port sweep used to.
+    #
+    # Each port appends a row to xS_<n>.txt in the resolution's port order, so
+    # the last `npt` rows of xS_<n>.txt are row n of the S-matrix, indexed by
+    # driven port.
     def solve_at(freq: float) -> NDArray:
         s = np.zeros((npt, npt), dtype=complex)
-        for active in port_numbers:
-            fem_solver.run_getdp(
-                pro_path,
-                msh_path,
-                output_path,
-                {"FREQ": freq, "ACTIVE_PORT": active},
-                "Get_SParameters",
-            )
-            for n in port_numbers:
-                s[idx[n], idx[active]] = fem_solver.read_complex(
-                    outdir / f"xS_{n * 10 + active}.txt"
-                )
-            if active == ref_port:
-                v = fem_solver.read_complex(outdir / f"V_{active * 10 + active}.txt")
-                i = fem_solver.read_complex(outdir / f"I_{active * 10 + active}.txt")
-                vi_solved[freq] = (v, i)
+        fem_solver.run_getdp(
+            pro_path,
+            msh_path,
+            output_path,
+            {"FREQ": freq},
+            None,  # Analysis runs Get_SParameters itself, once per port
+        )
+        for n in port_numbers:
+            row = fem_solver.read_complex_rows(outdir / f"xS_{n}.txt", npt)
+            for active, value in zip(port_numbers, row, strict=True):
+                s[idx[n], idx[active]] = value
+        # V/I of the reference port while it is the driven one.
+        v_rows = fem_solver.read_complex_rows(outdir / f"V_{ref_port}.txt", npt)
+        i_rows = fem_solver.read_complex_rows(outdir / f"I_{ref_port}.txt", npt)
+        vi_solved[freq] = (v_rows[idx[ref_port]], i_rows[idx[ref_port]])
         return s
 
     # The expensive part is each solve_at() call, so let the adaptive sweep pick

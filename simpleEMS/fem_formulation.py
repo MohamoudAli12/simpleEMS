@@ -39,6 +39,13 @@ The physics it emits:
 * **Excitation / ports** -- each port sheet carries an impedance term
   (``eta0/Zs``) plus an impressed quasi-TEM mode source; S-parameters come from
   the mode overlap of the solved field on each port.
+
+The driven port is selected by the *runtime* GetDP variable ``$ActivePort``
+rather than a parse-time constant, which is what lets the ``Analysis``
+resolution walk every port inside a single GetDP launch: only the source term
+changes between ports, so the system matrix is assembled and factorised once
+and each subsequent port needs nothing but a fresh right-hand side
+(``GenerateRightHandSideGroup`` on the port sheets) and a ``SolveAgain``.
 """
 
 from __future__ import annotations
@@ -66,7 +73,6 @@ def write_problem(
     problem: "Problem",
     mesh: "Mesh",
     workdir: str | Path,
-    internal_sweep: bool = False,
 ) -> str:
     """
     Write the GetDP ``.pro`` problem file for ``problem`` on ``mesh``.
@@ -79,9 +85,6 @@ def write_problem(
         The generated mesh with its region maps.
     workdir : str | Path
         Directory to write the ``.pro`` file into.
-    internal_sweep : bool
-        If ``True``, bake the frequency list into the Resolution so one GetDP
-        launch sweeps all points. Default ``False`` (one solve per point).
 
     Returns
     -------
@@ -90,40 +93,48 @@ def write_problem(
     """
     ports = [mesh.port_regions[p.number] for p in problem.ports]
     nports = len(ports)
-    active_default = ports[0].number if ports else 1
+    port_numbers = [pm.number for pm in ports]
+    active_default = port_numbers[0] if port_numbers else 1
     f0 = float(problem.freqs[0])
 
-    # --- frequency-source mode ------------------------------------------------
-    # default: k0 from the -setnumber FREQ constant, one Generate/Solve.
-    # internal: k0 from the runtime $freq, looped over the baked-in frequency
-    #           list inside the Resolution (one getdp launch sweeps all points).
-    freqvar = "$freq" if internal_sweep else "FREQ"
-    if internal_sweep:
-        k0_def = "k0[] = 2*Pi*$freq / c0;"
-        freqs = ", ".join(_fmt(float(f)) for f in problem.freqs)
-        freqs_decl = f"Freqs() = {{ {freqs} }};\nNbFreq = {len(problem.freqs)};"
-        resolution_op = (
-            "CreateDir[Str[myDir]] ;\n"
-            "      For iFreq In {0:NbFreq-1}\n"
-            "        Evaluate[ $freq = Freqs(iFreq) ];\n"
-            "        SetTime[$freq];\n"
-            "        SetFrequency[A, $freq];\n"
-            "        Generate[A] ; Solve[A] ;\n"
-            "        PostOperation[Get_SParameters] ;\n"
-            "      EndFor"
-        )
-    else:
-        k0_def = "k0[] = 2*Pi*FREQ / c0;"
-        freqs_decl = ""
-        resolution_op = (
-            "CreateDir[Str[myDir]] ; Generate[A] ; Solve[A] ; SaveSolution[A] ;"
-        )
-    # Every scalar (Format Table) result is appended, not overwritten, so a full
-    # sweep's per-solve rows all land in the same file (one getdp launch per
-    # solve point still shares these files across the whole sweep). Callers
-    # that read these back (fem_solver.read_complex) always take
-    # the *last* row. fem_backend._sweep_from_meta clears stale files from any
-    # previous run before a sweep starts, so rows never mix across runs.
+    k0_def = "k0[] = 2*Pi*FREQ / c0;"
+    freqvar = "FREQ"
+
+    # --- port loop inside one GetDP launch ------------------------------------
+    # Driving port k only changes the source term, which lives entirely on the
+    # port sheets: the system matrix is identical for every port at a given
+    # frequency. So assemble and factorise once for the first port, then for
+    # each remaining port rebuild *only* the right-hand side over the Ports
+    # group and re-solve against the existing factorisation.
+    #   GenerateRightHandSideGroup[A, Ports]  leaves A untouched (it sets
+    #   GetDP's Flag_RHS, which skips the matrix zero/rebuild) and reassembles b
+    #   from the terms supported on Ports;
+    #   SolveAgain[A]                         reuses the preconditioner, i.e.
+    #   the LU factorisation for the default direct solver.
+    # This is what makes the driven port a runtime `$ActivePort` rather than a
+    # parse-time constant -- a constant could not change between Generate calls.
+    resolution_lines = ["CreateDir[Str[myDir]] ;"]
+    if port_numbers:
+        resolution_lines += [
+            f"      Evaluate[ $ActivePort = {active_default} ] ;",
+            "      Generate[A] ; Solve[A] ;",
+            "      PostOperation[Get_SParameters] ;",
+        ]
+        for number in port_numbers[1:]:
+            resolution_lines += [
+                f"      Evaluate[ $ActivePort = {number} ] ;",
+                "      GenerateRightHandSideGroup[A, Ports] ;",
+                "      SolveAgain[A] ;",
+                "      PostOperation[Get_SParameters] ;",
+            ]
+    resolution_op = "\n".join(resolution_lines)
+
+    # Every scalar (Format Table) result is appended, not overwritten, so each
+    # port of each solve point adds one row. Within a launch the rows follow the
+    # Resolution's port order, so the last `nports` rows of xS_<n>.txt are that
+    # frequency's S[n, :] (see fem_solver.read_complex_rows).
+    # fem_backend._sweep_from_meta clears stale files from any previous run
+    # before a sweep starts, so rows never mix across runs.
     xs_file = "File >"
 
     diel_lines = []
@@ -210,8 +221,10 @@ def write_problem(
         port_fun_lines.append(
             f"  Yrel_{pm.number} = eta0 / ({_fmt(zs)});  // eta0/Zs, Zs={kind}"
         )
+        # $ActivePort (not the ACTIVE_PORT constant) so the source can be
+        # rebuilt per port inside one launch -- see the Resolution below.
         port_fun_lines.append(
-            f"  eInc[Port_{pm.number}] = (ACTIVE_PORT == {pm.number}) ? "
+            f"  eInc[Port_{pm.number}] = ($ActivePort == {pm.number}) ? "
             f"ePort_{pm.number}[] : Vector[0.,0.,0.];"
         )
 
@@ -233,6 +246,8 @@ def write_problem(
     # port n's mode: on the driven port the incident mode is subtracted first so
     # the overlap is the *reflected* wave (S_kk); on the others it is the full
     # transmitted wave (S_nk). #(n) is the mode-normalisation stored above.
+    # The quantity names carry only the observed port n -- the driven port is
+    # the runtime $ActivePort, which cannot appear in a parse-time name.
     sparam_q = []
     for pm in ports:
         n = pm.number
@@ -240,29 +255,32 @@ def write_problem(
             f"""        {{ Name intPort_{n} ;
           Value {{ Integral {{ [ (ePort_{n}[]*dir_{n}[]) * (ePort_{n}[]*dir_{n}[]) ] ;
             In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}
-        {{ Name xS_{n}~{{ACTIVE_PORT}} ;
-          Value {{ Integral {{ [ (({{e}}*dir_{n}[]) - ((ACTIVE_PORT == {n}) ? (ePort_{n}[]*dir_{n}[]) : 0)) * (ePort_{n}[]*dir_{n}[]) / #({n}) ] ;
+        {{ Name xS_{n} ;
+          Value {{ Integral {{ [ (({{e}}*dir_{n}[]) - (($ActivePort == {n}) ? (ePort_{n}[]*dir_{n}[]) : 0)) * (ePort_{n}[]*dir_{n}[]) / #({n}) ] ;
             In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}
-        {{ Name V_{n}~{{ACTIVE_PORT}} ;
+        {{ Name V_{n} ;
           Value {{ Integral {{ [ {_fmt(pm.gap)} * ({{e}}*dir_{n}[]) / #({n}) ] ;
             In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}
-        {{ Name I_{n}~{{ACTIVE_PORT}} ;
+        {{ Name I_{n} ;
           Value {{ Integral {{ [ ({_fmt(pm.gap)}/{_fmt(pm.ref_impedance)}) * (2*(eInc[]*dir_{n}[]) - ({{e}}*dir_{n}[])) / #({n}) ] ;
             In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}"""
         )
 
+    # intPort is appended like everything else: it is written once per port per
+    # solve and is diagnostic only -- xS/V/I read the value through the register
+    # #(n), which StoreInRegister sets on the line above, not from the file.
     sparam_op = []
     for pm in ports:
         n = pm.number
         sparam_op.append(
             f"""      Print [ intPort_{n}[Port_{n}], OnRegion Port_{n}, StoreInRegister ({n}),
-        Format Table, File StrCat[myDir, "intPort.txt"] ];
-      Print [ xS_{n}~{{ACTIVE_PORT}}[Port_{n}], OnRegion Port_{n}, Format Table,
-        {xs_file} StrCat[myDir, StrCat["xS_", Sprintf("%g", {n}*10+ACTIVE_PORT), ".txt"]] ];
-      Print [ V_{n}~{{ACTIVE_PORT}}[Port_{n}], OnRegion Port_{n}, Format Table,
-        {xs_file} StrCat[myDir, StrCat["V_", Sprintf("%g", {n}*10+ACTIVE_PORT), ".txt"]] ];
-      Print [ I_{n}~{{ACTIVE_PORT}}[Port_{n}], OnRegion Port_{n}, Format Table,
-        {xs_file} StrCat[myDir, StrCat["I_", Sprintf("%g", {n}*10+ACTIVE_PORT), ".txt"]] ];"""
+        Format Table, {xs_file} StrCat[myDir, "intPort.txt"] ];
+      Print [ xS_{n}[Port_{n}], OnRegion Port_{n}, Format Table,
+        {xs_file} StrCat[myDir, "xS_{n}.txt"] ];
+      Print [ V_{n}[Port_{n}], OnRegion Port_{n}, Format Table,
+        {xs_file} StrCat[myDir, "V_{n}.txt"] ];
+      Print [ I_{n}[Port_{n}], OnRegion Port_{n}, Format Table,
+        {xs_file} StrCat[myDir, "I_{n}.txt"] ];"""
         )
 
     # Assemble the .pro from the pieces built above. A GetDP problem file is a
@@ -280,11 +298,10 @@ def write_problem(
 
 DefineConstant[
   FREQ = {_fmt(f0)},          // Hz (override per solve with -setnumber FREQ <f>)
-  ACTIVE_PORT = {active_default},   // driven port (-setnumber ACTIVE_PORT k)
+  ACTIVE_PORT = {active_default},   // driven port for AnalysisSinglePort only
   FEorder = {int(problem.fe_order)}   // 1 (lowest-order Nedelec) or 2 (add BF_Edge_2E)
 ];
 NbPorts = {nports};
-{freqs_decl}
 myDir = "output/";
 
 eps0 = {_fmt(EPS0)};
@@ -384,10 +401,23 @@ Formulation {{
 }}
 
 Resolution {{
+  // All ports at one frequency, in a single launch: assemble + factorise once,
+  // then only the right-hand side is rebuilt per port (see above).
   {{ Name Analysis ;
     System {{ {{ Name A ; NameOfFormulation eFormulation ; Type ComplexValue ; Frequency FREQ ; }} }}
     Operation {{
       {resolution_op}
+    }}
+  }}
+  // One port only, driven by the ACTIVE_PORT constant, keeping the solution for
+  // a follow-up -pos run. Used by fem_solver.solve_fields_and_power, which
+  // wants the field views at a single driven port rather than an S-matrix.
+  {{ Name AnalysisSinglePort ;
+    System {{ {{ Name A ; NameOfFormulation eFormulation ; Type ComplexValue ; Frequency FREQ ; }} }}
+    Operation {{
+      CreateDir[Str[myDir]] ;
+      Evaluate[ $ActivePort = ACTIVE_PORT ] ;
+      Generate[A] ; Solve[A] ; SaveSolution[A] ;
     }}
   }}
 }}

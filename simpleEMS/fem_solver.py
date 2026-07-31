@@ -17,9 +17,9 @@
 """
 Drive the GetDP finite-element solver as a subprocess.
 
-Locates the ``getdp`` binary on ``PATH``, runs a single frequency/port solve
-of a generated ``.pro`` file, and reads back the results: per-port
-``xS_<n><k>.txt`` S-parameter tables, or the field-view files and
+Locates the ``getdp`` binary on ``PATH``, runs one solve of a generated
+``.pro`` file, and reads back the results: per-port ``xS_<n>.txt``
+S-parameter tables (one row per driven port), or the field-view files and
 dielectric-loss/radiated-power totals from a combined fields-and-power solve.
 """
 
@@ -62,9 +62,9 @@ def read_complex(path: str | Path) -> complex:
     Parameters
     ----------
     path : str | Path
-        Path to an ``xS_<n><k>.txt`` file with ``[tag, Re, Im]`` columns. Rows
-        accumulate across a sweep (GetDP appends, see ``write_problem``), so
-        the most recently solved point is always the last row.
+        Path to a Table file with ``[tag, Re, Im]`` columns. Rows accumulate
+        across a sweep (GetDP appends, see ``write_problem``), so the most
+        recently written value is always the last row.
 
     Returns
     -------
@@ -77,6 +77,53 @@ def read_complex(path: str | Path) -> complex:
     if d.ndim == 1:
         d = d.reshape(1, -1)
     return complex(d[-1, 1], d[-1, 2])
+
+
+def read_complex_rows(path: str | Path, count: int) -> list[complex]:
+    """
+    Read the last ``count`` complex values from a GetDP Table output file.
+
+    One ``Analysis`` launch drives every port in turn and appends a row per
+    port, in the Resolution's port order, so the last ``count`` rows of
+    ``xS_<n>.txt`` are that frequency's ``S[n, :]`` -- one entry per driven
+    port.
+
+    Parameters
+    ----------
+    path : str | Path
+        Path to a Table file with ``[tag, Re, Im]`` columns.
+    count : int
+        Number of trailing rows to return (the port count).
+
+    Returns
+    -------
+    list[complex]
+        The last ``count`` values, oldest first (i.e. in driven-port order).
+
+    Raises
+    ------
+    RuntimeError
+        If the file is missing or holds fewer than ``count`` rows. Unlike
+        :func:`read_complex`, a missing value cannot be defaulted here: rows are
+        identified by *position*, so anything short would misalign the whole
+        S-matrix rather than zero one entry of it.
+    """
+    if not Path(path).exists():
+        raise RuntimeError(
+            f"{path} not found. The Analysis resolution writes one row per "
+            f"driven port to this file; a .pro generated before the "
+            f"single-launch port loop instead writes xS_<observed><driven>.txt. "
+            f"Re-run build_mesh to regenerate the problem file."
+        )
+    d = np.loadtxt(path)
+    if d.ndim == 1:
+        d = d.reshape(1, -1)
+    if d.shape[0] < count:
+        raise RuntimeError(
+            f"{path} has {d.shape[0]} row(s) but {count} were expected (one per "
+            f"driven port); the GetDP solve did not complete every port."
+        )
+    return [complex(row[1], row[2]) for row in d[-count:]]
 
 
 def run_getdp(
@@ -123,10 +170,12 @@ def run_getdp(
         If getdp exits with a non-zero return code.
     """
     # Build the getdp command line:
-    #   getdp <name>.pro -msh <name>.msh -setnumber FREQ <f> -setnumber ACTIVE_PORT <k>
-    #         -solve <Resolution> -pos <PostOperation(s)> -v2
-    # i.e. one solve at one frequency driving one port; results are written by
-    # the .pro's PostOperation(s) into output/xS_<n><k>.txt.
+    #   getdp <name>.pro -msh <name>.msh -setnumber FREQ <f>
+    #         -solve <Resolution> [-pos <PostOperation(s)>] -v2
+    # The default "Analysis" resolution drives every port at that frequency and
+    # runs Get_SParameters itself (so no -pos, and no ACTIVE_PORT), appending a
+    # row per port to output/xS_<n>.txt. "AnalysisSinglePort" instead solves the
+    # single ACTIVE_PORT and keeps the solution for a -pos field extraction.
     args = [find_getdp(), str(pro_path), "-msh", str(msh_path)]
     for k, v in setnumbers.items():
         args += ["-setnumber", k, repr(float(v))]
@@ -195,6 +244,7 @@ def solve_fields_and_power(
         workdir,
         {"FREQ": freq, "ACTIVE_PORT": active},
         ["Get_Fields", "Get_Power"],
+        resolution="AnalysisSinglePort",
     )
     outdir = Path(workdir).absolute() / "output"
     return (
