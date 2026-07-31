@@ -100,7 +100,33 @@ class FEMOptions:
         naming the minimum padding needed. Default ``None`` (auto, via
         ``air_pad_frac``).
     elems_per_wavelength : float
-        Target coarse mesh density in open air. Default ``8.0``.
+        Target coarse mesh density, applied per material against that
+        material's own wavelength (so the substrate and the air around it are
+        resolved equally rather than one being starved to pay for the other).
+        Default ``16.0``.
+
+        Raised from ``8.0`` to keep the air resolution the per-material split
+        would otherwise throw away. Previously *everything* was sized off the
+        dielectric wavelength, which left air at an effective ``lambda_air/16.8``
+        while the substrate sat at only 8 points per wavelength. Sizing each
+        material against its own wavelength at ``N = 16`` reproduces roughly
+        that same air density while lifting the dielectric off the coarse
+        limit, at about 8% more elements.
+
+        Note what this does *not* fix, so nobody re-runs the experiment. A
+        quarter-wave microstrip carries a delay error corresponding to
+        ``eps_eff ~ 3.72`` where the closed form and the FDTD backend both
+        give ~3.33. Refining does not remove it and does not converge towards
+        the closed form::
+
+            N=8,  min_layers=3   163.8 ps   eps_eff 3.730
+            N=16, min_layers=3   163.8 ps   eps_eff 3.720
+            N=16, min_layers=6   165.2 ps   eps_eff 3.785   (worse)
+            FDTD                 151.3 ps   eps_eff 3.350
+
+        Refining the far field and refining the near-conductor mesh both fail
+        to move it, so the guided propagation constant is wrong for a reason
+        that is not discretisation. Do not reach for mesh knobs to chase it.
     mesh_fine_scale : float
         Multiplier on the near-conductor element size. Default ``1.0``.
     min_layers : int
@@ -118,7 +144,7 @@ class FEMOptions:
     fe_order: int = 1
     air_pad_frac: float = 0.25
     air_pad_mm: float | None = None
-    elems_per_wavelength: float = 8.0
+    elems_per_wavelength: float = 16.0
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
     port_type: str = "lumped"
@@ -971,7 +997,9 @@ def simulate_step_FEM(
         Explicit air padding in millimetres. Default ``None`` (auto, via
         ``FEM_air_pad_frac``). See :class:`FEMOptions`.
     FEM_elems_per_wavelength : float
-        Target coarse mesh density in open air. Default ``8.0``.
+        Target coarse mesh density, applied per material against that
+        material's own wavelength. Default ``16.0``. See
+        :class:`FEMOptions` for why this is not ``8.0``.
     FEM_mesh_fine_scale : float
         Multiplier on the near-conductor element size. Default ``1.0``.
     FEM_min_layers : int

@@ -110,8 +110,9 @@ class SimParams:
         ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the minimum
         padding needed. Default is ``None`` (auto, via ``FEM_air_pad_frac``).
     FEM_elems_per_wavelength : float, optional
-        FEM backend only. Target coarse mesh density in open air. Default
-        is ``8.0``.
+        FEM backend only. Target coarse mesh density, applied per material
+        against that material's own wavelength. Default is ``16.0``; see
+        :class:`FEMOptions` for why it is not ``8.0``.
     FEM_mesh_fine_scale : float, optional
         FEM backend only. Multiplier on the near-conductor element size.
         Default is ``1.0``.

@@ -741,9 +741,22 @@ def _mesh_and_write(
     verbose: bool,
     diel_regions: dict,
     port_regions: dict,
+    diel_vols: dict | None = None,
+    lambda_air: float = 0.0,
 ) -> str:
     """Size the mesh (fine near the signal conductors, coarse in open air),
     generate it, and write the ``.msh``/``.vtk`` files.
+
+    The coarse size is set **per material**. A wave is shorter inside the
+    dielectric than in air by ``sqrt(eps_r)``, so a single global size cannot
+    resolve both equally: sizing everything off the dielectric wavelength (as
+    this used to) leaves the dielectric exactly at the target density while
+    over-refining air by that same factor -- paying for elements where they buy
+    nothing, in the region that dominates the element count, and still leaving
+    the substrate at the coarse limit where the guided mode actually travels.
+    Each region now gets its own wavelength, so raising
+    ``elems_per_wavelength`` is roughly cost-neutral: the dielectric gets
+    finer while air gets correspondingly coarser.
 
     Returns
     -------
@@ -764,13 +777,16 @@ def _mesh_and_write(
         diel_min_thick / max(problem.min_layers, 1) * problem.mesh_fine_scale, 20e-6
     )
     lc_fine = min(lc_fine, diel_min_thick)  # keep at least ~1 layer even if coarsened
-    lc_coarse = lambda_min / problem.elems_per_wavelength
+    # same target density in each material, each against its own wavelength
+    lc_diel = lambda_min / problem.elems_per_wavelength
+    lc_air = (lambda_air or lambda_min) / problem.elems_per_wavelength
     # Refine near the signal conductors + ports only (exclude the ground plane);
     # extend the fine zone through the substrate so trace-to-ground is resolved.
     refine_faces = ((faces.pec | faces.all_imped) - faces.ground) | faces.all_port
     dist_max = max(15.0 * lc_fine, 4.0 * diel_min_thick)
-    _apply_size_field(refine_faces, lc_fine, lc_coarse, dist_max)
-    gmsh.option.setNumber("Mesh.MeshSizeMax", lc_coarse)
+    diel_tags = sorted({t for tags in (diel_vols or {}).values() for t in tags})
+    _apply_size_field(refine_faces, lc_fine, lc_air, dist_max, diel_tags, lc_diel)
+    gmsh.option.setNumber("Mesh.MeshSizeMax", max(lc_air, lc_diel))
     gmsh.option.setNumber("Mesh.MeshSizeMin", lc_fine / 5.0)
     gmsh.option.setNumber("Mesh.Optimize", 1)
 
@@ -863,6 +879,8 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
         verbose,
         diel_regions,
         port_regions,
+        diel_vols,
+        C0 / fmax,  # shortest free-space wavelength -> the air size target
     )
 
     return Mesh(
@@ -886,27 +904,70 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
 
 
 def _apply_size_field(
-    refine_faces: set, lc_fine: float, lc_coarse: float, dist_max: float
+    refine_faces: set,
+    lc_fine: float,
+    lc_coarse: float,
+    dist_max: float,
+    diel_vols: list | None = None,
+    lc_diel: float = 0.0,
 ) -> None:
-    """Distance-from-conductors -> Threshold size field for graded refinement.
+    """Build the background size field: graded near conductors, per-material far.
 
-    Builds a Gmsh size field that is ``lc_fine`` on the refine surfaces and grows
-    linearly to ``lc_coarse`` by ``dist_max`` away from them, so elements are
-    small only where the fields vary fastest (near the signal conductors).
+    Two effects are combined with a ``Min`` field, so the smallest requirement
+    at any point wins:
+
+    * a **Threshold** on distance from the signal conductors -- ``lc_fine`` on
+      those surfaces, growing linearly to ``lc_coarse`` by ``dist_max``, so
+      elements are small only where the fields vary fastest;
+    * a **Constant** field holding the dielectric volumes at ``lc_diel``, since
+      the wavelength there is shorter than in air by ``sqrt(eps_r)`` and a
+      single global size would either under-resolve the substrate or waste
+      elements on air.
+
+    Parameters
+    ----------
+    refine_faces : set
+        Conductor/port surfaces to refine towards.
+    lc_fine : float
+        Element size on those surfaces.
+    lc_coarse : float
+        Element size far from them (the air target).
+    dist_max : float
+        Distance over which ``lc_fine`` grows to ``lc_coarse``.
+    diel_vols : list | None
+        Dielectric volume tags to hold at ``lc_diel``. ``None`` or empty
+        disables the per-material part.
+    lc_diel : float
+        Element size inside those volumes. Ignored when ``<= 0`` or not
+        smaller than ``lc_coarse``.
     """
-    if not refine_faces:
+    fields = []
+    if refine_faces:
+        # Distance field: distance from any point to the nearest refine surface.
+        dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(dist, "SurfacesList", sorted(refine_faces))
+        # Threshold: map that distance to a size (fine near, coarse far).
+        thr = gmsh.model.mesh.field.add("Threshold")
+        gmsh.model.mesh.field.setNumber(thr, "InField", dist)
+        gmsh.model.mesh.field.setNumber(thr, "SizeMin", lc_fine)
+        gmsh.model.mesh.field.setNumber(thr, "SizeMax", lc_coarse)
+        gmsh.model.mesh.field.setNumber(thr, "DistMin", lc_fine)
+        gmsh.model.mesh.field.setNumber(thr, "DistMax", dist_max)
+        fields.append(thr)
+    if diel_vols and 0.0 < lc_diel < lc_coarse:
+        const = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(const, "VolumesList", list(diel_vols))
+        gmsh.model.mesh.field.setNumber(const, "VIn", lc_diel)
+        gmsh.model.mesh.field.setNumber(const, "VOut", lc_coarse)
+        fields.append(const)
+    if not fields:
         return
-    # Distance field: distance from any point to the nearest refine surface.
-    dist = gmsh.model.mesh.field.add("Distance")
-    gmsh.model.mesh.field.setNumbers(dist, "SurfacesList", sorted(refine_faces))
-    # Threshold field: map that distance to an element size (fine near, coarse far).
-    thr = gmsh.model.mesh.field.add("Threshold")
-    gmsh.model.mesh.field.setNumber(thr, "InField", dist)
-    gmsh.model.mesh.field.setNumber(thr, "SizeMin", lc_fine)
-    gmsh.model.mesh.field.setNumber(thr, "SizeMax", lc_coarse)
-    gmsh.model.mesh.field.setNumber(thr, "DistMin", lc_fine)
-    gmsh.model.mesh.field.setNumber(thr, "DistMax", dist_max)
-    gmsh.model.mesh.field.setAsBackgroundMesh(thr)
+    if len(fields) == 1:
+        background = fields[0]
+    else:
+        background = gmsh.model.mesh.field.add("Min")
+        gmsh.model.mesh.field.setNumbers(background, "FieldsList", fields)
+    gmsh.model.mesh.field.setAsBackgroundMesh(background)
     # Disable Gmsh's other size heuristics so this field alone drives the sizing.
     gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
     gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
