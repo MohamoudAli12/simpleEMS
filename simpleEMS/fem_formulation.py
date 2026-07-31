@@ -305,6 +305,7 @@ Group {{
 
   Ports  = Region[{{{ports_list}}}];
   BndPEC = Region[{{Pec{sym_in_pec}}}];
+  DomainDiel = Region[{{{diel_region_list}}}];
   Domain = Region[{{{diel_region_list}, Air{domain_pml}}}];
   BndAll = Region[{{Pec, {imped_extra}Ports, Abc}}];
   TotAll = Region[{{Domain, {imped_extra}Ports, Abc{sym_in_tot}}}];
@@ -397,9 +398,13 @@ PostProcessing {{
 {chr(10).join(sparam_q)}
       {{ Name e ; Value {{ Local {{ [ {{e}} ] ; In Domain ; Jacobian Jac ; }} }} }}
       {{ Name h ; Value {{ Local {{ [ -I[]*(1/muR[])*{{d e}}/(k0[]*eta0) ] ; In Domain ; Jacobian Jac ; }} }} }}
-      // dielectric loss  P = (1/2) w eps0 Im[epsR] |E|^2  integrated over the volume
+      // dielectric loss  P = (1/2) w eps0 Im[epsR] |E|^2  integrated over the volume.
+      // Over DomainDiel, not Domain: in the PML epsR is a TensorDiag, so the
+      // integrand there is a tensor rather than a scalar (and the PML's
+      // absorption is not dielectric loss anyway). Air is lossless, so
+      // dropping it too costs nothing.
       {{ Name Ploss ; Value {{ Integral {{ [ Pi*{freqvar}*eps0*Im[epsR[]]*SquNorm[{{e}}] ] ;
-        In Domain ; Jacobian Jac ; Integration I1 ; }} }} }}
+        In DomainDiel ; Jacobian Jac ; Integration I1 ; }} }} }}
       // radiated power = power absorbed by the matched Silver-Muller ABC
       {{ Name Prad ; Value {{ Integral {{ [ 0.5/eta0 * SquNorm[ (Normal[] /\\ {{e}}) /\\ Normal[] ] ] ;
         In Abc ; Jacobian Jac ; Integration I1 ; }} }} }}
@@ -421,7 +426,7 @@ PostOperation {{
   }}
   {{ Name Get_Power ; NameOfPostProcessing postPro ;
     Operation {{
-      Print [ Ploss[Domain], OnGlobal, Format Table, {xs_file} StrCat[myDir, "Ploss.txt"] ] ;
+      Print [ Ploss[DomainDiel], OnGlobal, Format Table, {xs_file} StrCat[myDir, "Ploss.txt"] ] ;
       Print [ Prad[Abc], OnGlobal, Format Table, {xs_file} StrCat[myDir, "Prad.txt"] ] ;
     }}
   }}

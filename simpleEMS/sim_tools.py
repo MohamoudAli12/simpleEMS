@@ -807,7 +807,7 @@ class SimTools:
             a value.
         """
         delta_phi_df = np.gradient(np.unwrap(np.angle(s21)), freqs)
-        group_delay = -delta_phi_df / 2 * np.pi
+        group_delay = -delta_phi_df / (2 * np.pi)
         plt.figure()
         lines_group = plt.plot(freqs, group_delay, label="group_delay")
         cursor_group = mplcursors.cursor(lines_group, multiple=True)

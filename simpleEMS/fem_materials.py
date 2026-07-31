@@ -101,7 +101,11 @@ class Dielectric:
 
 
 # Substring -> role, applied to lowercased solid names for auto-detection.
+# Order matters: the first matching substring wins, so "port" is checked before
+# the conductor hints. Otherwise a solid named e.g. "port_feed_1" would match
+# "feed" and be classified PEC, silently losing the excitation.
 _NAME_ROLE_HINTS: tuple[tuple[str, str], ...] = (
+    ("port", "port"),
     ("substrate", "dielectric"),
     ("dielectric", "dielectric"),
     ("diel", "dielectric"),
@@ -113,7 +117,6 @@ _NAME_ROLE_HINTS: tuple[tuple[str, str], ...] = (
     ("line", "pec"),
     ("metal", "pec"),
     ("cond", "pec"),
-    ("port", "port"),
 )
 
 
