@@ -41,7 +41,7 @@ from scipy.interpolate import AAA
 
 from CSXCAD import ContinuousStructure
 
-from . import fem_formulation, fem_geometry, fem_solver, fem_sweep
+from . import fem_formulation, fem_geometry, fem_materials, fem_solver, fem_sweep
 from .console import console
 from .export_cad import export_step
 from .fem_materials import EPS0, Dielectric, guess_role
@@ -489,6 +489,15 @@ def _build_problem(
 # ----------------------------
 # pipeline stages
 # ----------------------------
+def _module_bytes(mod: object) -> bytes:
+    """Source bytes of ``mod``, or its name if the file cannot be read."""
+    path = getattr(mod, "__file__", None)
+    try:
+        return Path(path).read_bytes() if path else str(mod).encode()
+    except OSError:
+        return str(mod).encode()
+
+
 def _mesh_fingerprint(
     csx: ContinuousStructure, freqs: NDArray, FEM_options: FEMOptions | None
 ) -> str:
@@ -499,8 +508,17 @@ def _mesh_fingerprint(
     STEP or meshing, so this costs nothing close to an actual rebuild --
     letting every FEM entry point call :func:`build_mesh` unconditionally
     and still mesh only when something has actually changed.
+
+    The modules that *write* the mesh and the ``.pro`` are hashed in too. A
+    cache hit returns before :func:`_mesh_problem`, so it skips
+    :func:`~simpleEMS.fem_formulation.write_problem` as well as the meshing --
+    which means without this an edit to the formulation would leave the old
+    ``.pro`` in place and be silently ignored, or worse, leave a ``.pro``
+    referring to regions the current code no longer tags.
     """
     parts = []
+    for mod in (fem_formulation, fem_geometry, fem_materials):
+        parts.append(f"src:{hashlib.sha256(_module_bytes(mod)).hexdigest()}")
     for prop in csx.GetAllProperties():
         parts.append(f"{prop.__class__.__name__}:{prop.GetName()}")
         for prim in prop.GetAllPrimitives():
