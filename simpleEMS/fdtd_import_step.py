@@ -19,10 +19,12 @@ PROTOTYPE: STEP -> CSXCAD -> openEMS (FDTD) import pipeline.
 
 Mirrors the STEP-to-FEM entry point (:func:`simpleEMS.fem_backend.simulate_step_FEM`)
 but drives the FDTD backend instead: each named solid in the STEP file is
-tessellated (via CadQuery, already a project dependency through
-:mod:`simpleEMS.export_cad`) and imported into CSXCAD as a
-``CSPrimPolyhedronReader`` primitive on a Material/Metal property, so the
-existing FDTD machinery (:class:`~simpleEMS.fdtd_mesh.Mesh` auto-meshing,
+read via CadQuery (already a project dependency through
+:mod:`simpleEMS.export_cad`) and rebuilt in CSXCAD on a Material/Metal
+property -- as a native ``CSPrimBox`` when the solid is an axis-aligned box
+(:func:`_axis_aligned_box`), otherwise tessellated into a
+``CSPrimPolyhedronReader`` primitive -- so the existing FDTD machinery
+(:class:`~simpleEMS.fdtd_mesh.Mesh` auto-meshing,
 :func:`~simpleEMS.sim_tools.setup_simulation`, ``SimTools``) runs unchanged.
 
 Not wired into ``simpleEMS.__init__`` yet -- import directly:
@@ -60,6 +62,13 @@ __all__ = ["simulate_step_FDTD", "StepFDTDParams"]
 # comfortably below any real trace dimension in this project (e.g.
 # `min_trace_width_mm` defaults to 0.1 mm).
 _DEGENERATE_PORT_THICKNESS_MM = 1e-2
+
+# A solid whose volume matches its bounding box to within this relative
+# tolerance (and which has exactly six faces) is an axis-aligned box, so it can
+# be rebuilt as a native CSXCAD box instead of a tessellated polyhedron -- see
+# :func:`_axis_aligned_box`. The tolerance only has to absorb OCC's own
+# volume-integration error, hence the tight value.
+_BOX_VOLUME_RTOL = 1e-9
 
 
 def _quantize_f32(value: float) -> float:
@@ -99,6 +108,58 @@ def _quantize_f32(value: float) -> float:
         ``value`` rounded to its nearest float32 representation.
     """
     return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def _axis_aligned_box(solid: cq.Solid) -> tuple[list[float], list[float]] | None:
+    """
+    Return ``(start, stop)`` if ``solid`` is an axis-aligned box, else ``None``.
+
+    Most solids in a PCB-style STEP export (substrate, ground plane, feed
+    line, ...) are plain boxes; only genuinely non-rectangular shapes (e.g.
+    an inset-notched patch) need tessellating. Rebuilding a box as a native
+    ``CSPrimBox`` rather than a ``CSPrimPolyhedronReader`` matters beyond
+    fidelity: :func:`simpleEMS.fdtd_mesh._type_at_pos` treats every
+    polyhedron as *possibly* concave (``_can_be_partial``), so an unnotched
+    metal imported as a polyhedron can cancel the notch verdict of a
+    genuinely notched neighbour that overlaps it along the queried axis.
+    That suppresses the thirds-rule refinement at the notched metal's edge
+    and shifts the modelled resonance. Importing boxes as boxes restores the
+    same classification a native (non-STEP) build gets.
+
+    A solid qualifies when it has exactly six faces and fills its own
+    bounding box (to :data:`_BOX_VOLUME_RTOL`) -- a rotated or chamfered box
+    fails the volume test, a cylinder fails the face-count test.
+
+    The returned coordinates are quantized to float32
+    (:func:`_quantize_f32`), matching what any *tessellated* solid's edges
+    land on, so a shared edge between a box-imported and an STL-imported
+    solid stays a single mesh boundary (see :func:`_quantize_f32`).
+
+    Parameters
+    ----------
+    solid : cq.Solid
+        The solid to test.
+
+    Returns
+    -------
+    tuple[list[float], list[float]] | None
+        ``(start, stop)``, each ``[x, y, z]``, or ``None`` if ``solid`` is
+        not an axis-aligned box.
+    """
+    try:
+        if len(solid.Faces()) != 6:
+            return None
+        bb = solid.BoundingBox()
+        bbox_volume = (bb.xmax - bb.xmin) * (bb.ymax - bb.ymin) * (bb.zmax - bb.zmin)
+        if bbox_volume <= 0:
+            return None
+        if abs(solid.Volume() - bbox_volume) > _BOX_VOLUME_RTOL * bbox_volume:
+            return None
+    except Exception:
+        return None
+    start = [_quantize_f32(v) for v in (bb.xmin, bb.ymin, bb.zmin)]
+    stop = [_quantize_f32(v) for v in (bb.xmax, bb.ymax, bb.zmax)]
+    return start, stop
 
 
 def _port_box(bb: object, direction: str) -> tuple[list[float], list[float]]:
@@ -316,14 +377,17 @@ def simulate_step_FDTD(
     :func:`simpleEMS.fem_backend.simulate_step_FEM` uses for the FEM
     backend -- and reconstructed as CSXCAD geometry:
 
-    - ``dielectrics`` : tessellated onto a ``CSPropMaterial`` (``epsilon``,
+    - ``dielectrics`` : rebuilt onto a ``CSPropMaterial`` (``epsilon``,
       ``kappa`` derived from the given loss tangent at the sweep's centre
       frequency).
-    - ``pec`` : tessellated onto a ``CSPropMetal``.
-    - ``ports`` : *not* tessellated. Each port solid's bounding box instead
-      defines a real ``FDTD.AddLumpedPort`` (thin volumes don't mesh well
-      as a polyhedron; openEMS needs an actual lumped-element box+excitation
-      there anyway).
+    - ``pec`` : rebuilt onto a ``CSPropMetal``.
+    - ``ports`` : *not* rebuilt from the solid itself. Each port solid's
+      bounding box instead defines a real ``FDTD.AddLumpedPort`` (openEMS
+      needs an actual lumped-element box plus excitation there).
+
+    Dielectrics and PEC are added as native ``CSPrimBox`` primitives when the
+    solid is an axis-aligned box, and tessellated into a
+    ``CSPrimPolyhedronReader`` otherwise (see :func:`_axis_aligned_box`).
 
     The mesh is then generated automatically from the resulting CSXCAD
     primitives via the existing :class:`~simpleEMS.fdtd_mesh.Mesh` engine --
@@ -429,18 +493,30 @@ def simulate_step_FDTD(
     stl_dir = output_path / "step_stl"
     stl_dir.mkdir(parents=True, exist_ok=True)
 
+    def _add_solid(prop: object, name: str, priority: int) -> str:
+        """Attach ``solids[name]`` to the CSXCAD property ``prop``, as a
+        native box where possible and a tessellated polyhedron otherwise.
+        Returns the primitive kind, for logging."""
+        box = _axis_aligned_box(solids[name])
+        if box is not None:
+            prop.AddBox(priority=priority, start=box[0], stop=box[1])
+            return "box"
+        stl_path = _tessellate_to_stl(solids[name], stl_dir, name)
+        prop.AddPolyhedronReader(str(stl_path), priority=priority).ReadFile()
+        return "polyhedron"
+
     for name, (eps_r, tan_d) in dielectrics.items():
         kappa = tan_d * 2 * np.pi * params.main_freq * EPS0 * eps_r
         material = CSX.AddMaterial(name, epsilon=eps_r, kappa=kappa)
-        stl_path = _tessellate_to_stl(solids[name], stl_dir, name)
-        material.AddPolyhedronReader(str(stl_path), priority=1).ReadFile()
-        console.print(f"[info]  material: {name} (eps_r={eps_r}, tan_d={tan_d})[/info]")
+        kind = _add_solid(material, name, priority=1)
+        console.print(
+            f"[info]  material: {name} (eps_r={eps_r}, tan_d={tan_d}, {kind})[/info]"
+        )
 
     for name in pec:
         metal = CSX.AddMetal(name)
-        stl_path = _tessellate_to_stl(solids[name], stl_dir, name)
-        metal.AddPolyhedronReader(str(stl_path), priority=10).ReadFile()
-        console.print(f"[info]  pec: {name}[/info]")
+        kind = _add_solid(metal, name, priority=10)
+        console.print(f"[info]  pec: {name} ({kind})[/info]")
 
     port_objs = []
     for i, (name, spec) in enumerate(ports.items()):
