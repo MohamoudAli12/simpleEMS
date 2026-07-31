@@ -197,7 +197,22 @@ def compute_pattern(
 
     k0 = 2 * math.pi * freq / C0
     gmsh.plugin.setNumber("NearToFarField", "Wavenumber", k0)
-    gmsh.plugin.setNumber("NearToFarField", "RFar", 1.0)
+    # The .pro is written in the exp(-i w t) convention (see fem_formulation),
+    # so the transform must be told that: NegativeTime selects the plugin's
+    # exp(-i w t) branch, whose integrand carries the matching exp(-i k r.r')
+    # phase factor. Left at its default of 0 the plugin instead assumes
+    # exp(+i w t) and applies the conjugate factor to the equivalent currents,
+    # which is simply a different (wrong) pattern -- not a fixed rotation of
+    # the right one, since the J/M combination differs between the two
+    # branches as well. On the 24 GHz inset-fed patch it moved the peak's
+    # azimuth from 270 to 90 degrees and changed the front-to-back ratio by
+    # 10 dB, with both still beaming into the hemisphere the ground plane
+    # allows. That branch returns |E_inf|^2, an arbitrarily scaled quantity
+    # (the plugin's RFar option belongs to the exp(+i w t) branch and is not
+    # read here), so the grid below is only meaningful up to a constant --
+    # callers normalise by the peak and take the absolute level from the
+    # directivity, which is a ratio.
+    gmsh.plugin.setNumber("NearToFarField", "NegativeTime", 1)
     gmsh.plugin.setNumber("NearToFarField", "NumPointsPhi", nphi)
     gmsh.plugin.setNumber("NearToFarField", "NumPointsTheta", ntheta)
     gmsh.plugin.setNumber("NearToFarField", "EView", view_index(e_box))
