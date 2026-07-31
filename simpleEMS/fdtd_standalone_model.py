@@ -28,13 +28,16 @@ from pathlib import Path
 
 import numpy as np
 
+from numpy.typing import NDArray
+
 from CSXCAD import ContinuousStructure
 from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort, Port
 
+from .console import console
 from .sim_tools import SimData, SimSetup, SimTools
 
-__all__ = ["simulate_model"]
+__all__ = ["add_fdtd_setup", "simulate_model"]
 
 
 def get_freq_range(structure_xml_path: str | Path) -> tuple[float, float]:
@@ -51,21 +54,196 @@ def get_freq_range(structure_xml_path: str | Path) -> tuple[float, float]:
     -------
     tuple[float, float]
         ``(f0, fc)`` – centre frequency and cutoff frequency in Hz.
+
+    Raises
+    ------
+    ValueError
+        If the model carries no openEMS ``<FDTD>`` setup (see
+        :func:`add_fdtd_setup`), or if its excitation is not a Gaussian
+        pulse and therefore defines no frequency band.
     """
-    tree = ET.parse(structure_xml_path)
-    root = tree.getroot()
+    root = ET.parse(structure_xml_path).getroot()
     if root.tag != "openEMS":
         raise ValueError(
-            "This model is missing openEMS FDTD parameters and cannot be simulated."
-            "model should be generated using FDTD.Write2XML() method"
+            f"{structure_xml_path}: root element is <{root.tag}>, so this model "
+            f"carries no openEMS FDTD setup (excitation, boundary conditions, "
+            f"run limits) and cannot be simulated.\n\n"
+            "Add the FDTD setup first with simpleEMS.add_fdtd_setup():\n\n"
+            "    from simpleEMS import add_fdtd_setup, simulate_model\n\n"
+            "    xml = add_fdtd_setup('structure.xml', freq_range=(1e9, 2e9))\n"
+            "    sim_data, sim, charac_imp = simulate_model(xml, output_path)\n"
         )
 
-    exc = tree.find(".//FDTD/Excitation")
+    exc = root.find("./FDTD/Excitation")
     if exc is None:
-        raise ValueError("No <FDTD><Excitation> element found in XML")
-    f0 = float(exc.get("f0"))
-    fc = float(exc.get("fc"))
-    return f0, fc
+        raise ValueError(
+            f"{structure_xml_path}: <FDTD> has no <Excitation> element.\n\n"
+            "Add the FDTD setup first with simpleEMS.add_fdtd_setup():\n\n"
+            "    from simpleEMS import add_fdtd_setup, simulate_model\n\n"
+            "    xml = add_fdtd_setup('structure.xml', freq_range=(1e9, 2e9))\n"
+            "    sim_data, sim, charac_imp = simulate_model(xml, output_path)\n"
+        )
+
+    f0, fc = exc.get("f0"), exc.get("fc")
+    if f0 is None or fc is None:
+        raise ValueError(
+            f'{structure_xml_path}: <Excitation Type="{exc.get("Type")}"> is not '
+            "a Gaussian pulse, so no post-processing band can be derived from it. "
+            "Pass an explicit freqs= array to simulate_model(), or rebuild with "
+            "add_fdtd_setup(..., excitation='gauss')."
+        )
+    return float(f0), float(fc)
+
+
+def add_fdtd_setup(
+    structure_xml_path: str | Path,
+    freq_range: tuple[float, float],
+    output_xml_path: str | Path | None = None,
+    excitation: str = "gauss",
+    FDTD_boundary: list[str] | None = None,
+    FDTD_timestep: int = 90000000,
+    FDTD_end_criteria: float = 1e-4,
+    overwrite: bool = False,
+) -> Path:
+    """
+    Attach an openEMS FDTD setup to a geometry-only ``structure.xml``.
+
+    A file written by ``CSX.Write2XML()`` (root ``<ContinuousStructure>``)
+    holds the mesh, materials, metals, lumped-port properties and probes,
+    but none of the solver settings :func:`simulate_model` needs -- the
+    excitation waveform, the boundary conditions and the run limits all
+    live in the ``<FDTD>`` section that only ``openEMS.Write2XML()``
+    writes. This function supplies those settings and re-writes the model
+    as a full ``<openEMS>`` document, ready for :func:`simulate_model`.
+
+    An existing ``<openEMS>`` file is also accepted, in which case its
+    ``<FDTD>`` section is replaced -- use that to re-band or re-terminate a
+    model without rebuilding its geometry.
+
+    Parameters
+    ----------
+    structure_xml_path : str | Path
+        Path to the model, root ``<ContinuousStructure>`` or ``<openEMS>``.
+    freq_range : tuple[float, float]
+        ``(fmin, fmax)`` in Hz. The Gaussian excitation is centred at
+        ``(fmin + fmax) / 2`` with cutoff ``(fmax - fmin) / 2``, matching
+        :func:`~simpleEMS.sim_tools.setup_simulation`.
+    output_xml_path : str | Path, optional
+        Where to write the result. Defaults to ``<stem>_fdtd.xml`` beside
+        the source file.
+    excitation : str
+        ``"gauss"`` (default), ``"sinus"``, ``"dirac"`` or ``"step"``.
+        Only ``"gauss"`` lets :func:`simulate_model` derive its
+        post-processing band from the file; the others require an explicit
+        ``freqs=`` argument there.
+    FDTD_boundary : list[str], optional
+        Six openEMS boundary-condition strings, in the order
+        ``[xmin, xmax, ymin, ymax, zmin, zmax]``. Defaults to
+        ``["PML_8"] * 6``.
+    FDTD_timestep : int
+        Maximum FDTD time-step count. Default ``90000000``.
+    FDTD_end_criteria : float
+        Energy decay stopping criterion. Default ``1e-4``.
+    overwrite : bool
+        Allow writing over an existing ``output_xml_path``. Default
+        ``False``.
+
+    Returns
+    -------
+    Path
+        Path to the written ``<openEMS>`` XML.
+
+    Raises
+    ------
+    ValueError
+        If the source root element is neither ``<ContinuousStructure>``
+        nor ``<openEMS>``, if ``freq_range`` is not a positive increasing
+        pair, if ``excitation`` is unknown, or if the loaded structure
+        carries no mesh lines on some axis (openEMS cannot run an unmeshed
+        model).
+    RuntimeError
+        If the loaded structure carries no lumped ports
+        (``port_resist_<N>`` properties).
+    FileExistsError
+        If ``output_xml_path`` exists and ``overwrite`` is ``False``.
+    """
+    src = Path(structure_xml_path)
+    dst = (
+        Path(output_xml_path)
+        if output_xml_path
+        else src.with_name(f"{src.stem}_fdtd.xml")
+    )
+    if dst.exists() and not overwrite:
+        raise FileExistsError(
+            f"{dst} already exists; pass overwrite=True to replace it"
+        )
+
+    fmin, fmax = (float(f) for f in freq_range)
+    if not 0 <= fmin < fmax:
+        raise ValueError(f"freq_range must be 0 <= fmin < fmax, got {freq_range!r}")
+
+    root_tag = ET.parse(src).getroot().tag
+    if root_tag == "openEMS":
+        # Strip the old <FDTD> section by round-tripping through the CSX alone.
+        loader = openEMS()
+        loader.ReadFromXML(str(src))
+        with tempfile.NamedTemporaryFile(suffix=".xml") as tmp:
+            loader.GetCSX().Write2XML(tmp.name)
+            CSX = ContinuousStructure()
+            CSX.ReadFromXML(tmp.name)
+    elif root_tag == "ContinuousStructure":
+        CSX = ContinuousStructure()
+        CSX.ReadFromXML(str(src))
+    else:
+        raise ValueError(
+            f"{src}: unexpected root element <{root_tag}>; expected "
+            "<ContinuousStructure> (CSX.Write2XML) or <openEMS> (FDTD.Write2XML)"
+        )
+
+    grid = CSX.GetGrid()
+    unmeshed = [ax for n, ax in enumerate("xyz") if len(grid.GetLines(n)) < 2]
+    if unmeshed:
+        raise ValueError(
+            f"{src}: no mesh lines on the {', '.join(unmeshed)} axis/axes. "
+            "The model must already carry its RectilinearGrid -- add_fdtd_setup "
+            "supplies solver settings only, it does not mesh the geometry."
+        )
+
+    names = {CSX.GetProperty(i).GetName() for i in range(CSX.GetQtyProperties())}
+    if not any(re.fullmatch(r"port_resist_\d+", name) for name in names):
+        raise RuntimeError(
+            f"{src}: no port_resist_<N> properties found, so the model has no "
+            "lumped ports and no network parameters can be computed from it. "
+            "add_fdtd_setup supplies solver settings only -- ports must already "
+            "exist in the geometry (openEMS.ports.LumpedPort writes them as "
+            "port_resist_<N>/port_excite_<N>/port_ut_<N>/port_it_<N>)."
+        )
+
+    FDTD = openEMS(NrTS=FDTD_timestep, EndCriteria=FDTD_end_criteria)
+    FDTD.SetCSX(CSX)
+    if FDTD_boundary is None:
+        FDTD_boundary = ["PML_8"] * 6
+    FDTD.SetBoundaryCond(FDTD_boundary)
+
+    f0, fc = 0.5 * (fmin + fmax), 0.5 * (fmax - fmin)
+    if excitation == "gauss":
+        FDTD.SetGaussExcite(f0, fc)
+    elif excitation == "sinus":
+        FDTD.SetSinusExcite(f0)
+    elif excitation == "dirac":
+        FDTD.SetDiracExcite(fmax)
+    elif excitation == "step":
+        FDTD.SetStepExcite(fmax)
+    else:
+        raise ValueError(
+            f"excitation must be 'gauss', 'sinus', 'dirac' or 'step', "
+            f"got {excitation!r}"
+        )
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    FDTD.Write2XML(str(dst))
+    console.print(f"[success]FDTD setup written to {dst}[/success]")
+    return dst
 
 
 def reconstruct_ports(csx: ContinuousStructure) -> tuple[list[LumpedPort], float]:
@@ -173,6 +351,7 @@ def simulate_model(
     output_path: str | Path,
     num_points: int = 1000,
     run: bool = True,
+    freqs: NDArray | None = None,
 ) -> tuple[SimData, SimSetup, float]:
     """
     Load a ``structure.xml``, run the simulation and compute network
@@ -187,9 +366,16 @@ def simulate_model(
         exist.
     num_points : int
         Number of frequency points for post-processing. Default ``1000``.
+        Ignored when ``freqs`` is given.
     run : bool
         Whether to execute the FDTD solver. Default ``True``. Set
         to ``False`` to only post-process existing results.
+    freqs : NDArray, optional
+        Explicit post-processing frequency points (Hz). By default the band
+        is derived from the model's own Gaussian excitation
+        (:func:`get_freq_range`); pass this to post-process over a narrower
+        band, or when the model uses a non-Gaussian excitation that defines
+        no band of its own.
 
     Returns
     -------
@@ -210,8 +396,11 @@ def simulate_model(
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    f0, fc = get_freq_range(structure_xml_path)
-    freqs = np.linspace(f0 - fc, f0 + fc, num_points)
+    if freqs is None:
+        f0, fc = get_freq_range(structure_xml_path)
+        freqs = np.linspace(f0 - fc, f0 + fc, num_points)
+    else:
+        freqs = np.asarray(freqs, dtype=float)
 
     FDTD = openEMS()
     FDTD.ReadFromXML(structure_xml_path)

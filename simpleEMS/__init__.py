@@ -35,7 +35,7 @@ _NAMES_BY_MODULE = {
         "BandStopQuarterWaveFilter",
         "BandPassQuarterWaveFilter",
     ],
-    "fdtd_standalone_model": ["simulate_model"],
+    "fdtd_standalone_model": ["add_fdtd_setup", "simulate_model"],
     "fem_backend": ["simulate_step_FEM", "FEMOptions"],
     "fem_radiation": ["FEMNF2FF"],
     "sim_tools": [
@@ -107,6 +107,7 @@ __all__ = [
     "optimize_s21",
     "optimize_s_params",
     "param_sweep",
+    "add_fdtd_setup",
     "simulate_model",
     "simulate_step_FEM",
     "FEMOptions",
