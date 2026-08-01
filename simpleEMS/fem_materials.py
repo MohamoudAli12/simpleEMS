@@ -15,17 +15,13 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Material and region helpers for the FEM (GetDP) backend.
+Materials, physical constants, and region tags for the FEM backend.
 
-Defines the :class:`Dielectric` material, physical constants, a name-based
-role guesser, the Hammerstad-Jensen microstrip impedance model, and the
-canonical integer physical-group IDs shared between the Gmsh mesh and the
-generated GetDP ``.pro`` problem file.
+Defines the :class:`Dielectric` material, a role guesser for solids named after
+what they are, and the region tags that identify each part of the mesh.
 
-The coupling between Gmsh and GetDP is purely by integer tag:
-``Physical Volume(ID)`` in the mesh is read back as ``Region[{ID}]`` in the
-problem file. Centralising the numbering here keeps the geometry module and
-the ``.pro`` generator from ever disagreeing::
+The mesh and the problem file refer to each part of the structure by the same
+integer tag, so the numbering lives here and both modules read it from here::
 
     100 + i      dielectric volume i
     200          air / vacuum volume
@@ -85,18 +81,15 @@ class Dielectric:
 
     def eps_complex(self) -> complex:
         """
-        Return the complex relative permittivity in the engineering convention.
-
-        Uses the ``exp(+j w t)`` sign (passive loss -> negative imaginary part).
-        Convenience helper only: the GetDP problem file writes its own permittivity
-        in the ``exp(-i w t)`` convention (positive imaginary part) directly in
-        :mod:`~simpleEMS.fem_formulation`.
+        Return the complex relative permittivity.
 
         Returns
         -------
         complex
-            ``eps_r * (1 - 1j * tan_d)``.
+            ``eps_r * (1 - 1j * tan_d)``, in the engineering sign convention.
         """
+        # convenience helper only: fem_formulation writes its own permittivity
+        # into the problem file, in the opposite sign convention
         return self.eps_r * (1.0 - 1j * self.tan_d)
 
 
@@ -122,17 +115,18 @@ _NAME_ROLE_HINTS: tuple[tuple[str, str], ...] = (
 
 def guess_role(name: str) -> str | None:
     """
-    Best-guess electromagnetic role from a solid name.
+    Guess what a solid is from its name.
 
     Parameters
     ----------
     name : str
-        The solid / CAD product name.
+        The solid's name, e.g. ``"substrate"`` or ``"port_1"``.
 
     Returns
     -------
     str | None
-        ``"dielectric"``, ``"pec"``, ``"port"``, or ``None`` if no hint matches.
+        ``"dielectric"``, ``"pec"``, ``"port"``, or ``None`` if the name gives
+        no clue.
     """
     low = name.lower()
     for key, role in _NAME_ROLE_HINTS:
@@ -143,33 +137,33 @@ def guess_role(name: str) -> str | None:
 
 def dielectric_region(index: int) -> int:
     """
-    Region tag for the ``index``-th dielectric volume (0-indexed).
+    Region tag identifying a dielectric volume.
 
     Parameters
     ----------
     index : int
-        Zero-based dielectric index.
+        Zero-based index of the dielectric.
 
     Returns
     -------
     int
-        The physical-group integer tag.
+        The region tag.
     """
     return _DIELECTRIC_BASE + index
 
 
 def port_region(number: int) -> int:
     """
-    Region tag for port ``number`` (1-indexed, matching S-parameter numbering).
+    Region tag identifying a port surface.
 
     Parameters
     ----------
     number : int
-        One-based port number.
+        One-based port number, matching the S-parameter numbering.
 
     Returns
     -------
     int
-        The physical-group integer tag.
+        The region tag.
     """
     return _PORT_BASE + number

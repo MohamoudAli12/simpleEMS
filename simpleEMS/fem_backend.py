@@ -17,12 +17,11 @@
 """
 FEM backend for the simpleEMS pipeline.
 
-Bridges a CSXCAD geometry to the finite-element solver: maps CSX properties to
-material/PEC/port roles, meshes the structure, drives the adaptive
-rational-interpolation frequency sweep, and returns results as the standard
-:class:`~simpleEMS.sim_tools.SimData` named tuple so existing plotting and
-export utilities work unchanged.
-
+Bridges a CSXCAD geometry to the finite-element solver: assigns each solid an
+electromagnetic role, meshes the structure, runs the frequency sweep, and
+returns the results as the same :class:`~simpleEMS.sim_tools.SimData` named
+tuple the FDTD backend produces, so the plotting and export utilities work
+unchanged.
 """
 
 from __future__ import annotations
@@ -69,68 +68,57 @@ _SPARAMS = "fem_sparams.npz"
 @dataclass
 class FEMOptions:
     """
-    Global FEM solver/mesh options, forwarded to the GetDP problem.
+    Solver and mesh options shared by every FEM entry point.
 
-    Bundles the ``Problem``-level knobs so the simpleEMS entry can carry them
-    without threading many arguments. ``None``/defaults reproduce today's
-    behaviour.
+    Bundles the settings into one object so they can be passed around together
+    instead of as many separate arguments.
 
     Parameters
     ----------
     boundary : str
-        Outer truncation: ``"silver_muller"`` (default) or ``"pml"``.
-    symmetry : tuple | None
-        Mirror-symmetry plane ``(axis, kind, at)`` -- ``axis`` in ``x/y/z``,
-        ``kind`` in ``pec``/``pmc``, ``at`` the plane coordinate (m) or
-        ``None`` for the structure centre. Halves the mesh.
-
-        The plane must be a symmetry of the excitation too. ``pmc`` (magnetic
-        wall) is the usual choice for a planar antenna fed on its centreline;
-        ``pec`` is an electric wall. Picking the wrong one is obvious in the
-        result -- check one frequency point against a full model.
+        Outer boundary condition, either ``"silver_muller"`` (default) or
+        ``"pml"``.
+    symmetry : tuple, optional
+        Mirror-symmetry plane ``(axis, kind, at)``, where ``axis`` is ``"x"``,
+        ``"y"``, or ``"z"``, ``kind`` is ``"pec"`` or ``"pmc"``, and ``at`` is
+        the plane coordinate in metres (``None`` for the structure centre).
+        Only the half of the structure on one side of the plane is meshed.
+        Default ``None`` (no symmetry).
     fe_order : int
-        Nedelec edge-element order: ``1`` (default) or ``2``.
-
-        Order 1 gets the guided propagation constant noticeably wrong and mesh
-        refinement does not fix it; order 2 does, at roughly 3x the solve cost.
-        Use ``2`` when phase, delay or group delay matter. Some error remains
-        either way from the lumped port discontinuities.
+        Element order, either ``1`` (default) or ``2``. Order ``2`` is more
+        accurate and roughly three times as expensive to solve.
     air_pad_frac : float
-        Air padding as a fraction of the longest wavelength. Default ``0.25``
-        (a quarter-wavelength, the minimum the near-to-far-field transform
-        needs -- see ``FEMNF2FF.CalcNF2FF``). Ignored when ``air_pad_mm`` is
-        set.
-    air_pad_mm : float | None
-        Explicit air padding in millimetres, added to every face of the
-        structure's bounding box in place of the ``air_pad_frac`` wavelength
-        formula. Use this for non-radiating structures (e.g. filters) whose
-        box shouldn't scale with a wide S-parameter sweep's lowest frequency.
-        If a far-field pattern is later requested (``CalcNF2FF``) and this
-        padding is too small for an accurate near-to-far-field transform at
-        the requested frequency, ``FEMNF2FF.CalcNF2FF`` raises ``ValueError``
-        naming the minimum padding needed. Default ``None`` (auto, via
-        ``air_pad_frac``).
+        Air padding around the structure, as a fraction of the longest
+        wavelength in the sweep. Default ``0.25``. Ignored when ``air_pad_mm``
+        is set.
+    air_pad_mm : float, optional
+        Air padding around the structure in millimetres, used in place of
+        ``air_pad_frac``. Default ``None`` (pad by ``air_pad_frac``).
     elems_per_wavelength : float
-        Target coarse mesh density, applied per material against that
-        material's own wavelength (so the substrate and the air around it are
-        resolved equally rather than one being starved to pay for the other).
-        Default ``16.0``.
-
-        Note that refining this does *not* fix the microstrip delay error --
-        that is set by element order, not element size. See ``fe_order``.
+        Target number of mesh elements per wavelength, applied separately in
+        each material. Default ``16.0``.
     mesh_fine_scale : float
-        Multiplier on the near-conductor element size. Default ``1.0``.
+        Multiplier on the element size near conductors. Values above ``1``
+        coarsen the mesh there. Default ``1.0``.
     min_layers : int
-        Element layers through the dielectric thickness. Default ``3``.
+        Number of element layers through the dielectric thickness. Default
+        ``3``.
     num_solve_points : int
-        Number of full FEM solves the adaptive rational-interpolation sweep is
-        allowed to perform (must be ``>= 4``). Default ``10``.
+        Number of frequencies the sweep solves at, from which the full
+        S-parameter curve is interpolated. Must be ``>= 4``. Default ``10``.
     """
 
     boundary: str = "silver_muller"
+    # the plane must be a symmetry of the excitation too; 'pmc' is the usual
+    # choice for a planar antenna fed on its centreline
     symmetry: tuple | None = None
+    # order 1 gets the guided propagation constant noticeably wrong and mesh
+    # refinement does not fix it; use 2 when phase or group delay matter
     fe_order: int = 1
     air_pad_frac: float = 0.25
+    # for non-radiating structures (e.g. filters) whose box shouldn't scale
+    # with a wide sweep's lowest frequency; FEMNF2FF.CalcNF2FF raises if this
+    # is later too small for a far-field transform at the requested frequency
     air_pad_mm: float | None = None
     elems_per_wavelength: float = 16.0
     mesh_fine_scale: float = 1.0
@@ -139,14 +127,13 @@ class FEMOptions:
 
     def __post_init__(self) -> None:
         """
-        Validate the option choices.
+        Validate the option values.
 
         Raises
         ------
         ValueError
             If ``boundary`` or ``fe_order`` is not one of the supported
-            choices, or if ``num_solve_points`` is below the minimum needed
-            for a stable rational fit.
+            choices, or if ``num_solve_points`` is below the minimum.
         """
         if self.boundary not in ("silver_muller", "pml"):
             raise ValueError(
@@ -174,14 +161,17 @@ class SolidSpec:
     Parameters
     ----------
     name : str
-        Solid name (matches the CSXCAD property name / STEP product name).
+        Solid name, matching the CSXCAD property or STEP product name.
     role : str
-        One of ``"dielectric"``, ``"pec"``, ``"lossy_conductor"``, ``"port"``, or
-        ``"ignore"`` (excluded from the EM problem). Default ``"ignore"``.
-    dielectric : Dielectric | None
-        Material properties, set when ``role == "dielectric"``. Default ``None``.
+        What the solid is treated as: ``"dielectric"``, ``"pec"``,
+        ``"lossy_conductor"``, ``"port"``, or ``"ignore"`` to leave it out of
+        the simulation. Default ``"ignore"``.
+    dielectric : Dielectric, optional
+        Material properties, used when ``role`` is ``"dielectric"``. Default
+        ``None``.
     sigma : float
-        Conductivity in S/m, used when ``role == "lossy_conductor"``. Default ``0.0``.
+        Conductivity in S/m, used when ``role`` is ``"lossy_conductor"``.
+        Default ``0.0``.
     """
 
     name: str
@@ -193,18 +183,20 @@ class SolidSpec:
 @dataclass
 class PortSpec:
     """
-    A port on a named solid's terminal sheet.
+    A port defined on a named solid.
 
     Parameters
     ----------
     solid : str
-        Name of the solid whose footprint sheet becomes the port.
+        Name of the solid that becomes the port.
     number : int
-        1-based port index; sets the row/column order of the S-parameter matrix.
+        One-based port index, setting the row/column order of the S-parameter
+        matrix.
     z0 : float
         Reference impedance in ohms. Default ``50.0``.
     direction : str
-        Excitation E-field axis: ``"x"``, ``"y"``, or ``"z"``. Default ``"z"``.
+        Axis the port is excited along: ``"x"``, ``"y"``, or ``"z"``. Default
+        ``"z"``.
     """
 
     solid: str
@@ -216,28 +208,25 @@ class PortSpec:
 @dataclass
 class Problem:
     """
-    A finite-element problem definition consumed by the FEM backend.
+    A complete problem definition for the FEM backend to solve.
 
     Parameters
     ----------
     step_file : str
         Path to the STEP file to mesh and solve.
     name : str
-        Base name used for the generated mesh/problem files. Default
+        Base name given to the generated mesh and problem files. Default
         ``"structure"``.
     solids : dict[str, SolidSpec]
-        Solid name -> role/material assignment.
+        Role and material assigned to each solid, keyed by solid name.
     ports : list[PortSpec]
-        Ports found among ``solids``, sorted by port number.
+        The ports found among ``solids``, sorted by port number.
     freqs : NDArray
-        Frequency grid (Hz) the problem is solved/interpolated over. Default
+        Frequency points (Hz) the problem is solved over. Default
         ``[2.45e9]``.
     options : FEMOptions
-        Global solver/mesh knobs -- boundary, element order, symmetry, air
-        padding, mesh density. :class:`FEMOptions` is the single place these
-        defaults are declared; ``Problem`` only holds an instance and exposes
-        read-only pass-through properties (below) so the rest of the FEM
-        backend can keep reading e.g. ``problem.air_pad_frac`` unchanged.
+        Solver and mesh options. Each is also readable directly off the
+        problem (e.g. ``problem.fe_order``) through the properties below.
     """
 
     step_file: str
@@ -255,47 +244,47 @@ class Problem:
     # that declares these defaults; Problem never redeclares them.
     @property
     def boundary(self) -> str:
-        """Outer domain truncation: ``"silver_muller"`` or ``"pml"``."""
+        """Outer boundary condition: ``"silver_muller"`` or ``"pml"``."""
         return self.options.boundary
 
     @property
     def fe_order(self) -> int:
-        """Nedelec edge-element order: ``1`` or ``2``."""
+        """Element order: ``1`` or ``2``."""
         return self.options.fe_order
 
     @property
     def symmetry(self) -> tuple | None:
-        """Optional mirror-symmetry plane ``(axis, kind, at)``, or ``None``."""
+        """Mirror-symmetry plane ``(axis, kind, at)``, or ``None``."""
         return self.options.symmetry
 
     @property
     def air_pad_frac(self) -> float:
-        """Air padding as a fraction of the longest free-space wavelength."""
+        """Air padding as a fraction of the longest wavelength."""
         return self.options.air_pad_frac
 
     @property
     def air_pad_mm(self) -> float | None:
-        """Explicit air padding in millimetres, or ``None`` for the auto formula."""
+        """Air padding in millimetres, or ``None`` to use ``air_pad_frac``."""
         return self.options.air_pad_mm
 
     @property
     def elems_per_wavelength(self) -> float:
-        """Target coarse mesh density in open air."""
+        """Target number of mesh elements per wavelength."""
         return self.options.elems_per_wavelength
 
     @property
     def mesh_fine_scale(self) -> float:
-        """Multiplier on the near-conductor element size."""
+        """Multiplier on the element size near conductors."""
         return self.options.mesh_fine_scale
 
     @property
     def min_layers(self) -> int:
-        """Minimum element layers through the dielectric thickness."""
+        """Number of element layers through the dielectric thickness."""
         return self.options.min_layers
 
     @property
     def num_solve_points(self) -> int:
-        """Number of full FEM solves the adaptive sweep may perform."""
+        """Number of frequencies the sweep solves at."""
         return self.options.num_solve_points
 
 
@@ -303,7 +292,7 @@ class Problem:
 # CSX -> Problem mapping
 # ----------------------------
 def _port_number(name: str, fallback: int) -> int:
-    """Extract a trailing integer from a port name, else use ``fallback``."""
+    """Read the port number off the end of ``name``, else use ``fallback``."""
     match = re.search(r"_(\d+)$", name)
     return int(match.group(1)) if match else fallback
 
@@ -327,25 +316,23 @@ def _csx_roles(
     csx: ContinuousStructure, centre_freq: float
 ) -> tuple[dict, dict, dict, dict]:
     """
-    Classify CSXCAD properties into FEM roles.
+    Assign an electromagnetic role to each CSXCAD property.
 
     Parameters
     ----------
     csx : ContinuousStructure
         The CSXCAD geometry.
     centre_freq : float
-        Frequency (Hz) used to convert conductivity to a loss tangent.
+        Frequency in Hz at which conductivity is converted to a loss tangent.
 
     Returns
     -------
     tuple[dict, dict, dict, dict]
-        ``(role_by_name, dielectric_by_name, port_by_name, sigma_by_name)``:
-        ``role_by_name`` maps a property name to its role string (``"pec"``,
-        ``"dielectric"``, ``"lossy_conductor"``, or ``"port"``); ``dielectric_by_name``
-        maps a dielectric property's name to its
-        :class:`~simpleEMS.fem_materials.Dielectric`;
-        ``port_by_name`` maps a port property's name to ``(z0, direction, number)``;
-        ``sigma_by_name`` maps a lossy conductor's name to its conductivity in S/m.
+        ``(role_by_name, dielectric_by_name, port_by_name, sigma_by_name)``,
+        each keyed by property name: the role string, the
+        :class:`~simpleEMS.fem_materials.Dielectric` of each dielectric, the
+        ``(z0, direction, number)`` of each port, and the conductivity in S/m
+        of each lossy conductor.
     """
     role_by_name: dict[str, str] = {}
     dielectric_by_name: dict[str, Dielectric] = {}
@@ -394,7 +381,7 @@ def _csx_roles(
 
 
 def _apply_FEM_options(prob: Problem, FEM_options: FEMOptions | None) -> None:
-    """Apply global :class:`FEMOptions` to a :class:`Problem` (in place)."""
+    """Set ``prob``'s options to ``FEM_options``, in place, unless it is ``None``."""
     if FEM_options is not None:
         prob.options = FEM_options
 
@@ -413,11 +400,11 @@ def _build_problem(
     csx : ContinuousStructure
         The CSXCAD geometry to solve.
     freqs : NDArray
-        Output frequency grid (also sets fmin/fmax for meshing).
+        Frequency points (Hz) to solve over.
     output_path : Path
         Directory to export ``structure.step`` into.
-    FEM_options : FEMOptions | None
-        Global solver/mesh options to apply. ``None`` keeps the defaults.
+    FEM_options : FEMOptions, optional
+        Solver and mesh options. ``None`` keeps the defaults.
 
     Returns
     -------
@@ -478,24 +465,28 @@ def _module_bytes(mod: object) -> bytes:
 def _mesh_fingerprint(
     csx: ContinuousStructure, freqs: NDArray, FEM_options: FEMOptions | None
 ) -> str:
-    """Cheap hash of everything that affects the mesh, for cache invalidation.
+    """Hash of everything that affects the mesh, so it can be reused or rebuilt.
 
-    Reads primitive coordinates directly off the live CSXCAD properties (the
-    same box/polygon data ``export_cad.py`` extracts) rather than exporting
-    STEP or meshing, so this costs nothing close to an actual rebuild --
-    letting every FEM entry point call :func:`build_mesh` unconditionally
-    and still mesh only when something has actually changed.
+    Parameters
+    ----------
+    csx : ContinuousStructure
+        The CSXCAD geometry.
+    freqs : NDArray
+        Frequency points (Hz) to solve over.
+    FEM_options : FEMOptions, optional
+        Solver and mesh options.
 
-    The modules that *write* the mesh and the ``.pro`` are hashed in too. A
-    cache hit returns before :func:`_mesh_problem`, so it skips
-    :func:`~simpleEMS.fem_formulation.write_problem` as well as the meshing --
-    which means without this an edit to the formulation would leave the old
-    ``.pro`` in place and be silently ignored, or worse, leave a ``.pro``
-    referring to regions the current code no longer tags.
-
-    ``fem_backend`` is hashed too, since it decides what goes into
-    ``fem_mesh.json``; the cost is that editing it rebuilds cached meshes once.
+    Returns
+    -------
+    str
+        Hex digest covering the geometry, the frequencies, the options, and
+        the source of the modules that generate the mesh and problem files.
     """
+    # Read straight off the live CSXCAD properties rather than exporting STEP
+    # or meshing, so this costs nothing close to a rebuild. The mesh/.pro
+    # generating modules are hashed in too: a cache hit skips write_problem as
+    # well as the meshing, so without them an edit to the formulation would
+    # silently leave a stale .pro in place.
     parts = []
     this_module = sys.modules[__name__]  # fem_backend itself; see the note above
     for mod in (fem_formulation, fem_geometry, fem_materials, this_module):
@@ -522,9 +513,7 @@ def _mesh_problem(
     prob: Problem, output_path: Path, verbose: bool = True, fingerprint: str = ""
 ) -> str:
     """
-    Mesh a :class:`Problem`, emit the GetDP ``.pro``, and persist the metadata.
-
-    Shared Problem-first core of the CSX and STEP entry points.
+    Mesh a :class:`Problem`, write its problem file, and record the metadata.
 
     Parameters
     ----------
@@ -535,9 +524,9 @@ def _mesh_problem(
     verbose : bool
         Print progress. Default ``True``.
     fingerprint : str
-        Mesh-input fingerprint (see :func:`_mesh_fingerprint`) to persist
-        alongside the mesh, so a later :func:`build_mesh` call can tell
-        whether it's still valid. Default ``""`` (no cache validation).
+        Hash of the mesh inputs, stored alongside the mesh so a later
+        :func:`build_mesh` call can tell whether the mesh is still valid.
+        Default ``""``, meaning the mesh is never reused.
 
     Returns
     -------
@@ -594,38 +583,30 @@ def build_mesh(
     FEM_options: FEMOptions | None = None,
 ) -> str:
     """
-    Mesh a CSXCAD geometry for the FEM backend, reusing a matching mesh if any.
+    Mesh a CSXCAD geometry for the FEM backend.
 
-    Exports the geometry to STEP, builds the tagged tetrahedral mesh and the
-    GetDP problem file, and records the port metadata for later stages.
-
-    Before doing any of that, checks a cheap fingerprint of ``csx``/``freqs``/
-    ``FEM_options`` (see :func:`_mesh_fingerprint`) against whatever mesh
-    metadata is already in ``output_path``. If they match and the ``.msh``
-    file is still there, that mesh is returned unchanged; otherwise a full
-    rebuild runs. This makes it safe for every FEM entry point
-    (``write_and_show_structure``, ``run_sweep``, ``simulate_step_FEM``) to
-    call ``build_mesh`` unconditionally: an unchanged rerun meshes once, and
-    a sweep/optimize loop that changes geometry between calls into the same
-    ``output_path`` is remeshed exactly when it needs to be.
+    Exports the geometry to STEP, meshes it, writes the problem file, and
+    records the port metadata the later stages read. A mesh already in
+    ``output_path`` is reused instead if nothing affecting it has changed, so
+    this is cheap to call before every simulation.
 
     Parameters
     ----------
     csx : ContinuousStructure
         The CSXCAD geometry.
     freqs : NDArray
-        Output frequency grid.
+        Frequency points (Hz) to solve over.
     output_path : str | Path
         Directory for the mesh and problem files.
     verbose : bool
         Print progress. Default ``True``.
-    FEM_options : FEMOptions | None
-        Global solver/mesh options. ``None`` keeps the defaults.
+    FEM_options : FEMOptions, optional
+        Solver and mesh options. ``None`` keeps the defaults.
 
     Returns
     -------
     str
-        Path to the ``.msh`` file (existing or freshly built).
+        Path to the ``.msh`` file, whether reused or freshly built.
 
     Raises
     ------
@@ -658,19 +639,16 @@ def _sweep_from_meta(
     verbose: bool = True,
 ) -> None:
     """
-    Run the adaptive GetDP sweep from an existing ``fem_mesh.json``.
-
-    Shared sweep core (needs no CSX): reads the mesh/problem metadata, drives
-    the adaptive rational sweep, and writes ``fem_sparams.npz``.
+    Run the frequency sweep on the mesh recorded in ``fem_mesh.json``.
 
     Parameters
     ----------
     freqs : NDArray
-        Dense output frequency grid (Hz).
+        Frequency points (Hz) to report results at.
     num_solve_points : int
-        Number of full FEM solves the adaptive sweep may perform.
+        Number of frequencies the sweep solves at.
     output_path : Path
-        Directory containing ``fem_mesh.json`` (from :func:`build_mesh`) and
+        Directory holding the mesh metadata written by :func:`build_mesh`, and
         receiving the ``fem_sparams.npz`` results.
     verbose : bool
         Print progress. Default ``True``.
@@ -795,15 +773,11 @@ def run_sweep(
     FEM_options: FEMOptions | None = None,
 ) -> None:
     """
-    Run the adaptive FEM frequency sweep on a CSXCAD geometry.
+    Run the FEM frequency sweep on a CSXCAD geometry.
 
-    Always calls :func:`build_mesh` first -- cheap when nothing has changed
-    since a prior call (it reuses the existing mesh via a fingerprint check
-    rather than remeshing), and safe when it has, e.g. a sweep/optimize loop
-    that calls ``run_sweep`` directly (without ``write_and_show_structure``)
-    across iterations with changing geometry. Then performs
-    ``FEM_options.num_solve_points`` full GetDP solves, rational-interpolates
-    the dense S-parameter curve, and writes it to ``fem_sparams.npz`` in
+    Meshes the geometry first (reusing an existing mesh where possible), then
+    solves at ``FEM_options.num_solve_points`` frequencies, interpolates the
+    S-parameters onto ``freqs``, and writes them to ``fem_sparams.npz`` in
     ``output_path``.
 
     Parameters
@@ -811,13 +785,14 @@ def run_sweep(
     csx : ContinuousStructure
         The CSXCAD geometry.
     freqs : NDArray
-        Dense output frequency grid.
+        Frequency points (Hz) to report results at.
     output_path : str | Path
-        Directory holding the mesh/problem files and receiving the results.
+        Directory holding the mesh and problem files, and receiving the
+        results.
     verbose : bool
         Print progress. Default ``True``.
-    FEM_options : FEMOptions | None
-        Global solver/mesh options, including ``num_solve_points``. ``None``
+    FEM_options : FEMOptions, optional
+        Solver and mesh options, including ``num_solve_points``. ``None``
         keeps the defaults.
 
     Raises
@@ -840,19 +815,22 @@ def compute_sim_data(
     Parameters
     ----------
     freqs : NDArray
-        Frequency grid (unused; kept for signature parity -- the stored grid is
-        authoritative).
+        Frequency points. Unused -- the frequencies stored with the results
+        are used instead; accepted so this matches the FDTD equivalent.
     charac_imp : float
-        Fallback reference impedance if none was stored.
+        Reference impedance in ohms, used only if none was stored with the
+        results.
     output_path : str | Path
-        Directory containing ``fem_sparams.npz`` from :func:`run_sweep`.
+        Directory containing the ``fem_sparams.npz`` results written by
+        :func:`run_sweep`.
 
     Returns
     -------
     SimData
-        ``freqs``, ``s11``, ``s21`` (``None`` for a single-port problem),
-        ``z11``, ``vswr``, ``input_power``, ``port_voltage``, ``port_current``,
-        and ``ref_impedance`` -- see :class:`~simpleEMS.sim_tools.SimData`.
+        Named tuple of ``freqs``, ``s11``, ``s21`` (``None`` for a single-port
+        problem), ``z11``, ``vswr``, ``input_power``, ``port_voltage``,
+        ``port_current``, and ``ref_impedance``. See
+        :class:`~simpleEMS.sim_tools.SimData`.
 
     Raises
     ------
@@ -904,7 +882,7 @@ def _problem_from_step(
     charac_imp: float,
     FEM_options: FEMOptions | None,
 ) -> Problem:
-    """Build a :class:`Problem` directly from a STEP file (no CSXCAD)."""
+    """Build a :class:`Problem` from a STEP file's solids, without CSXCAD."""
     step_file = str(Path(step_file).expanduser())
     freqs = np.asarray(freqs, dtype=float)
     dielectrics = dielectrics or {}
@@ -980,79 +958,80 @@ def simulate_step_FEM(
     verbose: bool = True,
 ) -> SimData:
     """
-    Solve a raw STEP geometry with the FEM backend, returning ``SimData``.
+    Simulate a STEP geometry with the FEM backend and return the results.
 
-    A CSX-free entry point mirroring :func:`fdtd_standalone_model.simulate_model`:
-    it meshes the STEP, generates the GetDP problem, runs the adaptive sweep,
-    and returns the standard results bundle so all ``SimTools`` post-processing
-    applies.
+    A standalone entry point that needs no CSXCAD geometry: it meshes the STEP
+    file, runs the frequency sweep, and returns the same results bundle the
+    rest of the pipeline uses, so all ``SimTools`` post-processing applies.
 
     Parameters
     ----------
     step_file : str
-        Path to the ``.step`` file.
+        Path to the ``.step`` file to simulate.
     freqs : NDArray
-        Dense output frequency grid (Hz).
+        Frequency points (Hz) to report results at.
     unit : str
-        Advisory only -- the STEP file's own declared unit is authoritative
-        (Gmsh converts it to metres). Default ``"mm"``.
-    dielectrics : dict | None
-        ``{solid_name: (eps_r, tan_d)}`` overrides for dielectric solids.
-    pec : list | None
-        Solid names to force to perfect electric conductors.
-    lossy_conductor : dict | None
-        ``{solid_name: sigma}`` lossy (surface-impedance) conductors.
-    ports : dict | None
+        Advisory only -- the unit declared in the STEP file itself is what
+        gets used. Default ``"mm"``.
+    dielectrics : dict, optional
+        Dielectric solids, as ``{solid_name: (eps_r, tan_d)}``.
+    pec : list, optional
+        Names of solids to treat as perfect electric conductors.
+    lossy_conductor : dict, optional
+        Lossy conductors, as ``{solid_name: sigma}`` with ``sigma`` in S/m.
+    ports : dict, optional
+        Ports, as
         ``{solid_name: {"z0": ..., "direction": "x|y|z", "number": ...}}``.
-        If omitted, solids whose names look like ports are auto-registered.
+        If omitted, solids whose names look like ports are used instead.
     FEM_boundary : str
-        Outer truncation: ``"silver_muller"`` (default) or ``"pml"``.
-    FEM_symmetry : tuple | None
-        Optional mirror-symmetry plane ``(axis, kind, at)``. See
-        :class:`FEMOptions`. Default ``None``.
+        Outer boundary condition: ``"silver_muller"`` (default) or ``"pml"``.
+    FEM_symmetry : tuple, optional
+        Mirror-symmetry plane ``(axis, kind, at)``, so only half the structure
+        is meshed. See :class:`FEMOptions`. Default ``None``.
     FEM_fe_order : int
-        Nedelec edge-element order: ``1`` (default) or ``2``.
+        Element order: ``1`` (default) or ``2``.
     FEM_air_pad_frac : float
-        Air padding as a fraction of the longest wavelength. Default ``0.25``.
-        Ignored when ``FEM_air_pad_mm`` is set.
-    FEM_air_pad_mm : float | None
-        Explicit air padding in millimetres. Default ``None`` (auto, via
-        ``FEM_air_pad_frac``). See :class:`FEMOptions`.
+        Air padding around the structure, as a fraction of the longest
+        wavelength. Default ``0.25``. Ignored when ``FEM_air_pad_mm`` is set.
+    FEM_air_pad_mm : float, optional
+        Air padding around the structure in millimetres, used in place of
+        ``FEM_air_pad_frac``. Default ``None``.
     FEM_elems_per_wavelength : float
-        Target coarse mesh density, applied per material against that
-        material's own wavelength. Default ``16.0``. See
-        :class:`FEMOptions` for why this is not ``8.0``.
+        Target number of mesh elements per wavelength. Default ``16.0``.
     FEM_mesh_fine_scale : float
-        Multiplier on the near-conductor element size. Default ``1.0``.
+        Multiplier on the element size near conductors. Default ``1.0``.
     FEM_min_layers : int
-        Element layers through the dielectric thickness. Default ``3``.
+        Number of element layers through the dielectric thickness. Default
+        ``3``.
     FEM_num_solve_points : int
-        Number of full FEM solves the adaptive rational-interpolation sweep is
-        allowed to perform (must be ``>= 4``). Default ``10``.
+        Number of frequencies the sweep solves at (must be ``>= 4``). Default
+        ``10``.
     charac_imp : float
-        Default/fallback port reference impedance in ohms.
+        Port reference impedance in ohms, used for any port that does not set
+        its own. Default ``50.0``.
     output_path : str | Path
-        Working directory for the mesh/problem/results.
+        Working directory for the mesh, problem, and result files. Default
+        ``"Sim_Path"``.
     run : bool
-        If ``False``, mesh and generate the GetDP problem but skip the solve.
-        The final result is still read back via :func:`compute_sim_data`, so
-        this only succeeds if ``fem_sparams.npz`` already exists in
-        ``output_path`` from an earlier solved run. Default ``True``.
+        Whether to solve. If ``False``, the geometry is only meshed and the
+        results are read back from an earlier run in ``output_path``. Default
+        ``True``.
     verbose : bool
         Print progress. Default ``True``.
 
     Returns
     -------
     SimData
-        ``freqs``, ``s11``, ``s21`` (``None`` for a single-port problem),
-        ``z11``, ``vswr``, ``input_power``, ``port_voltage``, ``port_current``,
-        and ``ref_impedance`` -- see :class:`~simpleEMS.sim_tools.SimData`.
+        Named tuple of ``freqs``, ``s11``, ``s21`` (``None`` for a single-port
+        problem), ``z11``, ``vswr``, ``input_power``, ``port_voltage``,
+        ``port_current``, and ``ref_impedance``. See
+        :class:`~simpleEMS.sim_tools.SimData`.
 
     Raises
     ------
     RuntimeError
-        If no ports are found or specified, or (when ``run=False`` with no
-        prior results) if the sweep results file is missing.
+        If no ports are found or specified, or if ``run`` is ``False`` and
+        ``output_path`` holds no results from an earlier run.
     """
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)

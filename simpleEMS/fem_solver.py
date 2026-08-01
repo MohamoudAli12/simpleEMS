@@ -15,12 +15,11 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Drive the GetDP finite-element solver as a subprocess.
+Run the GetDP finite-element solver and read back what it writes.
 
-Locates the ``getdp`` binary on ``PATH``, runs one solve of a generated
-``.pro`` file, and reads back the results: per-port ``xS_<n>.txt``
-S-parameter tables (one row per driven port), or the field-view files and
-dielectric-loss/radiated-power totals from a combined fields-and-power solve.
+Locates the ``getdp`` binary, runs one solve of a generated problem file, and
+reads the results out of its output files: the S-parameters of each port, or
+the near fields and the power radiated and lost.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ import numpy as np
 
 def find_getdp() -> str:
     """
-    Resolve the ``getdp`` binary path from ``PATH``.
+    Locate the ``getdp`` binary.
 
     Returns
     -------
@@ -44,7 +43,8 @@ def find_getdp() -> str:
     Raises
     ------
     RuntimeError
-        If no ``getdp`` binary can be found.
+        If no ``getdp`` binary is installed, with instructions for installing
+        one.
     """
     found = shutil.which("getdp")
     if found:
@@ -57,19 +57,18 @@ def find_getdp() -> str:
 
 def read_complex(path: str | Path) -> complex:
     """
-    Read a single complex value from a GetDP Table output file.
+    Read the most recent complex value out of a solver output file.
 
     Parameters
     ----------
     path : str | Path
-        Path to a Table file with ``[tag, Re, Im]`` columns. Rows accumulate
-        across a sweep (GetDP appends, see ``write_problem``), so the most
-        recently written value is always the last row.
+        Path to an output file with ``[tag, Re, Im]`` columns. Rows are
+        appended as the sweep runs, so the last one is the most recent.
 
     Returns
     -------
     complex
-        The last row's complex value, or ``0j`` if the file is missing.
+        The value in the last row, or ``0j`` if the file does not exist.
     """
     if not Path(path).exists():
         return 0j
@@ -81,28 +80,28 @@ def read_complex(path: str | Path) -> complex:
 
 def read_complex_rows(path: str | Path, count: int) -> list[complex]:
     """
-    Read the last ``count`` complex values from a GetDP Table output file.
+    Read the most recent ``count`` complex values out of a solver output file.
 
-    One ``Analysis`` launch appends a row per driven port, so the last
-    ``count`` rows of ``xS_<n>.txt`` are that frequency's ``S[n, :]``.
+    One solve appends a row per driven port, so the last ``count`` rows are
+    that frequency's results for every port.
 
     Parameters
     ----------
     path : str | Path
-        Path to a Table file with ``[tag, Re, Im]`` columns.
+        Path to an output file with ``[tag, Re, Im]`` columns.
     count : int
-        Number of trailing rows to return (the port count).
+        Number of rows to return, i.e. the number of ports.
 
     Returns
     -------
     list[complex]
-        The last ``count`` values, oldest first (i.e. in driven-port order).
+        The last ``count`` values, oldest first, so in driven-port order.
 
     Raises
     ------
     RuntimeError
-        If the file is missing or holds fewer than ``count`` rows. Rows are
-        read by position, so anything short would misalign the S-matrix.
+        If the file is missing or holds fewer than ``count`` rows, which would
+        misalign the results.
     """
     if not Path(path).exists():
         raise RuntimeError(
@@ -132,38 +131,38 @@ def run_getdp(
     extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """
-    Run GetDP once for a given set of numeric parameters.
+    Run the solver once.
 
     Parameters
     ----------
     pro_path : str | Path
-        Path to the ``.pro`` problem file.
+        Path to the ``.pro`` problem file to solve.
     msh_path : str | Path
-        Path to the ``.msh`` mesh file.
+        Path to the ``.msh`` mesh file to solve it on.
     workdir : str | Path
-        Working directory for the run (outputs go under ``workdir/output``).
+        Working directory for the run. Results are written to an ``output``
+        subdirectory of it.
     setnumbers : dict
-        Numeric ``-setnumber`` overrides (e.g. ``{"FREQ": f, "ACTIVE_PORT": k}``).
+        Values to set in the problem file, e.g.
+        ``{"FREQ": f, "ACTIVE_PORT": k}``.
     postop : str | list[str] | None
-        Name(s) of the ``-pos`` post-operation(s) to run, or ``None``. GetDP's
-        ``-pos`` accepts multiple post-operation ids in one invocation, run
-        against whatever the ``-solve``/``-cal`` step already assembled and
-        solved -- passing a list here runs them all off a single
-        ``Generate``/``Solve`` instead of one GetDP process per post-operation.
+        Name or names of the results to extract afterwards, or ``None`` for
+        none. Passing several extracts them all from one solve.
     resolution : str
-        Name of the GetDP resolution to solve. Default ``"Analysis"``.
+        Which of the problem file's solve steps to run. Default
+        ``"Analysis"``, which drives every port in turn.
     extra_args : list[str] | None
-        Extra getdp/PETSc flags (e.g. iterative solver options).
+        Extra flags to pass to the solver, e.g. iterative solver options.
 
     Returns
     -------
     subprocess.CompletedProcess
-        The completed process.
+        The finished solver process.
 
     Raises
     ------
     RuntimeError
-        If getdp exits with a non-zero return code.
+        If the solver exits with an error.
     """
     # "Analysis" drives every port and runs Get_SParameters itself (so no -pos
     # and no ACTIVE_PORT); "AnalysisSinglePort" solves the single ACTIVE_PORT
@@ -202,7 +201,7 @@ def _read_power_value(outdir: str | Path, fname: str) -> float:
 
 
 def _conductor_loss(outdir: Path) -> float:
-    """Total dissipation in the surface-impedance sheets, if any."""
+    """Total power lost in the lossy conductors, in watts, or ``0`` if none."""
     return sum(_read_power_value(outdir, p.name) for p in outdir.glob("Pcond_*.txt"))
 
 
@@ -214,38 +213,33 @@ def solve_fields_and_power(
     active: int = 1,
 ) -> tuple[str, str, float, float]:
     """
-    Solve at one frequency and return both the field views and the powers.
+    Solve at one frequency and return the near fields and the powers together.
 
-    Drives ``Get_Fields`` and ``Get_Power`` together in a single GetDP
-    invocation, so the linear system is assembled and solved only once (both
-    post-operations read off the same solved system) instead of once per
-    post-operation as two separate GetDP runs would require.
+    Both come out of a single solve, rather than one each.
 
     Parameters
     ----------
     pro_path, msh_path : str | Path
-        Paths to the ``.pro`` and ``.msh`` files.
+        Paths to the problem and mesh files to solve.
     workdir : str | Path
-        Working directory (outputs go under ``workdir/output``).
+        Working directory for the run. Results are written to an ``output``
+        subdirectory of it.
     freq : float
-        Frequency in Hz.
+        Frequency to solve at, in Hz.
     active : int
-        Driven port number. Default ``1``.
+        Number of the port to drive. Default ``1``.
 
     Returns
     -------
     tuple[str, str, float, float]
-        ``(e_pos, h_pos, p_loss, p_rad)`` -- paths to the written ``e.pos``
-        and ``h.pos`` field views, the total material loss (dielectric plus
-        lossy conductors) and the radiated power, which sum to the accepted
-        power. These are computed directly from the unnormalised field
-        solution, so only their ratio (e.g. radiation efficiency) is
-        physically meaningful, not their absolute magnitude.
-
-        ``p_rad`` is what the port accepted less what the materials
-        dissipated, not a flux through the outer boundary -- that reads ~0
-        behind a PML.
+        ``(e_pos, h_pos, p_loss, p_rad)`` -- paths to the written electric and
+        magnetic near-field files, the power lost in the materials, and the
+        power radiated. The two powers sum to the power accepted by the port.
+        Only their ratio, e.g. the radiation efficiency, is meaningful; their
+        absolute magnitudes are not.
     """
+    # p_rad is what the port accepted less what the materials dissipated, not a
+    # flux through the outer boundary -- that reads ~0 behind a PML.
     run_getdp(
         pro_path,
         msh_path,

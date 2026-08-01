@@ -15,15 +15,12 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Fast FEM frequency sweep by adaptive rational interpolation.
+Sweep the FEM solver over frequency without solving at every point.
 
-S-parameters of linear microwave structures are smooth rational functions of
-frequency, so a handful of full FEM solves suffice to reconstruct the whole
-curve. Each S_ij is fitted with a barycentric rational approximant using the
-AAA algorithm (Nakatsukasa, Sete & Trefethen 2018) via
-:class:`scipy.interpolate.AAA`, and new solve points are added greedily where
-successive models disagree most. Typically 8-15 solves reproduce a 200+ point
-dense sweep.
+S-parameters vary smoothly with frequency, so a handful of full solves is
+enough to reconstruct the whole curve by interpolation. Solve frequencies are
+chosen as the sweep goes, concentrating them where the response changes
+fastest; typically 8-15 of them reproduce a 200-point sweep.
 """
 
 from __future__ import annotations
@@ -37,6 +34,9 @@ from scipy.interpolate import AAA
 
 from .console import console
 
+# Each S_ij is fitted with a barycentric rational approximant by the AAA
+# algorithm (Nakatsukasa, Sete & Trefethen 2018), via scipy.interpolate.AAA.
+#
 # A passive structure can never have a scattering matrix with a singular value
 # above 1. Left to itself AAA fits each S_ij to near machine precision, which
 # on a handful of solve points routinely produces Froissart doublets: spurious
@@ -65,41 +65,41 @@ _PASSIVITY_SLACK = 1.5
 
 def _passivity_excess(model: NDArray) -> float:
     """
-    Amount by which ``model`` violates passivity.
+    How far ``model`` exceeds what a passive structure can do.
 
     Parameters
     ----------
     model : NDArray
-        Scattering matrices ``[n_freq, nports, nports]``.
+        S-matrices over frequency, shaped ``[n_freq, nports, nports]``.
 
     Returns
     -------
     float
-        ``max(sigma_max) - 1`` over the grid, clamped at ``0.0`` for a passive
-        model.
+        The worst excess over the frequency range, or ``0.0`` if the model is
+        passive throughout.
     """
     return float(max(np.linalg.svd(model, compute_uv=False).max() - 1.0, 0.0))
 
 
 def _fit_matrix(zs: NDArray, s_arr: NDArray, zg: NDArray, max_terms: int) -> NDArray:
     """
-    Fit one AAA approximant per S_ij and evaluate them on ``zg``.
+    Fit each S-parameter across the solved points and evaluate it on ``zg``.
 
     Parameters
     ----------
     zs : NDArray
-        Normalised frequencies of the solved points.
+        Scaled frequencies that were solved at.
     s_arr : NDArray
-        Solved S-matrices ``[n_solved, nports, nports]``.
+        The S-matrices solved there, shaped ``[n_solved, nports, nports]``.
     zg : NDArray
-        Normalised output grid.
+        Scaled frequencies to evaluate the fit at.
     max_terms : int
-        Cap on the number of barycentric terms (the fit order knob).
+        Highest order the fit may use.
 
     Returns
     -------
     NDArray
-        Interpolated ``[len(zg), nports, nports]``.
+        The fitted S-matrices, shaped ``[len(zg), nports, nports]``.
     """
     npt = s_arr.shape[1]
     model = np.empty((len(zg), npt, npt), dtype=complex)
@@ -122,32 +122,34 @@ def rational_sweep(
     verbose: bool = True,
 ) -> NDArray:
     """
-    Adaptively solve and rational-interpolate S(f) over the output grid.
+    Sweep the S-parameters over a frequency range.
 
-    Performs ``num_solves`` full FEM solves (a few uniform seeds, the rest
-    placed adaptively where the model varies fastest), then evaluates the
-    barycentric rational model on ``freqs_out``.
+    Solves at ``num_solves`` frequencies -- a few spread evenly, the rest
+    placed where the response changes fastest -- then interpolates the results
+    onto ``freqs_out``.
 
     Parameters
     ----------
     freqs_out : NDArray
-        Dense output frequency grid to interpolate onto.
+        Frequency points (Hz) to report results at.
     port_numbers : list[int]
-        Sorted port numbers; the returned matrix is indexed in this order.
+        Sorted port numbers. The returned matrix is indexed in this order.
     solve_at : Callable[[float], NDArray]
-        Callback returning the ``[nports, nports]`` S-matrix at one frequency.
+        Function returning the ``[nports, nports]`` S-matrix at one frequency.
     num_solves : int
-        Number of full FEM solves to perform.
+        Number of frequencies to solve at.
     tol : float
-        Optional early-stop guard on model change between solves. ``0`` (the
-        default) disables it, so exactly ``num_solves`` solves are performed.
+        Stop early once the interpolated curve changes by less than this
+        between solves. Default ``0``, which disables the check so that
+        exactly ``num_solves`` solves are performed.
     verbose : bool
-        Print progress through the shared console. Default ``True``.
+        Print progress. Default ``True``.
 
     Returns
     -------
     NDArray
-        Interpolated ``S[len(freqs_out), nports, nports]`` (complex).
+        The complex S-matrices over ``freqs_out``, shaped
+        ``[len(freqs_out), nports, nports]``.
     """
     fgrid = np.asarray(freqs_out, dtype=float)
     fmin, fmax = float(fgrid[0]), float(fgrid[-1])

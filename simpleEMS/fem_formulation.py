@@ -15,38 +15,38 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Generate a self-contained GetDP ``.pro`` for the E-field microwave formulation.
+Write the problem file that tells the solver what to solve.
 
-This module is a *code generator*: :func:`write_problem` assembles a text
-``.pro`` file that tells GetDP exactly which finite-element problem to solve on
-the mesh from :mod:`~simpleEMS.fem_geometry`. Nothing is solved here.
-
-The physics it emits:
-
-* **Unknown / discretisation** -- the electric field ``E`` expanded in
-  first-order Nedelec *edge* elements (GetDP ``Type Form1``, ``BF_Edge``; the
-  ``FEorder == 2`` branch adds ``BF_Edge_2E`` for 2nd order). Edge elements are
-  the standard choice for the vector wave equation (they allow tangential jumps
-  and kill spurious modes).
-* **Equation** -- the time-harmonic curl-curl wave equation
-  ``curl(nuR curl E) - k0^2 epsR E = 0`` in weak (Galerkin) form, complex-valued,
-  where ``k0 = w/c0``, ``nuR = 1/muR``.
-
-  **Sign convention: this file is written for ``exp(-i w t)``**, following
-  GetDP's ``models/MicrostripLine``. It is a choice made here, not a property
-  of GetDP. The absorbing term, ``epsR``, the PML stretch, ``Zs`` and ``h``
-  all depend on it, and results are conjugated back to the engineering
-  convention in :func:`~simpleEMS.fem_backend.compute_sim_data`. Change one
-  sign and you must change all of them.
-* **Truncation** -- a first-order Silver-Muller absorbing boundary on the outer
-  air box, or a complex-coordinate-stretched PML shell.
-* **Excitation / ports** -- each port sheet carries an impedance term
-  (``eta0/Zs``) plus an impressed quasi-TEM mode source; S-parameters come from
-  the mode overlap of the solved field on each port.
-
-The driven port is the runtime variable ``$ActivePort``, so one GetDP launch
-can walk every port reusing a single factorisation.
+:func:`write_problem` assembles a self-contained GetDP ``.pro`` file: the
+equation to solve for the electric field, the material properties of each
+region of the mesh from :mod:`~simpleEMS.fem_geometry`, the boundary
+conditions, the port excitation, and the results to report. Nothing is solved
+here.
 """
+
+# The physics this module emits:
+#
+# * Unknown -- the electric field E, in Nedelec edge elements (Type Form1,
+#   BF_Edge; FEorder == 2 adds BF_Edge_2E for 2nd order). Edge elements are the
+#   standard choice for the vector wave equation: they allow tangential jumps
+#   and kill spurious modes.
+# * Equation -- the time-harmonic curl-curl wave equation
+#   curl(nuR curl E) - k0^2 epsR E = 0 in weak (Galerkin) form, complex-valued,
+#   with k0 = w/c0 and nuR = 1/muR.
+#
+#   SIGN CONVENTION: this file is written for exp(-i w t), following GetDP's
+#   models/MicrostripLine. It is a choice made here, not a property of GetDP.
+#   The absorbing term, epsR, the PML stretch, Zs and h all depend on it, and
+#   results are conjugated back to the engineering convention in
+#   fem_backend.compute_sim_data. Change one sign and you must change all.
+# * Truncation -- a first-order Silver-Muller absorbing boundary on the outer
+#   air box, or a complex-coordinate-stretched PML shell.
+# * Excitation -- each port sheet carries an impedance term (eta0/Zs) plus an
+#   impressed quasi-TEM mode source; S-parameters come from the mode overlap of
+#   the solved field on each port.
+#
+# The driven port is the runtime variable $ActivePort, so one GetDP launch can
+# walk every port reusing a single factorisation.
 
 from __future__ import annotations
 
@@ -75,21 +75,22 @@ def write_problem(
     workdir: str | Path,
 ) -> str:
     """
-    Write the GetDP ``.pro`` problem file for ``problem`` on ``mesh``.
+    Write the problem file for ``problem`` as meshed in ``mesh``.
 
     Parameters
     ----------
     problem : Problem
-        The FEM problem definition.
+        The problem to solve, supplying the materials, ports, boundary
+        condition, and element order.
     mesh : Mesh
-        The generated mesh with its region maps.
+        The generated mesh, supplying the region tag of each part of it.
     workdir : str | Path
         Directory to write the ``.pro`` file into.
 
     Returns
     -------
     str
-        Absolute path to the written ``.pro`` file.
+        Path to the written ``.pro`` file.
     """
     ports = [mesh.port_regions[p.number] for p in problem.ports]
     nports = len(ports)

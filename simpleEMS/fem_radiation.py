@@ -15,16 +15,11 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-FEM far-field radiation, exposed through an openEMS-``nf2ff``-compatible adapter.
+Far-field radiation patterns for the FEM backend.
 
-The GetDP solve gives the near fields; a Gmsh CutBox samples E/H on a box
-enclosing the antenna and the NearToFarField plugin transforms them to the
-far field. :class:`FEMNF2FF` wraps that computation behind the same
-``CalcNF2FF(output_path, freq, theta, phi, ...)`` interface that
-:class:`openEMS.nf2ff.nf2ff` exposes, returning a :class:`FEMFarField` with the
-attributes (``E_norm``, ``Dmax``, ``Prad``, ``P_rad``, ``theta``, ``phi``) that
-the existing :class:`~simpleEMS.sim_tools.SimTools` 2D/3D radiation plots read.
-That way the FDTD and FEM backends share the same plotting code unchanged.
+Computes the far field from the near fields of a solve, and exposes it through
+:class:`FEMNF2FF`, which offers the same ``CalcNF2FF`` interface as the openEMS
+near-field-to-far-field box so both backends share the same radiation plots.
 """
 
 from __future__ import annotations
@@ -54,16 +49,28 @@ _PLANE_TOL = 1e-12
 
 @dataclass
 class FEMFarField:
-    """Far-field result mirroring the openEMS ``nf2ff`` result surface.
+    """
+    A far-field result, matching what the openEMS ``nf2ff`` box returns.
 
-    Attributes are named to match what the ``SimTools`` radiation plots read:
-    ``E_norm`` is the far-field amplitude on the requested ``[theta, phi]`` grid,
-    ``Dmax`` the peak directivity (linear, length-1 array), ``Prad`` the radiated
-    power (length-1 array), ``P_rad`` the radiation-intensity pattern, and
-    ``theta``/``phi`` the grid axes in **radians**. ``Ploss`` (dielectric loss,
-    length-1 array) is FEM-specific: the accepted power is ``Prad + Ploss``,
-    which is what should be passed as ``input_power`` to ``plot_3d_gain`` so gain
-    is de-rated by the radiation efficiency.
+    Attributes
+    ----------
+    E_norm : NDArray
+        Far-field amplitude over the requested ``[theta, phi]`` grid.
+    Dmax : NDArray
+        Peak directivity, linear, as a length-1 array.
+    Prad : NDArray
+        Radiated power in watts, as a length-1 array.
+    P_rad : NDArray
+        Radiation intensity over the requested grid.
+    theta : NDArray
+        Elevation angles of the grid, in radians.
+    phi : NDArray
+        Azimuth angles of the grid, in radians.
+    Ploss : NDArray
+        Power lost in the materials, in watts, as a length-1 array. Only the
+        FEM backend reports this; ``Prad + Ploss`` is the accepted power, which
+        is what to pass as ``input_power`` to ``plot_3d_gain`` so that gain is
+        de-rated by the radiation efficiency.
     """
 
     E_norm: NDArray
@@ -91,64 +98,51 @@ def compute_pattern(
     verbose: bool = False,
 ) -> tuple[NDArray, NDArray, NDArray, float]:
     """
-    Transform near fields to a far-field intensity pattern on a regular grid.
+    Turn the near fields of a solve into a far-field pattern on a regular grid.
 
     Parameters
     ----------
     e_pos, h_pos : str | Path
-        Paths to the GetDP ``e.pos``/``h.pos`` field views.
+        Paths to the electric and magnetic near-field files written by the
+        solver.
     freq : float
-        Frequency in Hz.
+        Frequency the fields were solved at, in Hz.
     bbox : tuple
-        Structure extents ``(xmin, ymin, zmin, xmax, ymax, zmax)`` in metres.
+        Extents of the structure as ``(xmin, ymin, zmin, xmax, ymax, zmax)``,
+        in metres.
     workdir : str | Path
-        Directory for the intermediate NearToFarField output.
+        Directory to write the intermediate pattern files into.
     domain_bbox : tuple | None
-        Meshed E/H field extents (the air/PML interface, from
-        ``fem_mesh.json``'s ``domain_bbox``). The Huygens box is placed
-        ``safety_frac`` of the way from ``bbox`` to this boundary on each
-        axis, so ``CutBox`` always samples inside the mesh. If ``None``
-        (older ``fem_mesh.json`` without the field), falls back to
-        ``margin_frac`` of the largest structure dimension -- which can
-        place the box outside the mesh if the FEM air padding is smaller,
-        silently zeroing the far field (``CutBox``/``OctreePost`` return 0
-        for points outside every element, unlike ``gmsh.view.probe``).
+        Extents of the meshed region, in metres. The near fields are sampled
+        on a box placed ``safety_frac`` of the way from ``bbox`` out to this,
+        so the samples stay inside the mesh. Default ``None``, which falls
+        back to ``margin_frac`` instead.
     nphi, ntheta : int
-        Far-field angular sampling (azimuth, elevation). Defaults ``72`` and
-        ``36``. The ``NearToFarField`` plugin is a triple loop over
-        ``nphi * ntheta * num_surface_elements`` (one surface integral per
-        requested direction), so cost scales with their product. Every angle
-        ``SimTools`` ever requests -- even a 0.1 deg sweep -- is interpolated
-        from this one grid
-        (:class:`~scipy.interpolate.RegularGridInterpolator` in
-        :meth:`FEMNF2FF.CalcNF2FF`), so raising these buys smoother
-        interpolation of an already-smooth pattern, not more physical
-        information; the near field is only resolved at the FEM mesh's own
-        element density regardless.
+        Number of azimuth and elevation angles to compute the pattern at.
+        Defaults ``72`` and ``36``. Every angle later requested is
+        interpolated from this grid.
     npts : tuple[int, int, int]
-        CutBox sampling density on each axis of the Huygens box. Default
-        ``(14, 14, 14)``. Determines ``num_surface_elements`` above
-        (``~6*(npts-1)**2`` boundary quads), so it multiplies directly into
-        the ``NearToFarField`` cost.
+        Number of near-field sample points along each axis of the sampling
+        box. Default ``(14, 14, 14)``.
     margin_frac : float
-        Fallback Huygens-box margin as a fraction of the largest structure
-        dimension, used only when ``domain_bbox`` is ``None``. Default
-        ``0.15``.
+        Gap between the structure and the sampling box, as a fraction of the
+        largest structure dimension. Used only when ``domain_bbox`` is
+        ``None``. Default ``0.15``.
     safety_frac : float
-        Fraction of the per-axis gap between ``bbox`` and ``domain_bbox``
-        used for the Huygens-box margin. Default ``0.6``.
+        Gap between the structure and the sampling box, as a fraction of the
+        distance from the structure to the edge of the mesh. Default ``0.6``.
     symmetry : tuple[int, float, str] | None
-        ``(axis, plane, kind)`` when only half the structure was meshed. The
-        Huygens box is then closed on the plane and completed by reflection,
-        so the pattern is the whole antenna's. Default ``None``.
+        ``(axis, plane, kind)`` when only half the structure was meshed, so
+        the missing half of the pattern can be filled in by reflection.
+        Default ``None``.
     verbose : bool
-        Print Gmsh progress. Default ``False``.
+        Print progress. Default ``False``.
 
     Returns
     -------
     tuple[NDArray, NDArray, NDArray, float]
-        ``(theta_axis, phi_axis, u_grid, directivity_db)`` -- the elevation and
-        azimuth axes (radians, increasing), the radiation-intensity grid
+        ``(theta_axis, phi_axis, u_grid, directivity_db)`` -- the elevation
+        and azimuth angles in radians, the radiation intensity over them as
         ``u_grid[n_phi, n_theta]``, and the peak directivity in dB.
     """
     if gmsh.isInitialized():
@@ -174,6 +168,9 @@ def compute_pattern(
         x0, y0, z0 = lo
         x1, y1, z1 = hi
     else:
+        # This can land the box outside the mesh if the air padding is smaller,
+        # silently zeroing the far field: CutBox returns 0 for points outside
+        # every element rather than failing.
         dx, dy, dz = bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2]
         m = margin_frac * max(dx, dy, dz)
         x0, y0, z0 = bbox[0] - m, bbox[1] - m, bbox[2] - m
@@ -282,34 +279,34 @@ def compute_pattern(
 def _mirror_boundary_view(
     tag: int, axis: int, plane: float, kind: str, field: str
 ) -> int:
-    """Complete a half-model Huygens surface by reflecting it in the symmetry plane.
-
-    ``CutBox`` only samples the meshed half, so image theory supplies the rest.
-    Three things must hold together or the pattern comes out plausible but
-    wrong: quads lying in the plane are dropped (they end up interior), node
-    order is reversed (a reflection flips orientation and the transform reads
-    normals from the first three nodes), and components follow the wall's
-    parity.
+    """Complete a half-model sampling surface by reflecting it in the symmetry plane.
 
     Parameters
     ----------
     tag : int
-        View tag of the half Huygens surface (a ``CutBox`` result).
+        The half surface to complete.
     axis : int
-        Mirrored axis, ``0``/``1``/``2`` for x/y/z.
+        Axis the structure is mirrored across: ``0``, ``1``, or ``2`` for x,
+        y, or z.
     plane : float
-        Symmetry plane coordinate along ``axis``, in metres.
+        Position of the symmetry plane along ``axis``, in metres.
     kind : str
-        ``"pec"`` (electric wall) or ``"pmc"`` (magnetic wall).
+        Symmetry plane type: ``"pec"`` or ``"pmc"``.
     field : str
-        ``"E"`` or ``"H"`` -- which parity rule applies.
+        Which field is being reflected: ``"E"`` or ``"H"``. Together with
+        ``kind`` this sets which components change sign.
 
     Returns
     -------
     int
-        View tag of the completed surface: the original quads (minus those on
-        the plane) plus their mirror images.
+        The completed surface: the original samples, minus those lying in the
+        plane, plus their mirror images.
     """
+    # Three things have to hold together or the pattern comes out plausible but
+    # wrong: samples in the plane are dropped (they end up interior), node
+    # order is reversed (a reflection flips orientation, and the far-field
+    # transform reads normals from the first three nodes), and each component
+    # follows the parity of the wall.
     dtypes, counts, data = gmsh.view.getListData(tag)
     nsteps = int(gmsh.view.option.getNumber(tag, "NbTimeStep"))
 
@@ -358,11 +355,20 @@ def _mirror_boundary_view(
 
 
 def _parse_matlab_grid(path: str | Path, nphi: int, ntheta: int) -> tuple | None:
-    """Parse the NearToFarField MATLAB dump into ``(phi, theta, val)`` grids.
+    """Read the written pattern file into ``(phi, theta, value)`` grids.
 
-    The plugin writes ``phi``/``theta``/``farField`` as flat row-major matrices
-    with phi as the outer index and theta the inner one. Returns ``None`` if the
-    file is missing or cannot be reshaped to ``(nphi + 1, ntheta + 1)``.
+    Parameters
+    ----------
+    path : str | Path
+        Path to the pattern file.
+    nphi, ntheta : int
+        Number of azimuth and elevation angles the file should hold.
+
+    Returns
+    -------
+    tuple | None
+        The three ``(nphi + 1, ntheta + 1)`` grids, or ``None`` if the file is
+        missing or does not hold the expected number of angles.
     """
     try:
         with open(path) as fh:
@@ -389,13 +395,22 @@ def _parse_matlab_grid(path: str | Path, nphi: int, ntheta: int) -> tuple | None
 def _read_scalar_points(
     view_tag: int, center: tuple[float, float, float]
 ) -> tuple[list, list, list]:
-    """Fallback: extract ``(theta, phi, value)`` from a NearToFarField .pos view.
+    """Read scattered ``(theta, phi, value)`` samples out of a pattern view.
 
-    The plugin places each vertex at a radius proportional to the field
-    magnitude, offset by the sampling-box ``center``; angles are only meaningful
-    once that centre is subtracted. Each node carries its own value, so corner
-    nodes are emitted directly. Handles points ('SP'), triangles ('ST') and
-    quads ('SQ').
+    Used only when the regular grid cannot be read from the pattern file.
+
+    Parameters
+    ----------
+    view_tag : int
+        The pattern view to read.
+    center : tuple[float, float, float]
+        Centre of the sampling box, in metres, which the sample positions are
+        measured relative to.
+
+    Returns
+    -------
+    tuple[list, list, list]
+        The elevation angles, azimuth angles, and values of every sample.
     """
     dtypes, tags, data = gmsh.view.getListData(view_tag)
     cx, cy, cz = center
@@ -429,18 +444,30 @@ def _read_scalar_points(
 def _check_farfield_margin(
     bbox: tuple, domain_bbox: tuple, freq: float, symmetry_axis: int | None
 ) -> None:
-    """Raise if the air padding is too tight for an accurate far field at ``freq``.
+    """Check the air padding is wide enough for an accurate far field at ``freq``.
 
-    The Huygens surface needs open air of at least a quarter-wavelength on
-    every face that isn't a symmetry plane; anything tighter risks sitting in
-    the reactive near field, corrupting the near-to-far-field transform. This
-    only bites structures meshed with an explicit ``FEM_air_pad_mm`` (the
-    default ``air_pad_frac`` sizing already targets ~lambda/4, see
-    ``fem_geometry``'s module docstring), so it fires once, at the point a
-    far-field pattern is actually requested, rather than at mesh time -- a
-    small ``FEM_air_pad_mm`` is fine for non-radiating problems that never
-    call ``CalcNF2FF``.
+    Parameters
+    ----------
+    bbox : tuple
+        Extents of the structure, in metres.
+    domain_bbox : tuple
+        Extents of the meshed region, in metres.
+    freq : float
+        Frequency the pattern is wanted at, in Hz.
+    symmetry_axis : int | None
+        Axis the structure is mirrored across, whose lower face is a symmetry
+        plane rather than open air. ``None`` if there is no symmetry plane.
+
+    Raises
+    ------
+    ValueError
+        If any face has less than a quarter-wavelength of air between the
+        structure and the edge of the mesh, naming the padding needed.
     """
+    # Only structures meshed with an explicit FEM_air_pad_mm can fail this --
+    # the default padding already targets a quarter-wavelength. So it is
+    # checked here, when a pattern is actually asked for, rather than at mesh
+    # time: tight padding is fine for problems that never want a far field.
     min_gap = 0.25 * (C0 / freq)  # lambda/4 at the requested frequency
     gaps = {}
     for i, axis in enumerate("xyz"):
@@ -463,21 +490,20 @@ def _check_farfield_margin(
 
 class FEMNF2FF:
     """
-    openEMS-``nf2ff``-compatible far-field calculator for the FEM backend.
+    Far-field calculator for the FEM backend.
 
-    Like the openEMS box it is created without an ``output_path``; each
-    :meth:`CalcNF2FF` call reads ``fem_mesh.json`` from the ``output_path`` it is
-    given (the ``.pro``/``.msh`` paths and structure bbox) and mirrors
-    ``openEMS.nf2ff.nf2ff.CalcNF2FF`` so the ``SimTools`` radiation plots work
-    unchanged.
+    Takes no arguments to create. Each :meth:`CalcNF2FF` call reads what it
+    needs from the output directory it is given, and offers the same interface
+    as the openEMS near-field-to-far-field box so the ``SimTools`` radiation
+    plots work unchanged.
     """
 
     def __init__(self) -> None:
-        """Create an empty far-field calculator with no cached patterns."""
+        """Create a far-field calculator with no patterns computed yet."""
         self._cache: dict[tuple, tuple] = {}  # (workdir, freq) -> pattern data
 
     def _pattern(self, output_path: str, freq: float) -> tuple:
-        """Solve fields/power at ``freq`` and build the pattern (cached)."""
+        """Solve the fields and powers at ``freq`` and build the pattern, once."""
         key = (output_path, freq)
         if key not in self._cache:
             meta = json.loads((Path(output_path) / _MESH_META).read_text())
@@ -536,35 +562,31 @@ class FEMNF2FF:
         verbose: int = 0,
     ) -> FEMFarField:
         """
-        Evaluate the far field on a ``theta``/``phi`` grid (degrees in).
+        Evaluate the far field over a grid of angles.
 
-        Matches ``openEMS.nf2ff.nf2ff.CalcNF2FF``. ``theta``/``phi`` are in
-        degrees (as ``SimTools`` passes them); negative ``theta`` is mapped to
-        ``(|theta|, phi + 180)`` so principal-plane cuts spanning -180..180 work.
+        Matches ``openEMS.nf2ff.nf2ff.CalcNF2FF``. Negative ``theta`` is read
+        as ``(|theta|, phi + 180)``, so principal-plane cuts spanning -180 to
+        180 degrees work.
 
         Parameters
         ----------
         output_path : str | Path
-            FEM output directory containing ``fem_mesh.json`` (written by
-            :func:`~simpleEMS.fem_geometry.build_mesh`); also used as the
-            solve/pattern cache key together with ``freq``.
+            Directory the simulation results were written to.
         freq : float
-            Frequency in Hz to solve and evaluate the far field at.
+            Frequency to evaluate the far field at, in Hz.
         theta, phi : NDArray
-            Angles in degrees at which to evaluate the pattern; broadcast
-            against each other on a ``[theta, phi]`` grid.
+            Elevation and azimuth angles, in degrees, to evaluate the pattern
+            at. The pattern is returned over every combination of the two.
         read_cached, outfile, verbose
-            Accepted for signature compatibility with
-            ``openEMS.nf2ff.nf2ff.CalcNF2FF`` but not used here: results are
-            never written to ``outfile``, and caching is handled internally
-            (keyed on ``output_path``/``freq``) regardless of
-            ``read_cached``.
+            Accepted to match ``openEMS.nf2ff.nf2ff.CalcNF2FF`` but unused:
+            results are never written to a file, and each frequency is solved
+            only once regardless.
 
         Returns
         -------
         FEMFarField
-            The far-field result on the requested grid; see
-            :class:`FEMFarField` for the attributes and their shapes.
+            The far field over the requested angles. See
+            :class:`FEMFarField`.
         """
         theta_axis, phi_axis, u_grid, dir_db, p_rad, p_loss = self._pattern(
             str(output_path), float(freq)

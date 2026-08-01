@@ -15,24 +15,12 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-STEP -> tagged 3D mesh for the FEM backend, via the Gmsh (OpenCASCADE) API.
+Turn a STEP file into a tagged 3D mesh for the FEM backend, using Gmsh.
 
-Planar microwave conductors are electrically thin (tens of microns), so
-meshing them as 3D volumes forces microscopic elements. Instead every
-conductor and port is reduced to a zero-thickness sheet (its footprint face)
-that is imprinted into the dielectric/air mesh:
-
-1. Import the STEP solids (converted to metres) and identify each by name.
-2. For every metal/port solid, copy its footprint face (largest face, snapped
-   to the nearest dielectric surface) and delete the solid.
-3. Wrap the structure in an air box padded by ~lambda/4; the outer faces
-   become the Silver-Muller absorbing boundary (or PML volumes).
-4. ``fragment`` the dielectric volumes + air box with the conductor sheets so
-   the sheets become conforming interior faces.
-5. Classify each resulting volume back to its origin solid.
-6. The outer absorbing boundary is the domain shell minus the PEC/impedance/
-   port faces.
-7. Assign integer physical groups, refine near conductors, mesh, and write.
+Reduces every conductor and port to a zero-thickness sheet, wraps the
+structure in an air box, meshes the result with the sheets embedded in it, and
+labels each volume and surface so the generated problem file can refer to
+them.
 """
 
 from __future__ import annotations
@@ -63,28 +51,29 @@ if TYPE_CHECKING:
 @dataclass
 class PortMesh:
     """
-    Geometric description of a meshed port sheet.
+    Description of one port as it appears in the mesh.
 
     Parameters
     ----------
     number : int
-        1-based port index (matches :class:`~simpleEMS.fem_backend.PortSpec.number`).
+        One-based port index, matching
+        :class:`~simpleEMS.fem_backend.PortSpec.number`.
     region : int
-        Physical group ID of the port sheet in the ``.msh``/``.pro`` files.
+        Tag identifying the port in the mesh and problem files.
     direction : str
-        Excitation E-field axis: ``"x"``, ``"y"``, or ``"z"``.
+        Axis the port is excited along: ``"x"``, ``"y"``, or ``"z"``.
     z0 : float
-        Lumped-port reference impedance in ohms.
+        Port reference impedance in ohms.
     gap : float
-        Electrical gap length along ``direction``, in metres.
+        Length of the port along ``direction``, in metres.
     width : float
-        Transverse width of the port sheet, in metres.
+        Width of the port across ``direction``, in metres.
     center : tuple[float, float, float]
-        Centroid of the port sheet's bounding box, in metres.
+        Centre of the port, in metres.
     width_meshed : float
-        Transverse width actually present in the mesh, in metres. Differs from
-        ``width`` only when a symmetry plane cuts the port. Default ``0.0``,
-        meaning the same as ``width``.
+        Width of the port actually present in the mesh, in metres. Differs
+        from ``width`` only when a symmetry plane cuts the port. Default
+        ``0.0``, meaning the same as ``width``.
     """
 
     number: int
@@ -98,23 +87,20 @@ class PortMesh:
 
     @property
     def ref_impedance(self) -> float:
-        """Impedance the S-parameters are referenced to.
-
-        Always the full structure's ``z0``, even for a half model: a symmetry
-        plane is a modelling device, not a change to the device under test.
-        """
+        """Impedance the S-parameters are referenced to, in ohms."""
+        # always the full structure's z0, even for a half model: a symmetry
+        # plane is a modelling device, not a change to the device under test
         return self.z0
 
     @property
     def meshed_impedance(self) -> float:
-        """Impedance the meshed port sheet actually presents.
+        """Impedance the port presents in the mesh, in ohms.
 
-        The sheet keeps the full-width ``sheet_impedance``, so halving it with
-        a symmetry plane doubles what it presents -- correct, since the two
-        halves sit in parallel. Port current must be referenced to this, not
-        to ``z0``, or the accepted power comes out scaled by the same factor
-        while the volume-integrated loss does not.
+        The same as ``z0`` unless a symmetry plane cuts the port, which
+        doubles it.
         """
+        # port current must be referenced to this, not to z0, or the accepted
+        # power comes out scaled while the volume-integrated loss does not
         meshed = self.width_meshed or self.width
         # Bounding boxes carry a modelling tolerance, so an uncut port measures
         # a hair narrower than its marker; snap that to no correction at all.
@@ -124,63 +110,61 @@ class PortMesh:
 
     @property
     def sheet_impedance(self) -> float:
-        """Sheet impedance (ohms/square) that makes the port present ``z0``
-        across its gap."""
+        """Impedance per square, in ohms, that makes the port present ``z0``."""
         return self.z0 * self.width / self.gap
 
 
 @dataclass
 class Mesh:
     """
-    A generated FEM mesh plus the region maps shared with the ``.pro``.
+    A generated mesh and the region tags that identify its parts.
 
     Parameters
     ----------
     msh_path : str
         Path to the written ``.msh`` file.
     dielectric_regions : dict[str, int]
-        Dielectric solid name -> physical group (region) ID.
+        Region tag of each dielectric volume, keyed by solid name.
     air_region : int
-        Physical group ID of the (non-PML) air volume.
+        Region tag of the air volume.
     pec_region : int
-        Physical group ID of the PEC surfaces.
+        Region tag of the perfect-conductor surfaces.
     port_regions : dict[int, PortMesh]
-        Port number -> its :class:`PortMesh` description.
+        Description of each port, keyed by port number.
     abc_region : int
-        Physical group ID of the absorbing (Silver-Muller) boundary surfaces.
+        Region tag of the absorbing boundary surfaces.
     boundary : str
-        Outer truncation used: ``"silver_muller"`` or ``"pml"``.
+        Outer boundary condition used: ``"silver_muller"`` or ``"pml"``.
     bbox : tuple[float, float, float, float, float, float]
-        Bounding box of the real structure (``x0, y0, z0, x1, y1, z1``), in
-        metres.
+        Extents of the structure as ``(x0, y0, z0, x1, y1, z1)``, in metres.
     box_bbox : tuple[float, float, float, float, float, float]
-        Bounding box of the outer meshed domain (air box, or the PML shell's
-        outer face if PML is used), in metres.
+        Extents of the whole meshed domain, in metres.
     lambda_min : float
-        Smallest wavelength in the problem (inside the highest-permittivity
-        dielectric, at the highest frequency), in metres. Default ``0.0``.
+        Shortest wavelength anywhere in the problem, in metres. Default
+        ``0.0``.
     impedance_regions : list[tuple[int, float]]
-        ``[(region_id, sigma), ...]`` for each distinct lossy-conductor
+        ``(region_tag, sigma)`` for each distinct lossy-conductor
         conductivity. Default ``[]``.
     pml_region : int
-        Physical group ID of the PML volume, or ``0`` if no PML is used.
-        Default ``0``.
+        Region tag of the PML volume, or ``0`` if no PML is used. Default
+        ``0``.
     inner_bbox : tuple[float, float, float, float, float, float]
-        Bounding box of the air/PML interface, in metres; PML damping starts
-        here. Empty tuple if there is no PML. Default ``()``.
+        Extents of the air volume inside the PML, in metres. Empty when there
+        is no PML. Default ``()``.
     pml_thick : float
-        Thickness of the PML shell, in metres. Default ``0.0``.
+        Thickness of the PML, in metres. Default ``0.0``.
     sym_region : int
-        Physical group ID of the symmetry-plane surface, or ``0`` if no
-        symmetry is applied. Default ``0``.
+        Region tag of the symmetry plane, or ``0`` if none is applied.
+        Default ``0``.
     sym_kind : str
-        Symmetry boundary condition: ``"pec"`` or ``"pmc"``, empty if no
-        symmetry is applied. Default ``""``.
+        Symmetry plane type: ``"pec"`` or ``"pmc"``, empty if none is applied.
+        Default ``""``.
     sym_axis : int
-        Mirrored axis (0/1/2), or ``-1`` if no symmetry. Default ``-1``.
+        Axis the structure is mirrored across (``0``, ``1``, or ``2``), or
+        ``-1`` if none is applied. Default ``-1``.
     sym_plane : float
-        Symmetry plane coordinate (m); the meshed half is ``>= sym_plane``.
-        Default ``0.0``.
+        Position of the symmetry plane along ``sym_axis``, in metres; the
+        meshed half lies above it. Default ``0.0``.
     """
 
     msh_path: str
@@ -207,13 +191,13 @@ class Mesh:
 # helpers
 # ----------------------------
 def _short_name(entity_name: str) -> str:
-    """Return the last path component of a Gmsh entity name, e.g.
+    """Return the solid name at the end of a full Gmsh entity name, e.g.
     ``'Shapes/<uuid>/patch_inset/patch_inset'`` -> ``'patch_inset'``."""
     return entity_name.rstrip("/").split("/")[-1] if entity_name else ""
 
 
 def _bbox_inside(inner: tuple, outer: tuple, tol: float) -> bool:
-    """True if bbox ``inner`` is contained in bbox ``outer`` (within ``tol``)."""
+    """True if the box ``inner`` sits inside the box ``outer``, within ``tol``."""
     return (
         inner[0] >= outer[0] - tol
         and inner[1] >= outer[1] - tol
@@ -225,12 +209,12 @@ def _bbox_inside(inner: tuple, outer: tuple, tol: float) -> bool:
 
 
 def _bbox_volume(bb: tuple) -> float:
-    """Volume of a Gmsh bounding box (x0,y0,z0,x1,y1,z1); used to rank solids."""
+    """Volume enclosed by the box ``bb``, given as ``(x0, y0, z0, x1, y1, z1)``."""
     return max(bb[3] - bb[0], 0) * max(bb[4] - bb[1], 0) * max(bb[5] - bb[2], 0)
 
 
 def _dist_point_bbox(bb: tuple, p: tuple) -> float:
-    """Shortest distance from point ``p`` to bbox ``bb`` (0 if inside)."""
+    """Shortest distance from the point ``p`` to the box ``bb``, ``0`` if inside."""
     dx = max(bb[0] - p[0], 0.0, p[0] - bb[3])
     dy = max(bb[1] - p[1], 0.0, p[1] - bb[4])
     dz = max(bb[2] - p[2], 0.0, p[2] - bb[5])
@@ -238,7 +222,7 @@ def _dist_point_bbox(bb: tuple, p: tuple) -> float:
 
 
 def _dielectric_bbox(originals: list) -> tuple:
-    """Combined bounding box of all dielectric solids (the board footprint)."""
+    """Extents of all the dielectric solids together, i.e. the board itself."""
     bb = [1e30, 1e30, 1e30, -1e30, -1e30, -1e30]
     for role, _name, obb, _v in originals:
         if role == "dielectric":
@@ -249,9 +233,8 @@ def _dielectric_bbox(originals: list) -> tuple:
 
 
 def _footprint_face(solid_tag: int, diel_bbox: tuple) -> int:
-    """Largest face of a thin solid; on a tie (top vs bottom plate) pick the one
-    nearest the dielectric, so the imprinted conductor/port sheet lands on its
-    surface."""
+    """The face of a thin solid that becomes its sheet: the largest one, or on
+    a tie the one nearest the dielectric so the sheet lands on its surface."""
     faces = [t for _, t in gmsh.model.getBoundary([(3, solid_tag)], oriented=False)]
     info = []
     for ft in faces:
@@ -265,9 +248,8 @@ def _footprint_face(solid_tag: int, diel_bbox: tuple) -> int:
 
 
 def _clip_sheet_to_dielectric(face_tag: int, direction: str, diel_bbox: tuple) -> int:
-    """Clip a port sheet to the dielectric extent along its excitation
-    ``direction`` so it lands flush between the two conductor sheets instead of
-    protruding past them. Exact bounds along ``direction``, generous elsewhere."""
+    """Trim a port sheet to the dielectric's extent along ``direction``, so the
+    port sits flush between the conductors instead of protruding past them."""
     ai = {"x": 0, "y": 1, "z": 2}[direction]
     big = 0.1
     lo = [diel_bbox[0] - big, diel_bbox[1] - big, diel_bbox[2] - big]
@@ -293,7 +275,7 @@ def _init() -> None:
 
 @dataclass
 class _Faces:
-    """Sheet/boundary face sets threaded between :func:`build_mesh`'s stages."""
+    """The sheet and boundary faces passed between :func:`build_mesh`'s stages."""
 
     pec: set[int]
     imped_by_sigma: dict[float, set[int]]
@@ -307,17 +289,17 @@ class _Faces:
 
 def list_solids(step_file: str) -> list[str]:
     """
-    Return the short product names of the solids in a STEP file (no meshing).
+    List the names of the solids in a STEP file, without meshing it.
 
     Parameters
     ----------
     step_file : str
-        Path to the STEP file.
+        Path to the STEP file to read.
 
     Returns
     -------
     list[str]
-        Short solid names.
+        The solid names.
     """
     _init()
     try:
@@ -336,20 +318,40 @@ def list_solids(step_file: str) -> list[str]:
 # ----------------------------
 # build_mesh stages
 # ----------------------------
+# Planar microwave conductors are electrically thin (tens of microns), so
+# meshing them as 3D volumes forces microscopic elements. Instead every
+# conductor and port is reduced to a zero-thickness sheet (its footprint face)
+# that is imprinted into the dielectric/air mesh:
+#
+# 1. Import the STEP solids (converted to metres) and identify each by name.
+# 2. For every metal/port solid, copy its footprint face (largest face, snapped
+#    to the nearest dielectric surface) and delete the solid.
+# 3. Wrap the structure in an air box padded by ~lambda/4; the outer faces
+#    become the Silver-Muller absorbing boundary (or PML volumes).
+# 4. `fragment` the dielectric volumes + air box with the conductor sheets so
+#    the sheets become conforming interior faces.
+# 5. Classify each resulting volume back to its origin solid.
+# 6. The outer absorbing boundary is the domain shell minus the PEC/impedance/
+#    port faces.
+# 7. Assign integer physical groups, refine near conductors, mesh, and write.
 def _snapshot_solids(problem: Problem) -> tuple[list, tuple, tuple, dict]:
-    """Record each imported solid's role + bbox before any boolean op.
+    """Record each imported solid's role and extents before the geometry is cut up.
 
-    The boolean ops below (copy/remove/fragment) destroy and renumber solids,
-    so snapshot each one's role and bounding box now while identities are known.
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying each solid's role.
 
     Returns
     -------
     tuple[list, tuple, tuple, dict]
-        ``(originals, struct, diel_bbox, port_geo)`` -- ``originals`` is
-        ``[(role, name, bbox, bbox_volume), ...]``; ``struct`` is the overall
-        extent of the real (non-ignored) structure; ``diel_bbox`` the combined
-        dielectric bounding box; ``port_geo`` each port solid's bbox by name.
+        ``(originals, struct, diel_bbox, port_geo)`` -- one
+        ``(role, name, bbox, bbox_volume)`` entry per solid, the extents of the
+        whole structure, the extents of the dielectrics, and the extents of
+        each port solid keyed by name.
     """
+    # the boolean operations in the later stages destroy and renumber solids,
+    # so this has to happen while their identities are still known
     originals = []  # (role, name, bbox, bbox_volume)
     struct = [1e30, 1e30, 1e30, -1e30, -1e30, -1e30]
     for dim, tag in gmsh.model.getEntities(3):
@@ -370,15 +372,22 @@ def _snapshot_solids(problem: Problem) -> tuple[list, tuple, tuple, dict]:
 
 
 def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) -> list:
-    """Reduce each thin conductor/port solid to a footprint sheet.
+    """Replace each thin conductor and port solid with a zero-thickness sheet.
 
-    The sheet is copied so it survives deletion of the parent solid. Updates
-    ``port_geo`` in place with each port's clipped-sheet bbox.
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying each solid's role and each port's direction.
+    diel_bbox : tuple
+        Extents of the dielectrics, which the sheets are placed against.
+    port_geo : dict
+        Extents of each port solid by name, updated in place with the extents
+        of the sheet that replaced it.
 
     Returns
     -------
     list
-        ``sheets`` as ``[(role, name, face_tag), ...]``.
+        One ``(role, name, face_tag)`` entry per sheet created.
     """
     port_direction = {p.solid: p.direction for p in problem.ports}
     sheets = []  # (role, name, face_tag)
@@ -410,25 +419,24 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
 def _build_air_box(
     problem: Problem, struct: tuple, lambda0_max: float
 ) -> tuple[bool, tuple, tuple, float]:
-    """Wrap the structure in an air box (+ optional outer PML shell).
+    """Wrap the structure in an air box, plus an outer PML shell if requested.
 
-    A radiating structure lives in open space, but FEM needs a finite domain.
-    Wrap it in an air box padded by a fraction of the longest free-space
-    wavelength (``problem.air_pad_frac``); its outer faces later carry the
-    absorbing boundary. With PML, add a second outer shell that damps
-    outgoing waves instead of a first-order absorbing condition.
-
-    If ``problem.air_pad_mm`` is set, it is used verbatim as the padding
-    instead (no wavelength formula, no thickness floor) -- for non-radiating
-    structures whose box shouldn't scale with the sweep's lowest frequency.
-    ``FEMNF2FF.CalcNF2FF`` checks this padding against a quarter-wavelength
-    minimum whenever a far-field pattern is actually requested, and raises
-    if it's too small at that frequency.
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying the boundary condition and the air padding.
+    struct : tuple
+        Extents of the structure to wrap, in metres.
+    lambda0_max : float
+        Longest wavelength in the sweep, in metres, which sets the padding
+        unless ``problem.air_pad_mm`` gives it directly.
 
     Returns
     -------
     tuple[bool, tuple, tuple, float]
-        ``(is_pml, inner_bbox, box_bbox, pml_thick)``.
+        ``(is_pml, inner_bbox, box_bbox, pml_thick)`` -- whether a PML was
+        added, the extents of the air box, the extents of the whole domain,
+        and the PML thickness in metres.
     """
     is_pml = problem.boundary == "pml"
     if problem.air_pad_mm is not None:
@@ -455,14 +463,25 @@ def _build_air_box(
 def _apply_symmetry_cut(
     problem: Problem, struct: tuple, box_bbox: tuple, sheets: list
 ) -> tuple[int | None, float | None, list]:
-    """Cut to the half-space ``coord >= plane`` if ``problem.symmetry`` is set.
+    """Discard everything below the symmetry plane, if one is set.
+
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying the symmetry plane.
+    struct : tuple
+        Extents of the structure, used to place a plane given as ``None``.
+    box_bbox : tuple
+        Extents of the whole domain to cut.
+    sheets : list
+        The conductor and port sheets, as ``(role, name, face_tag)``.
 
     Returns
     -------
     tuple[int | None, float | None, list]
-        ``(sym_axis_i, sym_plane, sheets)`` -- ``sheets`` passed through
-        unchanged (with ``(None, None, sheets)``) if there is no symmetry,
-        otherwise replaced with the clipped sheet tags.
+        ``(sym_axis_i, sym_plane, sheets)`` -- the mirrored axis, the plane
+        position in metres, and the cut sheets. All three are unchanged and
+        the first two are ``None`` if no symmetry plane is set.
     """
     if not problem.symmetry:
         return None, None, sheets
@@ -502,25 +521,32 @@ def _apply_symmetry_cut(
 def _fragment_and_classify(
     sheets: list, originals: list, inner_bbox: tuple, is_pml: bool
 ) -> tuple[list, dict, list, list]:
-    """Fragment the dielectric/air volumes with the conductor sheets, then
-    classify every resulting volume back to its origin solid.
+    """Embed the sheets in the volumes, then identify what each volume is.
 
-    ``fragment`` imprints the conductor sheets into the volumes: it splits the
-    volumes along the sheets so the sheets become shared, conforming interior
-    faces (the mesh will put element faces exactly on the conductors) while the
-    volumes stay watertight. This is what lets us mesh zero-thickness metals.
-
-    A volume is dielectric iff its own bounding box fits inside a dielectric
-    solid's box (a centroid test fails: the enclosing air shell is centred on
-    the structure too). Tolerance is relative to each dielectric's size.
+    Parameters
+    ----------
+    sheets : list
+        The conductor and port sheets, as ``(role, name, face_tag)``.
+    originals : list
+        Each original solid as ``(role, name, bbox, bbox_volume)``, used to
+        identify the volumes afterwards.
+    inner_bbox : tuple
+        Extents of the air box, which separate air volumes from PML ones.
+    is_pml : bool
+        Whether the domain has a PML shell.
 
     Returns
     -------
     tuple[list, dict, list, list]
-        ``(sheet_faces, diel_vols, air_vols, pml_vols)`` -- ``sheet_faces`` is
-        aligned with ``sheets``; ``diel_vols`` maps dielectric name to volume
-        tags.
+        ``(sheet_faces, diel_vols, air_vols, pml_vols)`` -- the faces of each
+        sheet in the same order as ``sheets``, the dielectric volume tags by
+        solid name, and the air and PML volume tags.
     """
+    # `fragment` splits the volumes along the sheets so the sheets become
+    # shared interior faces while the volumes stay watertight; this is what
+    # lets zero-thickness metals be meshed at all. A volume is dielectric iff
+    # its own bounding box fits inside a dielectric solid's box -- a centroid
+    # test fails, since the enclosing air shell is centred on the structure too.
     vols = [(3, t) for _, t in gmsh.model.getEntities(3)]  # dielectrics + box
     sheet_dimtags = [(2, f) for _, _, f in sheets]
     _out, outmap = gmsh.model.occ.fragment(vols, sheet_dimtags)
@@ -570,9 +596,28 @@ def _collect_faces(
     sym_axis_i: int | None,
     sym_plane: float | None,
 ) -> _Faces:
-    """Collect PEC/impedance/port sheet faces, the ground plane, the outer
-    absorbing shell, and any symmetry-plane faces from the current
-    (post-fragment) model.
+    """Sort the meshed faces into the sets each gets a boundary condition from.
+
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying each solid's role and conductivity.
+    sheets : list
+        The conductor and port sheets, as ``(role, name, face_tag)``.
+    sheet_faces : list
+        The faces of each sheet, in the same order as ``sheets``.
+    box_bbox : tuple
+        Extents of the whole domain, used to find the symmetry-plane faces.
+    sym_axis_i : int | None
+        Axis the structure is mirrored across, or ``None`` for no symmetry.
+    sym_plane : float | None
+        Position of the symmetry plane in metres, or ``None`` for no symmetry.
+
+    Returns
+    -------
+    _Faces
+        The conductor, port, ground-plane, absorbing-boundary, and
+        symmetry-plane face sets.
     """
     existing_faces = {t for _, t in gmsh.model.getEntities(2)}
     pec_faces: set[int] = set()
@@ -603,7 +648,7 @@ def _collect_faces(
     if len(conductor_faces_by_name) > 1:
 
         def _area(fs: set) -> float:
-            """Total surface area (m^2) of a set of Gmsh face tags."""
+            """Total area, in m^2, of the faces ``fs``."""
             return sum(gmsh.model.occ.getMass(2, f) for f in fs)
 
         ground_name = max(
@@ -661,18 +706,37 @@ def _assign_physical_groups(
     faces: _Faces,
     port_geo: dict,
 ) -> tuple[dict, int, list, dict, int]:
-    """Assign integer physical groups (the mesh<->``.pro`` contract).
+    """Tag every volume and face with the region number the solver refers to it by.
 
-    These integer tags are the ONLY contract between mesh and solver: GetDP
-    references each region purely by number (``Region[{id}]``), so the IDs
-    here (from :mod:`~simpleEMS.fem_materials`) must match exactly what
-    :mod:`~simpleEMS.fem_formulation` emits.
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying the ports.
+    diel_vols : dict
+        Dielectric volume tags, keyed by solid name.
+    air_vols : list
+        Air volume tags.
+    pml_vols : list
+        PML volume tags.
+    faces : _Faces
+        The conductor, port, absorbing-boundary, and symmetry-plane faces.
+    port_geo : dict
+        Extents of each port sheet by solid name, used to measure the ports.
 
     Returns
     -------
     tuple[dict, int, list, dict, int]
-        ``(diel_regions, pml_region, impedance_regions, port_regions, sym_region)``.
+        ``(diel_regions, pml_region, impedance_regions, port_regions,
+        sym_region)`` -- the region tag assigned to each part of the mesh.
+
+    Raises
+    ------
+    RuntimeError
+        If a port solid produced no faces to tag.
     """
+    # These tags are the only contract between the mesh and the solver, which
+    # refers to each region purely by number. They come from fem_materials so
+    # that fem_formulation emits exactly the same ones.
     diel_regions = {}
     for i, (name, tags) in enumerate(sorted(diel_vols.items())):
         rid = dielectric_region(i)
@@ -760,19 +824,38 @@ def _mesh_and_write(
     diel_vols: dict | None = None,
     lambda_air: float = 0.0,
 ) -> str:
-    """Size the mesh (fine near the signal conductors, coarse in open air),
-    generate it, and write the ``.msh``/``.vtk`` files.
+    """Size and generate the mesh, then write it out.
 
-    The coarse size is set **per material**. A wave is shorter inside the
-    dielectric than in air by ``sqrt(eps_r)``, so a single global size cannot
-    resolve both equally: sizing everything off the dielectric wavelength (as
-    this used to) leaves the dielectric exactly at the target density while
-    over-refining air by that same factor -- paying for elements where they buy
-    nothing, in the region that dominates the element count, and still leaving
-    the substrate at the coarse limit where the guided mode actually travels.
-    Each region now gets its own wavelength, so raising
-    ``elems_per_wavelength`` is roughly cost-neutral: the dielectric gets
-    finer while air gets correspondingly coarser.
+    Elements are small near the signal conductors and grow towards the target
+    density of whichever material they sit in.
+
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying the mesh density settings.
+    originals : list
+        Each original solid as ``(role, name, bbox, bbox_volume)``, used to
+        measure the dielectric thickness.
+    struct : tuple
+        Extents of the structure, in metres.
+    lambda_min : float
+        Shortest wavelength inside the dielectrics, in metres.
+    faces : _Faces
+        The faces to refine the mesh towards.
+    workdir : str | Path
+        Directory to write the mesh files into.
+    verbose : bool
+        Print the mesh size and region tags once written.
+    diel_regions : dict
+        Dielectric region tags by name, for the progress output.
+    port_regions : dict
+        Port descriptions by number, for the progress output.
+    diel_vols : dict, optional
+        Dielectric volume tags by name, sized against ``lambda_min``. Default
+        ``None``.
+    lambda_air : float
+        Shortest wavelength in air, in metres, which sizes everything outside
+        the dielectrics. Default ``0.0``, meaning use ``lambda_min``.
 
     Returns
     -------
@@ -828,27 +911,28 @@ def _mesh_and_write(
 # ----------------------------
 def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> Mesh:
     """
-    Mesh a :class:`~simpleEMS.fem_backend.Problem`'s STEP geometry.
+    Mesh the STEP geometry of a :class:`~simpleEMS.fem_backend.Problem`.
 
     Parameters
     ----------
     problem : Problem
-        The FEM problem definition (solids, ports, boundary, mesh controls).
+        The problem to mesh, supplying the solids, ports, boundary condition,
+        and mesh settings.
     workdir : str | Path
-        Directory to write the ``.msh`` file into.
+        Directory to write the mesh files into.
     verbose : bool
-        Print progress through the shared console. Default ``True``.
+        Print progress. Default ``True``.
 
     Returns
     -------
     Mesh
-        The mesh plus the region maps shared with the GetDP problem file.
+        The mesh and the region tags identifying its parts.
 
     Raises
     ------
     RuntimeError
-        If a port solid produces no boundary faces after meshing (e.g. it
-        does not touch the rest of the geometry).
+        If a port solid produces no faces, e.g. because it does not touch the
+        rest of the geometry.
     """
     fmin = float(problem.freqs.min())
     fmax = float(problem.freqs.max())
@@ -929,36 +1013,29 @@ def _apply_size_field(
     diel_vols: list | None = None,
     lc_diel: float = 0.0,
 ) -> None:
-    """Build the background size field: graded near conductors, per-material far.
-
-    Two effects are combined with a ``Min`` field, so the smallest requirement
-    at any point wins:
-
-    * a **Threshold** on distance from the signal conductors -- ``lc_fine`` on
-      those surfaces, growing linearly to ``lc_coarse`` by ``dist_max``, so
-      elements are small only where the fields vary fastest;
-    * a **Constant** field holding the dielectric volumes at ``lc_diel``, since
-      the wavelength there is shorter than in air by ``sqrt(eps_r)`` and a
-      single global size would either under-resolve the substrate or waste
-      elements on air.
+    """Set the element size everywhere in the mesh.
 
     Parameters
     ----------
     refine_faces : set
-        Conductor/port surfaces to refine towards.
+        Conductor and port faces to refine the mesh towards.
     lc_fine : float
-        Element size on those surfaces.
+        Element size on those faces, in metres.
     lc_coarse : float
-        Element size far from them (the air target).
+        Element size away from them, in metres.
     dist_max : float
-        Distance over which ``lc_fine`` grows to ``lc_coarse``.
-    diel_vols : list | None
-        Dielectric volume tags to hold at ``lc_diel``. ``None`` or empty
-        disables the per-material part.
+        Distance, in metres, over which ``lc_fine`` grows to ``lc_coarse``.
+    diel_vols : list, optional
+        Dielectric volume tags to hold at ``lc_diel``. Default ``None``,
+        which sizes them like everything else.
     lc_diel : float
-        Element size inside those volumes. Ignored when ``<= 0`` or not
-        smaller than ``lc_coarse``.
+        Element size inside those volumes, in metres. Ignored unless smaller
+        than ``lc_coarse``. Default ``0.0``.
     """
+    # The two requirements are combined so the smaller wins at any point: a
+    # distance threshold off the conductors, where the fields vary fastest,
+    # and a fixed size in the dielectrics, where the wavelength is shorter
+    # than in air by sqrt(eps_r).
     fields = []
     if refine_faces:
         # Distance field: distance from any point to the nearest refine surface.
