@@ -51,4 +51,4 @@ color_theme = Theme(
 
 console = Console(theme=color_theme)
 
-install_rich_traceback(show_locals=True, width=120, word_wrap=True)
+install_rich_traceback(show_locals=False, width=120, word_wrap=True)
