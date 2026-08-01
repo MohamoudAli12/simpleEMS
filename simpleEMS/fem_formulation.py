@@ -273,12 +273,11 @@ def write_problem(
     # per-port functions: unit mode direction, sheet relative admittance, incident field
     port_fun_lines = []
     for pm in ports:
-        zs = pm.sheet_impedance  # wave: Zc; lumped: z0*w/gap
-        kind = "Zc(wave)" if pm.port_type == "wave" else "z0*w/gap(lumped)"
         port_fun_lines.append(f"  dir_{pm.number}[] = {_dir_vector(pm.direction)};")
         port_fun_lines.append(f"  ePort_{pm.number}[] = dir_{pm.number}[];")
         port_fun_lines.append(
-            f"  Yrel_{pm.number} = eta0 / ({_fmt(zs)});  // eta0/Zs, Zs={kind}"
+            f"  Yrel_{pm.number} = eta0 / ({_fmt(pm.sheet_impedance)});"
+            f"  // eta0/Zs, Zs=z0*w/gap"
         )
         # $ActivePort (not the ACTIVE_PORT constant) so the source can be
         # rebuilt per port inside one launch -- see the Resolution below.

@@ -119,10 +119,6 @@ class SimParams:
     FEM_min_layers : int, optional
         FEM backend only. Element layers through the dielectric thickness.
         Default is ``3``.
-    FEM_port_type : str, optional
-        FEM backend only. ``"lumped"`` (default, impedance ``charac_imp``)
-        or ``"wave"`` (matched to the line's characteristic impedance) for
-        all ports.
     fp_precision : int, optional
         Floating-point precision used when generating geometric values.
         Default is ``3``.
@@ -181,7 +177,6 @@ class SimParams:
     FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers
-    FEM_port_type: str = _FEM_DEFAULTS.port_type
 
     FDTD_timestep: int = 90000000
     FDTD_end_criteria: float = 1e-4
@@ -210,7 +205,6 @@ class SimParams:
             elems_per_wavelength=self.FEM_elems_per_wavelength,
             mesh_fine_scale=self.FEM_mesh_fine_scale,
             min_layers=self.FEM_min_layers,
-            port_type=self.FEM_port_type,
             num_solve_points=self.FEM_num_solve_points,
         )
 

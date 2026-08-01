@@ -81,15 +81,6 @@ class PortMesh:
         Transverse width of the port sheet, in metres.
     center : tuple[float, float, float]
         Centroid of the port sheet's bounding box, in metres.
-    zc : float
-        Computed line characteristic impedance in ohms, used as the port
-        reference when ``port_type == "wave"``. Default ``50.0``.
-    eps_eff : float
-        Effective permittivity of the line, used for de-embedding. Default
-        ``1.0``.
-    port_type : str
-        ``"lumped"`` (impedance ``z0``) or ``"wave"`` (matched to ``zc``).
-        Default ``"lumped"``.
     """
 
     number: int
@@ -99,21 +90,19 @@ class PortMesh:
     gap: float  # electrical gap length along `direction` (m)
     width: float  # transverse width of the port sheet (m)
     center: tuple[float, float, float]
-    zc: float = 50.0  # computed line characteristic impedance (port reference)
-    eps_eff: float = 1.0  # effective permittivity of the line (for de-embedding)
-    port_type: str = "lumped"  # 'lumped' (impedance z0) or 'wave' (matched to Zc)
 
     @property
     def ref_impedance(self) -> float:
-        """Impedance the port references: ``z0`` (lumped) or ``Zc`` (wave)."""
-        return self.zc if self.port_type == "wave" else self.z0
+        """Impedance the port's S-parameters and V/I are referenced to."""
+        return self.z0
 
     @property
     def sheet_impedance(self) -> float:
-        """Impedance (ohms/square) used to model the port as a surface-impedance
-        sheet: ``zc`` directly for a wave port, or ``z0`` scaled by
-        ``width / gap`` for a lumped port."""
-        return self.zc if self.port_type == "wave" else self.z0 * self.width / self.gap
+        """Impedance (ohms/square) modelling the port as a surface-impedance
+        sheet. A sheet of ``Zs`` per square carrying current along ``gap``
+        across ``width`` presents ``Zs * gap / width`` at its terminals, so
+        ``z0 * width / gap`` is what makes the port present ``z0``."""
+        return self.z0 * self.width / self.gap
 
 
 @dataclass
@@ -653,11 +642,6 @@ def _assign_physical_groups(
     tuple[dict, int, list, dict, int]
         ``(diel_regions, pml_region, impedance_regions, port_regions, sym_region)``.
     """
-    from .calc import microstrip_impedance  # local: keeps fem_geometry.py
-
-    # gmsh-only for callers that don't need a port's line impedance (calc.py
-    # pulls in sim_tools's matplotlib/PyQt6/pyvista/openEMS/CSXCAD stack).
-
     diel_regions = {}
     for i, (name, tags) in enumerate(sorted(diel_vols.items())):
         rid = dielectric_region(i)
@@ -700,11 +684,6 @@ def _assign_physical_groups(
         gap = extents[ax]
         width = max(extents[i] for i in range(3) if i != ax)  # transverse width
         center = ((bb[0] + bb[3]) / 2, (bb[1] + bb[4]) / 2, (bb[2] + bb[5]) / 2)
-        eps_sub = max([d.dielectric.eps_r for d in problem.dielectrics()] + [1.0])
-        # line char. impedance; width/gap are metres, calc.py works in mm
-        zc, eps_eff = microstrip_impedance(
-            width * 1000.0, gap * 1000.0, 0.0, eps_sub, 0.0
-        )
         port_regions[pspec.number] = PortMesh(
             number=pspec.number,
             region=rid,
@@ -713,9 +692,6 @@ def _assign_physical_groups(
             gap=gap,
             width=width,
             center=center,
-            zc=zc,
-            eps_eff=eps_eff,
-            port_type=pspec.port_type,
         )
 
     if faces.abc:

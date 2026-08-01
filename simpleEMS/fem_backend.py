@@ -131,9 +131,6 @@ class FEMOptions:
         Multiplier on the near-conductor element size. Default ``1.0``.
     min_layers : int
         Element layers through the dielectric thickness. Default ``3``.
-    port_type : str
-        ``"lumped"`` (impedance z0, default) or ``"wave"`` (matched to the line
-        characteristic impedance) for all ports.
     num_solve_points : int
         Number of full FEM solves the adaptive rational-interpolation sweep is
         allowed to perform (must be ``>= 4``). Default ``10``.
@@ -147,7 +144,6 @@ class FEMOptions:
     elems_per_wavelength: float = 16.0
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
-    port_type: str = "lumped"
     num_solve_points: int = 10
 
     def __post_init__(self) -> None:
@@ -157,9 +153,9 @@ class FEMOptions:
         Raises
         ------
         ValueError
-            If ``boundary``, ``fe_order``, or ``port_type`` is not one of the
-            supported choices, or if ``num_solve_points`` is below the minimum
-            needed for a stable rational fit.
+            If ``boundary`` or ``fe_order`` is not one of the supported
+            choices, or if ``num_solve_points`` is below the minimum needed
+            for a stable rational fit.
         """
         if self.boundary not in ("silver_muller", "pml"):
             raise ValueError(
@@ -167,10 +163,6 @@ class FEMOptions:
             )
         if self.fe_order not in (1, 2):
             raise ValueError(f"fe_order must be 1 or 2, got {self.fe_order}")
-        if self.port_type not in ("lumped", "wave"):
-            raise ValueError(
-                f"port_type must be 'lumped' or 'wave', got {self.port_type!r}"
-            )
         if self.num_solve_points < 4:
             raise ValueError(
                 f"num_solve_points must be >= 4 for a stable rational fit, "
@@ -222,16 +214,12 @@ class PortSpec:
         Reference impedance in ohms. Default ``50.0``.
     direction : str
         Excitation E-field axis: ``"x"``, ``"y"``, or ``"z"``. Default ``"z"``.
-    port_type : str
-        ``"lumped"`` (referenced to ``z0``) or ``"wave"`` (referenced to the
-        computed line characteristic impedance). Default ``"lumped"``.
     """
 
     solid: str
     number: int
     z0: float = 50.0
     direction: str = "z"  # excitation E-field axis: 'x' | 'y' | 'z'
-    port_type: str = "lumped"  # 'lumped' (impedance z0) or 'wave' (matched to Zc)
 
 
 @dataclass
@@ -418,8 +406,6 @@ def _apply_FEM_options(prob: Problem, FEM_options: FEMOptions | None) -> None:
     """Apply global :class:`FEMOptions` to a :class:`Problem` (in place)."""
     if FEM_options is not None:
         prob.options = FEM_options
-    for port in prob.ports:
-        port.port_type = prob.options.port_type
 
 
 def _build_problem(
@@ -981,7 +967,6 @@ def simulate_step_FEM(
     FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength,
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale,
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers,
-    FEM_port_type: str = _FEM_DEFAULTS.port_type,
     FEM_num_solve_points: int = _FEM_DEFAULTS.num_solve_points,
     charac_imp: float = 50.0,
     output_path: str | Path = "Sim_Path",
@@ -1035,9 +1020,6 @@ def simulate_step_FEM(
         Multiplier on the near-conductor element size. Default ``1.0``.
     FEM_min_layers : int
         Element layers through the dielectric thickness. Default ``3``.
-    FEM_port_type : str
-        ``"lumped"`` (default, impedance ``charac_imp``) or ``"wave"``
-        (matched to the line's characteristic impedance) for all ports.
     FEM_num_solve_points : int
         Number of full FEM solves the adaptive rational-interpolation sweep is
         allowed to perform (must be ``>= 4``). Default ``10``.
@@ -1079,7 +1061,6 @@ def simulate_step_FEM(
         elems_per_wavelength=FEM_elems_per_wavelength,
         mesh_fine_scale=FEM_mesh_fine_scale,
         min_layers=FEM_min_layers,
-        port_type=FEM_port_type,
         num_solve_points=FEM_num_solve_points,
     )
     prob = _problem_from_step(
