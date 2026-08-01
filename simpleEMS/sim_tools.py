@@ -1452,7 +1452,11 @@ class SimTools:
         max_directivity = nf2ff_3d_result.Dmax[0]
         directivity = max_directivity * e_field
 
-        efficiency = nf2ff_3d_result.Prad[0] / (np.max(input_power))
+        ploss = getattr(nf2ff_3d_result, "Ploss", None)
+        if ploss is not None and (nf2ff_3d_result.Prad[0] + ploss[0]) > 0:
+            efficiency = nf2ff_3d_result.Prad[0] / (nf2ff_3d_result.Prad[0] + ploss[0])
+        else:
+            efficiency = nf2ff_3d_result.Prad[0] / (np.max(input_power))
         gain = efficiency * directivity
         gain_dbi = 10 * np.log10(gain)
 

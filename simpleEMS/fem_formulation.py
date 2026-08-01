@@ -30,22 +30,22 @@ The physics it emits:
   and kill spurious modes).
 * **Equation** -- the time-harmonic curl-curl wave equation
   ``curl(nuR curl E) - k0^2 epsR E = 0`` in weak (Galerkin) form, complex-valued,
-  where ``k0 = w/c0``, ``nuR = 1/muR``. GetDP uses the ``exp(-i w t)`` sign
-  convention, so a lossy dielectric has ``epsR = eps_r*(1 + i*tan_d)`` (positive
-  imaginary part) -- note this is conjugated back to the engineering convention
-  in :func:`~simpleEMS.fem_backend.compute_sim_data`.
+  where ``k0 = w/c0``, ``nuR = 1/muR``.
+
+  **Sign convention: this file is written for ``exp(-i w t)``**, following
+  GetDP's ``models/MicrostripLine``. It is a choice made here, not a property
+  of GetDP. The absorbing term, ``epsR``, the PML stretch, ``Zs`` and ``h``
+  all depend on it, and results are conjugated back to the engineering
+  convention in :func:`~simpleEMS.fem_backend.compute_sim_data`. Change one
+  sign and you must change all of them.
 * **Truncation** -- a first-order Silver-Muller absorbing boundary on the outer
   air box, or a complex-coordinate-stretched PML shell.
 * **Excitation / ports** -- each port sheet carries an impedance term
   (``eta0/Zs``) plus an impressed quasi-TEM mode source; S-parameters come from
   the mode overlap of the solved field on each port.
 
-The driven port is selected by the *runtime* GetDP variable ``$ActivePort``
-rather than a parse-time constant, which is what lets the ``Analysis``
-resolution walk every port inside a single GetDP launch: only the source term
-changes between ports, so the system matrix is assembled and factorised once
-and each subsequent port needs nothing but a fresh right-hand side
-(``GenerateRightHandSideGroup`` on the port sheets) and a ``SolveAgain``.
+The driven port is the runtime variable ``$ActivePort``, so one GetDP launch
+can walk every port reusing a single factorisation.
 """
 
 from __future__ import annotations
@@ -100,19 +100,8 @@ def write_problem(
     k0_def = "k0[] = 2*Pi*FREQ / c0;"
     freqvar = "FREQ"
 
-    # --- port loop inside one GetDP launch ------------------------------------
-    # Driving port k only changes the source term, which lives entirely on the
-    # port sheets: the system matrix is identical for every port at a given
-    # frequency. So assemble and factorise once for the first port, then for
-    # each remaining port rebuild *only* the right-hand side over the Ports
-    # group and re-solve against the existing factorisation.
-    #   GenerateRightHandSideGroup[A, Ports]  leaves A untouched (it sets
-    #   GetDP's Flag_RHS, which skips the matrix zero/rebuild) and reassembles b
-    #   from the terms supported on Ports;
-    #   SolveAgain[A]                         reuses the preconditioner, i.e.
-    #   the LU factorisation for the default direct solver.
-    # This is what makes the driven port a runtime `$ActivePort` rather than a
-    # parse-time constant -- a constant could not change between Generate calls.
+    # Only the source term changes between ports, so assemble and factorise
+    # once and rebuild just the right-hand side for each subsequent port.
     resolution_lines = ["CreateDir[Str[myDir]] ;"]
     if port_numbers:
         resolution_lines += [
@@ -129,12 +118,8 @@ def write_problem(
             ]
     resolution_op = "\n".join(resolution_lines)
 
-    # Every scalar (Format Table) result is appended, not overwritten, so each
-    # port of each solve point adds one row. Within a launch the rows follow the
-    # Resolution's port order, so the last `nports` rows of xS_<n>.txt are that
-    # frequency's S[n, :] (see fem_solver.read_complex_rows).
-    # fem_backend._sweep_from_meta clears stale files from any previous run
-    # before a sweep starts, so rows never mix across runs.
+    # Table results are appended: one row per port per solve point, in the
+    # Resolution's port order. Callers read the last `nports` rows.
     xs_file = "File >"
 
     diel_lines = []
@@ -145,8 +130,8 @@ def write_problem(
         spec = problem.solids[name]
         d = spec.dielectric
         diel_lines.append(f"  Diel_{name} = Region[{rid}];")
-        # GetDP uses the exp(-i w t) convention, so a passive lossy dielectric
-        # has Im[eps]>0: eps_r_complex = eps_r * (1 + i*tan_d)
+        # This .pro is written for exp(-i w t) (see the module docstring), so
+        # a passive lossy dielectric has Im[eps]>0: eps_r*(1 + i*tan_d)
         epsr_lines.append(
             f"  epsR[Diel_{name}] = Complex[{_fmt(d.eps_r)}, "
             f"{_fmt(d.eps_r * d.tan_d)}];"
@@ -211,33 +196,11 @@ def write_problem(
         domain_pml = ""
         pml_fun = ""
 
-    # --- power accounting -----------------------------------------------------
-    # Radiated power used to be read off the outer Silver-Muller boundary as
-    # |E_tan|^2/(2*eta0), which is exact there only because that boundary
-    # *enforces* the plane-wave relation between E and H. It is meaningless
-    # with a PML: by the outer face the shell has already absorbed the wave, so
-    # the flux reads ~0 (measured 164x low on the 24 GHz patch -- 3.5%
-    # radiation efficiency instead of 85%).
-    #
-    # Moving the integral inward to the air/PML interface does not work either.
-    # On a 2D region GetDP gives the *surface* trace: {e} is tangential and
-    # {d e} is the surface curl, which is normal, so ({e} /\ {d e}) . Normal[]
-    # is identically zero. A genuine Poynting flux needs a volume region (which
-    # is why every reference model computes it `In Domain`).
-    #
-    # So account for the power instead of measuring the flux. Every sink is
-    # known: whatever the port accepts and the materials do not dissipate has
-    # radiated.
-    #     Prad = Pacc - Ploss(dielectric) - Pcond(lossy conductors)
-    # PEC walls and the symmetry plane are lossless, and the port sheet's own
-    # absorption is already excluded because Pacc = 1/2 Re[V I*] is the *net*
-    # accepted power (incident minus reflected). This holds for either
-    # truncation; against the Silver-Muller flux integral it agrees to 1.2%.
-    # fem_solver.solve_fields_and_power does the arithmetic from the tables
-    # printed by Get_Power below.
-    #
-    # Conductor loss on a surface-impedance sheet is 1/2 Re[1/Zs] |E_tan|^2,
-    # and Yimp_j = eta0/Zs is already defined above.
+    # Radiated power is accounted, not measured: whatever the port accepts and
+    # the materials do not dissipate has radiated. A flux integral does not
+    # work here -- it reads ~0 behind a PML, and GetDP's surface trace of a
+    # Form1 field drops the components the Poynting normal needs.
+    # fem_solver.solve_fields_and_power does the arithmetic.
     pcond_q = []
     pcond_op = []
     for j, _ in enumerate(mesh.impedance_regions):
@@ -320,7 +283,7 @@ def write_problem(
           Value {{ Integral {{ [ {_fmt(pm.gap)} * ({{e}}*dir_{n}[]) / #({n}) ] ;
             In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}
         {{ Name I_{n} ;
-          Value {{ Integral {{ [ ({_fmt(pm.gap)}/{_fmt(pm.ref_impedance)}) * (2*(eInc[]*dir_{n}[]) - ({{e}}*dir_{n}[])) / #({n}) ] ;
+          Value {{ Integral {{ [ ({_fmt(pm.gap)}/{_fmt(pm.meshed_impedance)}) * (2*(eInc[]*dir_{n}[]) - ({{e}}*dir_{n}[])) / #({n}) ] ;
             In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}"""
         )
 

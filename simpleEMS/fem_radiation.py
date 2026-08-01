@@ -48,9 +48,7 @@ __all__ = ["FEMNF2FF"]
 
 _MESH_META = "fem_mesh.json"
 
-# A quad counts as lying in the symmetry plane if every node is this close to
-# it. CutBox places nodes exactly on the box faces, so the tolerance only has
-# to absorb float noise.
+# CutBox places nodes exactly on the box faces, so this only absorbs float noise.
 _PLANE_TOL = 1e-12
 
 
@@ -140,11 +138,9 @@ def compute_pattern(
         Fraction of the per-axis gap between ``bbox`` and ``domain_bbox``
         used for the Huygens-box margin. Default ``0.6``.
     symmetry : tuple[int, float, str] | None
-        ``(axis, plane, kind)`` when only half the structure was meshed --
-        the mirrored axis, the plane coordinate in metres, and ``"pec"`` or
-        ``"pmc"``. The Huygens box is then closed on the plane and completed
-        by reflection (see :func:`_mirror_boundary_view`), so the pattern is
-        the whole antenna's rather than half of it. Default ``None``.
+        ``(axis, plane, kind)`` when only half the structure was meshed. The
+        Huygens box is then closed on the plane and completed by reflection,
+        so the pattern is the whole antenna's. Default ``None``.
     verbose : bool
         Print Gmsh progress. Default ``False``.
 
@@ -171,10 +167,8 @@ def compute_pattern(
             for i in range(3)
         ]
         if symmetry is not None:
-            # Only half the domain is meshed, and `domain_bbox` predates the
-            # cut, so the box would otherwise reach across the symmetry plane
-            # into empty space -- where CutBox samples zeros. Start it exactly
-            # on the plane so the mirrored copy joins it seamlessly.
+            # `domain_bbox` predates the cut, so without this the box reaches
+            # across the plane into unmeshed space, where CutBox reads zeros.
             axis_i, sym_plane, _kind = symmetry
             lo[axis_i] = sym_plane
         x0, y0, z0 = lo
@@ -221,21 +215,11 @@ def compute_pattern(
 
     k0 = 2 * math.pi * freq / C0
     gmsh.plugin.setNumber("NearToFarField", "Wavenumber", k0)
-    # The .pro is written in the exp(-i w t) convention (see fem_formulation),
-    # so the transform must be told that: NegativeTime selects the plugin's
-    # exp(-i w t) branch, whose integrand carries the matching exp(-i k r.r')
-    # phase factor. Left at its default of 0 the plugin instead assumes
-    # exp(+i w t) and applies the conjugate factor to the equivalent currents,
-    # which is simply a different (wrong) pattern -- not a fixed rotation of
-    # the right one, since the J/M combination differs between the two
-    # branches as well. On the 24 GHz inset-fed patch it moved the peak's
-    # azimuth from 270 to 90 degrees and changed the front-to-back ratio by
-    # 10 dB, with both still beaming into the hemisphere the ground plane
-    # allows. That branch returns |E_inf|^2, an arbitrarily scaled quantity
-    # (the plugin's RFar option belongs to the exp(+i w t) branch and is not
-    # read here), so the grid below is only meaningful up to a constant --
-    # callers normalise by the peak and take the absolute level from the
-    # directivity, which is a ratio.
+    # The .pro solves in exp(-i w t) (see fem_formulation), so the transform
+    # has to be told: left at its default the plugin assumes exp(+i w t) and
+    # returns a different pattern. That branch returns |E_inf|^2, scaled
+    # arbitrarily, so callers normalise by the peak and take the level from
+    # the directivity.
     gmsh.plugin.setNumber("NearToFarField", "NegativeTime", 1)
     gmsh.plugin.setNumber("NearToFarField", "NumPointsPhi", nphi)
     gmsh.plugin.setNumber("NearToFarField", "NumPointsTheta", ntheta)
@@ -300,26 +284,12 @@ def _mirror_boundary_view(
 ) -> int:
     """Complete a half-model Huygens surface by reflecting it in the symmetry plane.
 
-    ``CutBox`` samples the half domain, so its box is only half a Huygens
-    surface and the pattern it yields is that of half an antenna. Image theory
-    gives the missing half exactly: reflecting the sampled quads in the
-    symmetry plane, with the field parity the wall imposes, reconstructs the
-    surface that would have been sampled around the whole structure.
-
-    Three things have to happen together, and getting any one wrong yields a
-    plausible but wrong pattern:
-
-    * **Quads on the plane are dropped.** They are interior to the completed
-      surface. (For an electric wall they also carry no current: ``M = -n x E``
-      vanishes because ``E_tan = 0``, and the two halves' ``J = n x H`` are
-      equal and opposite, so they cancel in the sum anyway.)
-    * **Node order is reversed.** A reflection reverses orientation, and
-      ``NearToFarField`` takes each element's normal from its first three
-      nodes (``normal3points``). Left as-is, every mirrored quad would face
-      inwards and contribute ``J`` and ``M`` with flipped signs.
-    * **Components follow the wall's parity.** At an electric wall the normal
-      ``E`` and tangential ``H`` are even and the rest odd; at a magnetic wall
-      it is the other way round.
+    ``CutBox`` only samples the meshed half, so image theory supplies the rest.
+    Three things must hold together or the pattern comes out plausible but
+    wrong: quads lying in the plane are dropped (they end up interior), node
+    order is reversed (a reflection flips orientation and the transform reads
+    normals from the first three nodes), and components follow the wall's
+    parity.
 
     Parameters
     ----------

@@ -81,6 +81,10 @@ class PortMesh:
         Transverse width of the port sheet, in metres.
     center : tuple[float, float, float]
         Centroid of the port sheet's bounding box, in metres.
+    width_meshed : float
+        Transverse width actually present in the mesh, in metres. Differs from
+        ``width`` only when a symmetry plane cuts the port. Default ``0.0``,
+        meaning the same as ``width``.
     """
 
     number: int
@@ -90,18 +94,38 @@ class PortMesh:
     gap: float  # electrical gap length along `direction` (m)
     width: float  # transverse width of the port sheet (m)
     center: tuple[float, float, float]
+    width_meshed: float = 0.0  # meshed width; differs under symmetry
 
     @property
     def ref_impedance(self) -> float:
-        """Impedance the port's S-parameters and V/I are referenced to."""
+        """Impedance the S-parameters are referenced to.
+
+        Always the full structure's ``z0``, even for a half model: a symmetry
+        plane is a modelling device, not a change to the device under test.
+        """
         return self.z0
 
     @property
+    def meshed_impedance(self) -> float:
+        """Impedance the meshed port sheet actually presents.
+
+        The sheet keeps the full-width ``sheet_impedance``, so halving it with
+        a symmetry plane doubles what it presents -- correct, since the two
+        halves sit in parallel. Port current must be referenced to this, not
+        to ``z0``, or the accepted power comes out scaled by the same factor
+        while the volume-integrated loss does not.
+        """
+        meshed = self.width_meshed or self.width
+        # Bounding boxes carry a modelling tolerance, so an uncut port measures
+        # a hair narrower than its marker; snap that to no correction at all.
+        if abs(meshed - self.width) <= 0.01 * self.width:
+            return self.z0
+        return self.z0 * self.width / meshed
+
+    @property
     def sheet_impedance(self) -> float:
-        """Impedance (ohms/square) modelling the port as a surface-impedance
-        sheet. A sheet of ``Zs`` per square carrying current along ``gap``
-        across ``width`` presents ``Zs * gap / width`` at its terminals, so
-        ``z0 * width / gap`` is what makes the port present ``z0``."""
+        """Sheet impedance (ohms/square) that makes the port present ``z0``
+        across its gap."""
         return self.z0 * self.width / self.gap
 
 
@@ -153,11 +177,10 @@ class Mesh:
         Symmetry boundary condition: ``"pec"`` or ``"pmc"``, empty if no
         symmetry is applied. Default ``""``.
     sym_axis : int
-        Index of the mirrored axis (0/1/2), or ``-1`` if no symmetry is
-        applied. Default ``-1``.
+        Mirrored axis (0/1/2), or ``-1`` if no symmetry. Default ``-1``.
     sym_plane : float
-        Coordinate of the symmetry plane along ``sym_axis``, in metres. The
-        meshed half is the side at ``coord >= sym_plane``. Default ``0.0``.
+        Symmetry plane coordinate (m); the meshed half is ``>= sym_plane``.
+        Default ``0.0``.
     """
 
     msh_path: str
@@ -692,6 +715,14 @@ def _assign_physical_groups(
         gap = extents[ax]
         width = max(extents[i] for i in range(3) if i != ax)  # transverse width
         center = ((bb[0] + bb[3]) / 2, (bb[1] + bb[4]) / 2, (bb[2] + bb[5]) / 2)
+        # `bb` predates the symmetry cut, so measure what actually got meshed.
+        fb = [1e30, 1e30, 1e30, -1e30, -1e30, -1e30]
+        for face in pfaces:
+            b = gmsh.model.getBoundingBox(2, face)
+            for i in range(3):
+                fb[i] = min(fb[i], b[i])
+                fb[i + 3] = max(fb[i + 3], b[i + 3])
+        width_meshed = max(fb[i + 3] - fb[i] for i in range(3) if i != ax)
         port_regions[pspec.number] = PortMesh(
             number=pspec.number,
             region=rid,
@@ -700,6 +731,7 @@ def _assign_physical_groups(
             gap=gap,
             width=width,
             center=center,
+            width_meshed=width_meshed,
         )
 
     if faces.abc:

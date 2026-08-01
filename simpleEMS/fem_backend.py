@@ -31,6 +31,7 @@ import hashlib
 import json
 import math
 import re
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -79,32 +80,21 @@ class FEMOptions:
     boundary : str
         Outer truncation: ``"silver_muller"`` (default) or ``"pml"``.
     symmetry : tuple | None
-        Optional mirror-symmetry plane ``(axis, kind, at)`` with ``axis`` in
-        ``x/y/z``, ``kind`` in ``pec/pmc``, ``at`` the plane coordinate (m) or
+        Mirror-symmetry plane ``(axis, kind, at)`` -- ``axis`` in ``x/y/z``,
+        ``kind`` in ``pec``/``pmc``, ``at`` the plane coordinate (m) or
         ``None`` for the structure centre. Halves the mesh.
+
+        The plane must be a symmetry of the excitation too. ``pmc`` (magnetic
+        wall) is the usual choice for a planar antenna fed on its centreline;
+        ``pec`` is an electric wall. Picking the wrong one is obvious in the
+        result -- check one frequency point against a full model.
     fe_order : int
         Nedelec edge-element order: ``1`` (default) or ``2``.
 
-        Order 1 (Whitney elements) gets the *guided propagation constant*
-        wrong, which no amount of mesh refinement fixes -- see
-        ``elems_per_wavelength``. Measured on a 24.09 mm, 3.04 mm-wide line on
-        1.6 mm FR4 by fitting ``Ez(y) = A exp(+i.beta.y) + B exp(-i.beta.y)``
-        to the solved field along the line, well clear of both ports, so the
-        ports play no part::
-
-                          eps_eff from the field   from S21   closed form
-            fe_order=1            3.83 (+14.6%)      4.16        3.345
-            fe_order=2            3.25  (-2.9%)      3.89        3.345
-
-        Order 2 all but removes the line error, at about 3x the solve cost
-        (measured, 9 frequency points). What is left is the gap between the
-        field and S21: roughly 20% at order 2, contributed by the two lumped
-        port discontinuities, which de-embedding rather than a better basis
-        would have to remove.
-
-        So: use ``2`` for anything that depends on phase, delay or group
-        delay. ``1`` remains the default because the extra cost buys nothing
-        for a resonance or return-loss magnitude.
+        Order 1 gets the guided propagation constant noticeably wrong and mesh
+        refinement does not fix it; order 2 does, at roughly 3x the solve cost.
+        Use ``2`` when phase, delay or group delay matter. Some error remains
+        either way from the lumped port discontinuities.
     air_pad_frac : float
         Air padding as a fraction of the longest wavelength. Default ``0.25``
         (a quarter-wavelength, the minimum the near-to-far-field transform
@@ -126,24 +116,8 @@ class FEMOptions:
         resolved equally rather than one being starved to pay for the other).
         Default ``16.0``.
 
-        Raised from ``8.0`` to keep the air resolution the per-material split
-        would otherwise throw away. Previously *everything* was sized off the
-        dielectric wavelength, which left air at an effective ``lambda_air/16.8``
-        while the substrate sat at only 8 points per wavelength. Sizing each
-        material against its own wavelength at ``N = 16`` reproduces roughly
-        that same air density while lifting the dielectric off the coarse
-        limit, at about 8% more elements.
-
-        Note what this does *not* fix, so nobody re-runs the experiment. A
-        microstrip line carries a delay error that mesh density does not move
-        and can even worsen::
-
-            N=8,  min_layers=3   163.8 ps
-            N=16, min_layers=3   163.8 ps
-            N=16, min_layers=6   165.2 ps   (worse)
-
-        Mesh knobs are the wrong tool, but the cause *is* discretisation --
-        element order, not element size. See ``fe_order``.
+        Note that refining this does *not* fix the microstrip delay error --
+        that is set by element order, not element size. See ``fe_order``.
     mesh_fine_scale : float
         Multiplier on the near-conductor element size. Default ``1.0``.
     min_layers : int
@@ -518,9 +492,13 @@ def _mesh_fingerprint(
     which means without this an edit to the formulation would leave the old
     ``.pro`` in place and be silently ignored, or worse, leave a ``.pro``
     referring to regions the current code no longer tags.
+
+    ``fem_backend`` is hashed too, since it decides what goes into
+    ``fem_mesh.json``; the cost is that editing it rebuilds cached meshes once.
     """
     parts = []
-    for mod in (fem_formulation, fem_geometry, fem_materials):
+    this_module = sys.modules[__name__]  # fem_backend itself; see the note above
+    for mod in (fem_formulation, fem_geometry, fem_materials, this_module):
         parts.append(f"src:{hashlib.sha256(_module_bytes(mod)).hexdigest()}")
     for prop in csx.GetAllProperties():
         parts.append(f"{prop.__class__.__name__}:{prop.GetName()}")
@@ -593,16 +571,14 @@ def _mesh_problem(
         "symmetry_axis": (
             {"x": 0, "y": 1, "z": 2}[prob.symmetry[0]] if prob.symmetry else None
         ),  # axis whose min-face sits on the symmetry plane, not open air
-        # plane coordinate and wall type, so the far-field transform can mirror
-        # the half model back into a whole one (see fem_radiation)
+        # so the far-field transform can mirror the half model back to whole
         "symmetry_plane": mesh.sym_plane if prob.symmetry else None,
         "symmetry_kind": mesh.sym_kind if prob.symmetry else None,
         "port_numbers": sorted(pm.number for pm in mesh.port_regions.values()),
         "ref_impedances": {
             str(pm.number): pm.ref_impedance for pm in mesh.port_regions.values()
         },
-        # gap lengths, needed to turn the .pro's field overlaps into wave
-        # amplitudes when ports differ (see _sweep_from_meta)
+        # gap lengths, for the wave-amplitude scaling in _sweep_from_meta
         "port_gaps": {str(pm.number): pm.gap for pm in mesh.port_regions.values()},
         "fingerprint": fingerprint,
     }
@@ -709,49 +685,27 @@ def _sweep_from_meta(
     npt = len(port_numbers)
     ref_port = port_numbers[0]  # SimData reports V/I/input_power for this port only
 
-    # --- field overlap -> wave amplitude --------------------------------------
-    # The .pro reports xS_n = <E.dir_n> - delta_nk: the reflected/transmitted
-    # *voltage* at port n divided by that port's gap, against an incident
-    # voltage of gap_k. An S-parameter is a ratio of wave amplitudes,
-    # b_n/a_k with b = V/sqrt(Z), so
-    #     S_nk = xS_n * (gap_n / gap_k) * sqrt(Z_k / Z_n).
-    # That factor is 1 on the diagonal and whenever the ports share a gap and
-    # a reference impedance -- true of every shipped example, which is why the
-    # omission went unnoticed -- but not for a 2-port spanning different
-    # substrate thicknesses or reference impedances. Applied here rather than
-    # in compute_sim_data so the stored matrix is a real S-matrix: the rational
-    # sweep interpolates it and fem_sweep judges passivity from its singular
-    # values, both of which need true wave amplitudes.
+    # The .pro reports a field overlap; an S-parameter is a ratio of wave
+    # amplitudes, so scale by (gap_n/gap_k)*sqrt(Z_k/Z_n). This is 1 when the
+    # ports match. Applied here so the stored matrix is a true S-matrix, which
+    # the rational sweep and its passivity check both assume.
     ref_z = meta["ref_impedances"]
-    gaps = meta.get("port_gaps")
-    if gaps is None:
-        # Mesh predates port_gaps, and fem_backend is not part of the mesh
-        # fingerprint so it will not rebuild on its own.
-        wave_norm = np.ones((npt, npt))
-        if verbose and len({ref_z[str(n)] for n in port_numbers}) > 1:
-            console.print(
-                "[warning]fem_mesh.json has no port_gaps (stale mesh) and the "
-                "ports differ in reference impedance; cross-port S-parameters "
-                "are not wave-normalised. Re-run build_mesh.[/warning]"
-            )
-    else:
-        wave_norm = np.array(
+    gaps = meta["port_gaps"]
+    wave_norm = np.array(
+        [
             [
-                [
-                    (gaps[str(n)] / gaps[str(k)])
-                    * math.sqrt(ref_z[str(k)] / ref_z[str(n)])
-                    for k in port_numbers
-                ]
-                for n in port_numbers
+                (gaps[str(n)] / gaps[str(k)]) * math.sqrt(ref_z[str(k)] / ref_z[str(n)])
+                for k in port_numbers
             ]
-        )
+            for n in port_numbers
+        ]
+    )
 
     # GetDP appends to these Format Table files (write_problem's xs_file =
     # "File >") instead of overwriting, so a sweep's per-solve rows accumulate
     # in one file. Clear any left over from a previous sweep/run first, or
-    # this run's rows would land after stale ones from before -- and since each
-    # solve point is now identified by *position* (its last `npt` rows), stale
-    # rows would misalign the whole S-matrix rather than just being ignored.
+    # this run's rows would land after stale ones. Rows are read by position,
+    # so leftovers would misalign the whole S-matrix.
     stale_patterns = [
         "intPort.txt",
         "xS_*.txt",
@@ -773,17 +727,8 @@ def _sweep_from_meta(
     vi_solved: dict[float, tuple[complex, complex]] = {}
 
     # One full FEM solve at a single frequency, producing the whole S-matrix.
-    #
-    # A single getdp launch drives every port: the .pro's Analysis resolution
-    # assembles and factorises once, then rebuilds only the right-hand side for
-    # each subsequent port (GenerateRightHandSideGroup + SolveAgain). That
-    # replaces one process, one assembly and one factorisation *per port* with
-    # one of each per frequency -- the factorisation dominates, so an N-port
-    # sweep costs roughly what a 1-port sweep used to.
-    #
-    # Each port appends a row to xS_<n>.txt in the resolution's port order, so
-    # the last `npt` rows of xS_<n>.txt are row n of the S-matrix, indexed by
-    # driven port.
+    # A single getdp launch drives every port, reusing one factorisation, and
+    # appends a row per port to xS_<n>.txt in the resolution's port order.
     def solve_at(freq: float) -> NDArray:
         s = np.zeros((npt, npt), dtype=complex)
         fem_solver.run_getdp(

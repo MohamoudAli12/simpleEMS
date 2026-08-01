@@ -83,10 +83,8 @@ def read_complex_rows(path: str | Path, count: int) -> list[complex]:
     """
     Read the last ``count`` complex values from a GetDP Table output file.
 
-    One ``Analysis`` launch drives every port in turn and appends a row per
-    port, in the Resolution's port order, so the last ``count`` rows of
-    ``xS_<n>.txt`` are that frequency's ``S[n, :]`` -- one entry per driven
-    port.
+    One ``Analysis`` launch appends a row per driven port, so the last
+    ``count`` rows of ``xS_<n>.txt`` are that frequency's ``S[n, :]``.
 
     Parameters
     ----------
@@ -103,10 +101,8 @@ def read_complex_rows(path: str | Path, count: int) -> list[complex]:
     Raises
     ------
     RuntimeError
-        If the file is missing or holds fewer than ``count`` rows. Unlike
-        :func:`read_complex`, a missing value cannot be defaulted here: rows are
-        identified by *position*, so anything short would misalign the whole
-        S-matrix rather than zero one entry of it.
+        If the file is missing or holds fewer than ``count`` rows. Rows are
+        read by position, so anything short would misalign the S-matrix.
     """
     if not Path(path).exists():
         raise RuntimeError(
@@ -169,13 +165,9 @@ def run_getdp(
     RuntimeError
         If getdp exits with a non-zero return code.
     """
-    # Build the getdp command line:
-    #   getdp <name>.pro -msh <name>.msh -setnumber FREQ <f>
-    #         -solve <Resolution> [-pos <PostOperation(s)>] -v2
-    # The default "Analysis" resolution drives every port at that frequency and
-    # runs Get_SParameters itself (so no -pos, and no ACTIVE_PORT), appending a
-    # row per port to output/xS_<n>.txt. "AnalysisSinglePort" instead solves the
-    # single ACTIVE_PORT and keeps the solution for a -pos field extraction.
+    # "Analysis" drives every port and runs Get_SParameters itself (so no -pos
+    # and no ACTIVE_PORT); "AnalysisSinglePort" solves the single ACTIVE_PORT
+    # and keeps the solution for a -pos field extraction.
     args = [find_getdp(), str(pro_path), "-msh", str(msh_path)]
     for k, v in setnumbers.items():
         args += ["-setnumber", k, repr(float(v))]
@@ -244,17 +236,15 @@ def solve_fields_and_power(
     -------
     tuple[str, str, float, float]
         ``(e_pos, h_pos, p_loss, p_rad)`` -- paths to the written ``e.pos``
-        and ``h.pos`` field views, and the dielectric-loss and radiated
-        powers. These are computed directly from the unnormalised field
+        and ``h.pos`` field views, the total material loss (dielectric plus
+        lossy conductors) and the radiated power, which sum to the accepted
+        power. These are computed directly from the unnormalised field
         solution, so only their ratio (e.g. radiation efficiency) is
         physically meaningful, not their absolute magnitude.
 
-        ``p_rad`` is what the driven port accepted less what the materials
-        dissipated (see the power-accounting note in ``fem_formulation``), not
-        a flux through the outer boundary -- that reads ~0 behind a PML, and
-        cannot be integrated on the air/PML interface either because GetDP's
-        surface trace of a Form1 field drops exactly the components the
-        Poynting vector's normal component needs.
+        ``p_rad`` is what the port accepted less what the materials
+        dissipated, not a flux through the outer boundary -- that reads ~0
+        behind a PML.
     """
     run_getdp(
         pro_path,
@@ -266,12 +256,12 @@ def solve_fields_and_power(
     )
     outdir = Path(workdir).absolute() / "output"
 
-    p_loss = _read_power_value(outdir, "Ploss.txt")
+    # Dielectric plus conductor loss, so p_rad + p_loss is the accepted power.
+    p_loss = _read_power_value(outdir, "Ploss.txt") + _conductor_loss(outdir)
     v = read_complex(outdir / f"Vdrv_{active}.txt")
     i = read_complex(outdir / f"Idrv_{active}.txt")
     p_acc = 0.5 * float(np.real(v * np.conj(i)))
-    # Clamped at 0: a small negative value means the accounting lost to
-    # numerical noise on an essentially non-radiating structure, not that the
-    # antenna absorbs from free space.
-    p_rad = max(p_acc - p_loss - _conductor_loss(outdir), 0.0)
+    # Clamped at 0: a small negative value is numerical noise on a
+    # non-radiating structure.
+    p_rad = max(p_acc - p_loss, 0.0)
     return (str(outdir / "e.pos"), str(outdir / "h.pos"), p_loss, p_rad)
