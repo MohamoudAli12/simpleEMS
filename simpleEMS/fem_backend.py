@@ -576,6 +576,10 @@ def _mesh_problem(
         "symmetry_axis": (
             {"x": 0, "y": 1, "z": 2}[prob.symmetry[0]] if prob.symmetry else None
         ),  # axis whose min-face sits on the symmetry plane, not open air
+        # plane coordinate and wall type, so the far-field transform can mirror
+        # the half model back into a whole one (see fem_radiation)
+        "symmetry_plane": mesh.sym_plane if prob.symmetry else None,
+        "symmetry_kind": mesh.sym_kind if prob.symmetry else None,
         "port_numbers": sorted(pm.number for pm in mesh.port_regions.values()),
         "ref_impedances": {
             str(pm.number): pm.ref_impedance for pm in mesh.port_regions.values()

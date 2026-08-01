@@ -48,6 +48,11 @@ __all__ = ["FEMNF2FF"]
 
 _MESH_META = "fem_mesh.json"
 
+# A quad counts as lying in the symmetry plane if every node is this close to
+# it. CutBox places nodes exactly on the box faces, so the tolerance only has
+# to absorb float noise.
+_PLANE_TOL = 1e-12
+
 
 @dataclass
 class FEMFarField:
@@ -84,6 +89,7 @@ def compute_pattern(
     npts: tuple[int, int, int] = (14, 14, 14),
     margin_frac: float = 0.15,
     safety_frac: float = 0.6,
+    symmetry: tuple[int, float, str] | None = None,
     verbose: bool = False,
 ) -> tuple[NDArray, NDArray, NDArray, float]:
     """
@@ -133,6 +139,12 @@ def compute_pattern(
     safety_frac : float
         Fraction of the per-axis gap between ``bbox`` and ``domain_bbox``
         used for the Huygens-box margin. Default ``0.6``.
+    symmetry : tuple[int, float, str] | None
+        ``(axis, plane, kind)`` when only half the structure was meshed --
+        the mirrored axis, the plane coordinate in metres, and ``"pec"`` or
+        ``"pmc"``. The Huygens box is then closed on the plane and completed
+        by reflection (see :func:`_mirror_boundary_view`), so the pattern is
+        the whole antenna's rather than half of it. Default ``None``.
     verbose : bool
         Print Gmsh progress. Default ``False``.
 
@@ -153,13 +165,20 @@ def compute_pattern(
 
     # Huygens box just outside the structure, inside the meshed air region.
     if domain_bbox is not None:
-        x0, y0, z0 = (
-            bbox[i] - safety_frac * (bbox[i] - domain_bbox[i]) for i in range(3)
-        )
-        x1, y1, z1 = (
+        lo = [bbox[i] - safety_frac * (bbox[i] - domain_bbox[i]) for i in range(3)]
+        hi = [
             bbox[3 + i] + safety_frac * (domain_bbox[3 + i] - bbox[3 + i])
             for i in range(3)
-        )
+        ]
+        if symmetry is not None:
+            # Only half the domain is meshed, and `domain_bbox` predates the
+            # cut, so the box would otherwise reach across the symmetry plane
+            # into empty space -- where CutBox samples zeros. Start it exactly
+            # on the plane so the mirrored copy joins it seamlessly.
+            axis_i, sym_plane, _kind = symmetry
+            lo[axis_i] = sym_plane
+        x0, y0, z0 = lo
+        x1, y1, z1 = hi
     else:
         dx, dy, dz = bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2]
         m = margin_frac * max(dx, dy, dz)
@@ -191,6 +210,11 @@ def compute_pattern(
     e_box = gmsh.plugin.run("CutBox")  # new view tag for E on the box
     cb("View", 1)
     h_box = gmsh.plugin.run("CutBox")  # new view tag for H on the box
+
+    if symmetry is not None:
+        axis_i, sym_plane, sym_kind = symmetry
+        e_box = _mirror_boundary_view(e_box, axis_i, sym_plane, sym_kind, "E")
+        h_box = _mirror_boundary_view(h_box, axis_i, sym_plane, sym_kind, "H")
 
     def view_index(tag: int) -> int:
         return list(gmsh.view.getTags()).index(tag)
@@ -269,6 +293,98 @@ def compute_pattern(
     directivity_db = 10.0 * math.log10(max(umax, 1e-30) / max(u_avg, 1e-30))
 
     return theta_axis, phi_axis, u_grid, directivity_db
+
+
+def _mirror_boundary_view(
+    tag: int, axis: int, plane: float, kind: str, field: str
+) -> int:
+    """Complete a half-model Huygens surface by reflecting it in the symmetry plane.
+
+    ``CutBox`` samples the half domain, so its box is only half a Huygens
+    surface and the pattern it yields is that of half an antenna. Image theory
+    gives the missing half exactly: reflecting the sampled quads in the
+    symmetry plane, with the field parity the wall imposes, reconstructs the
+    surface that would have been sampled around the whole structure.
+
+    Three things have to happen together, and getting any one wrong yields a
+    plausible but wrong pattern:
+
+    * **Quads on the plane are dropped.** They are interior to the completed
+      surface. (For an electric wall they also carry no current: ``M = -n x E``
+      vanishes because ``E_tan = 0``, and the two halves' ``J = n x H`` are
+      equal and opposite, so they cancel in the sum anyway.)
+    * **Node order is reversed.** A reflection reverses orientation, and
+      ``NearToFarField`` takes each element's normal from its first three
+      nodes (``normal3points``). Left as-is, every mirrored quad would face
+      inwards and contribute ``J`` and ``M`` with flipped signs.
+    * **Components follow the wall's parity.** At an electric wall the normal
+      ``E`` and tangential ``H`` are even and the rest odd; at a magnetic wall
+      it is the other way round.
+
+    Parameters
+    ----------
+    tag : int
+        View tag of the half Huygens surface (a ``CutBox`` result).
+    axis : int
+        Mirrored axis, ``0``/``1``/``2`` for x/y/z.
+    plane : float
+        Symmetry plane coordinate along ``axis``, in metres.
+    kind : str
+        ``"pec"`` (electric wall) or ``"pmc"`` (magnetic wall).
+    field : str
+        ``"E"`` or ``"H"`` -- which parity rule applies.
+
+    Returns
+    -------
+    int
+        View tag of the completed surface: the original quads (minus those on
+        the plane) plus their mirror images.
+    """
+    dtypes, counts, data = gmsh.view.getListData(tag)
+    nsteps = int(gmsh.view.option.getNumber(tag, "NbTimeStep"))
+
+    # Even component keeps its sign under reflection, odd flips. The normal
+    # component is the one along `axis`.
+    electric = (field == "E") == (kind == "pec")
+    normal_sign = 1.0 if electric else -1.0
+    tangential_sign = -normal_sign
+
+    out = gmsh.view.add(f"huygens_{field}")
+    for dtype, nelem, arr in zip(dtypes, counts, data, strict=True):
+        arr = np.asarray(arr, dtype=float)
+        nnodes = {"T": 3, "Q": 4}[dtype[1]]  # VT / VQ
+        ncoord = 3 * nnodes
+        stride = ncoord + nsteps * nnodes * 3
+        if nelem * stride != arr.size:
+            raise RuntimeError(
+                f"unexpected {dtype} list-data layout: {arr.size} floats for "
+                f"{nelem} elements ({nnodes} nodes, {nsteps} steps)"
+            )
+
+        kept, mirrored = [], []
+        for e in range(nelem):
+            el = arr[e * stride : (e + 1) * stride]
+            coords = el[:ncoord].reshape(3, nnodes)  # [x-block, y-block, z-block]
+            if np.all(np.abs(coords[axis] - plane) <= _PLANE_TOL):
+                continue  # lies in the symmetry plane -> interior once completed
+            kept.append(el)
+
+            order = list(range(nnodes))[::-1]  # reflection reverses orientation
+            mc = coords.copy()
+            mc[axis] = 2.0 * plane - mc[axis]
+            mv = el[ncoord:].reshape(nsteps, nnodes, 3).copy()
+            mv[:, :, axis] *= normal_sign
+            for c in range(3):
+                if c != axis:
+                    mv[:, :, c] *= tangential_sign
+            mirrored.append(
+                np.concatenate([mc[:, order].ravel(), mv[:, order, :].ravel()])
+            )
+
+        if kept or mirrored:
+            block = np.concatenate(kept + mirrored)
+            gmsh.view.addListData(out, dtype, len(kept) + len(mirrored), list(block))
+    return out
 
 
 def _parse_matlab_grid(path: str | Path, nphi: int, ntheta: int) -> tuple | None:
@@ -414,8 +530,27 @@ class FEMNF2FF:
             e_pos, h_pos, p_loss, p_rad = fem_solver.solve_fields_and_power(
                 pro, msh, output_path, freq
             )
+            sym_axis = meta.get("symmetry_axis")
+            symmetry = (
+                (sym_axis, meta["symmetry_plane"], meta["symmetry_kind"])
+                if sym_axis is not None and meta.get("symmetry_plane") is not None
+                else None
+            )
+            if sym_axis is not None and symmetry is None:
+                raise RuntimeError(
+                    "This mesh was built with a symmetry plane but predates the "
+                    "far-field mirroring, so fem_mesh.json has no symmetry_plane/"
+                    "symmetry_kind. Only half the Huygens surface can be sampled "
+                    "and the pattern would be wrong; re-run build_mesh."
+                )
             theta_axis, phi_axis, u_grid, dir_db = compute_pattern(
-                e_pos, h_pos, freq, bbox, output_path, domain_bbox=domain_bbox
+                e_pos,
+                h_pos,
+                freq,
+                bbox,
+                output_path,
+                domain_bbox=domain_bbox,
+                symmetry=symmetry,
             )
             self._cache[key] = (theta_axis, phi_axis, u_grid, dir_db, p_rad, p_loss)
         return self._cache[key]

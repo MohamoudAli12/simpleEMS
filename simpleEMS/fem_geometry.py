@@ -152,6 +152,12 @@ class Mesh:
     sym_kind : str
         Symmetry boundary condition: ``"pec"`` or ``"pmc"``, empty if no
         symmetry is applied. Default ``""``.
+    sym_axis : int
+        Index of the mirrored axis (0/1/2), or ``-1`` if no symmetry is
+        applied. Default ``-1``.
+    sym_plane : float
+        Coordinate of the symmetry plane along ``sym_axis``, in metres. The
+        meshed half is the side at ``coord >= sym_plane``. Default ``0.0``.
     """
 
     msh_path: str
@@ -170,6 +176,8 @@ class Mesh:
     pml_thick: float = 0.0  # PML shell thickness (m)
     sym_region: int = 0  # symmetry-plane surface region (0 if none)
     sym_kind: str = ""  # 'pec' or 'pmc'
+    sym_axis: int = -1  # mirrored axis index, -1 if none
+    sym_plane: float = 0.0  # symmetry plane coordinate (m); half kept is >= this
 
 
 # ----------------------------
@@ -876,6 +884,8 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
         pml_thick=pml_thick,
         sym_region=sym_region,
         sym_kind=(problem.symmetry[1] if problem.symmetry else ""),
+        sym_axis=(sym_axis_i if sym_axis_i is not None else -1),
+        sym_plane=(sym_plane if sym_plane is not None else 0.0),
     )
 
 
