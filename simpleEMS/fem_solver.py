@@ -186,11 +186,17 @@ def run_getdp(
     args += ["-v2"]  # verbosity level 2 (progress but not per-iteration spam)
     if extra_args:  # passthrough getdp/PETSc flags
         args += list(extra_args)
+    # Output is streamed rather than captured, so getdp's progress is visible;
+    # that leaves stdout/stderr as None here, hence the guard (indexing them
+    # raised TypeError and hid the actual failure).
     res = subprocess.run(args, cwd=workdir, capture_output=False, text=True)
     if res.returncode != 0:
+        tail = "\n".join(
+            stream[-2000:] for stream in (res.stdout, res.stderr) if stream
+        )
         raise RuntimeError(
-            f"getdp failed ({res.returncode}):\n"
-            f"{res.stdout[-2000:]}\n{res.stderr[-2000:]}"
+            f"getdp failed ({res.returncode}) running {' '.join(args)}"
+            + (f":\n{tail}" if tail else "; see the output above.")
         )
     return res
 
@@ -201,6 +207,11 @@ def _read_power_value(outdir: str | Path, fname: str) -> float:
     if not path.exists():
         return 0.0
     return float(np.atleast_2d(np.loadtxt(path))[-1, -2])
+
+
+def _conductor_loss(outdir: Path) -> float:
+    """Total dissipation in the surface-impedance sheets, if any."""
+    return sum(_read_power_value(outdir, p.name) for p in outdir.glob("Pcond_*.txt"))
 
 
 def solve_fields_and_power(
@@ -237,6 +248,13 @@ def solve_fields_and_power(
         powers. These are computed directly from the unnormalised field
         solution, so only their ratio (e.g. radiation efficiency) is
         physically meaningful, not their absolute magnitude.
+
+        ``p_rad`` is what the driven port accepted less what the materials
+        dissipated (see the power-accounting note in ``fem_formulation``), not
+        a flux through the outer boundary -- that reads ~0 behind a PML, and
+        cannot be integrated on the air/PML interface either because GetDP's
+        surface trace of a Form1 field drops exactly the components the
+        Poynting vector's normal component needs.
     """
     run_getdp(
         pro_path,
@@ -247,9 +265,13 @@ def solve_fields_and_power(
         resolution="AnalysisSinglePort",
     )
     outdir = Path(workdir).absolute() / "output"
-    return (
-        str(outdir / "e.pos"),
-        str(outdir / "h.pos"),
-        _read_power_value(outdir, "Ploss.txt"),
-        _read_power_value(outdir, "Prad.txt"),
-    )
+
+    p_loss = _read_power_value(outdir, "Ploss.txt")
+    v = read_complex(outdir / f"Vdrv_{active}.txt")
+    i = read_complex(outdir / f"Idrv_{active}.txt")
+    p_acc = 0.5 * float(np.real(v * np.conj(i)))
+    # Clamped at 0: a small negative value means the accounting lost to
+    # numerical noise on an essentially non-radiating structure, not that the
+    # antenna absorbs from free space.
+    p_rad = max(p_acc - p_loss - _conductor_loss(outdir), 0.0)
+    return (str(outdir / "e.pos"), str(outdir / "h.pos"), p_loss, p_rad)

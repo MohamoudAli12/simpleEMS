@@ -211,6 +211,65 @@ def write_problem(
         domain_pml = ""
         pml_fun = ""
 
+    # --- power accounting -----------------------------------------------------
+    # Radiated power used to be read off the outer Silver-Muller boundary as
+    # |E_tan|^2/(2*eta0), which is exact there only because that boundary
+    # *enforces* the plane-wave relation between E and H. It is meaningless
+    # with a PML: by the outer face the shell has already absorbed the wave, so
+    # the flux reads ~0 (measured 164x low on the 24 GHz patch -- 3.5%
+    # radiation efficiency instead of 85%).
+    #
+    # Moving the integral inward to the air/PML interface does not work either.
+    # On a 2D region GetDP gives the *surface* trace: {e} is tangential and
+    # {d e} is the surface curl, which is normal, so ({e} /\ {d e}) . Normal[]
+    # is identically zero. A genuine Poynting flux needs a volume region (which
+    # is why every reference model computes it `In Domain`).
+    #
+    # So account for the power instead of measuring the flux. Every sink is
+    # known: whatever the port accepts and the materials do not dissipate has
+    # radiated.
+    #     Prad = Pacc - Ploss(dielectric) - Pcond(lossy conductors)
+    # PEC walls and the symmetry plane are lossless, and the port sheet's own
+    # absorption is already excluded because Pacc = 1/2 Re[V I*] is the *net*
+    # accepted power (incident minus reflected). This holds for either
+    # truncation; against the Silver-Muller flux integral it agrees to 1.2%.
+    # fem_solver.solve_fields_and_power does the arithmetic from the tables
+    # printed by Get_Power below.
+    #
+    # Conductor loss on a surface-impedance sheet is 1/2 Re[1/Zs] |E_tan|^2,
+    # and Yimp_j = eta0/Zs is already defined above.
+    pcond_q = []
+    pcond_op = []
+    for j, _ in enumerate(mesh.impedance_regions):
+        pcond_q.append(
+            f"""      {{ Name Pcond_{j} ; Value {{ Integral {{
+        [ 0.5*Re[Yimp_{j}[]]/eta0 * SquNorm[ (Normal[] /\\ {{e}}) /\\ Normal[] ] ] ;
+        In Imped_{j} ; Jacobian Jac ; Integration I1 ; }} }} }}"""
+        )
+        pcond_op.append(
+            f"""      Print [ Pcond_{j}[Imped_{j}], OnGlobal, Format Table,
+        {xs_file} StrCat[myDir, "Pcond_{j}.txt"] ] ;"""
+        )
+
+    # V/I of each port, printed by Get_Power so the field/power solve carries
+    # its own accepted power at its own frequency -- the V_<n>/I_<n> files that
+    # Get_SParameters writes belong to the sweep and are at whatever frequency
+    # it last solved.
+    # V_n/I_n are normalised by the register #(n), which only intPort_n sets, so
+    # it has to be printed here too -- Get_Power does not run Get_SParameters
+    # and would otherwise divide by an unset (zero) register.
+    pdrv_op = []
+    for pm in ports:
+        n = pm.number
+        pdrv_op.append(
+            f"""      Print [ intPort_{n}[Port_{n}], OnRegion Port_{n}, StoreInRegister ({n}),
+        Format Table, {xs_file} StrCat[myDir, "intPort.txt"] ] ;
+      Print [ V_{n}[Port_{n}], OnRegion Port_{n}, Format Table,
+        {xs_file} StrCat[myDir, "Vdrv_{n}.txt"] ] ;
+      Print [ I_{n}[Port_{n}], OnRegion Port_{n}, Format Table,
+        {xs_file} StrCat[myDir, "Idrv_{n}.txt"] ] ;"""
+        )
+
     # per-port functions: unit mode direction, sheet relative admittance, incident field
     port_fun_lines = []
     for pm in ports:
@@ -435,9 +494,8 @@ PostProcessing {{
       // dropping it too costs nothing.
       {{ Name Ploss ; Value {{ Integral {{ [ Pi*{freqvar}*eps0*Im[epsR[]]*SquNorm[{{e}}] ] ;
         In DomainDiel ; Jacobian Jac ; Integration I1 ; }} }} }}
-      // radiated power = power absorbed by the matched Silver-Muller ABC
-      {{ Name Prad ; Value {{ Integral {{ [ 0.5/eta0 * SquNorm[ (Normal[] /\\ {{e}}) /\\ Normal[] ] ] ;
-        In Abc ; Jacobian Jac ; Integration I1 ; }} }} }}
+      // conductor loss, one quantity per distinct sheet conductivity
+{chr(10).join(pcond_q)}
     }}
   }}
 }}
@@ -457,7 +515,8 @@ PostOperation {{
   {{ Name Get_Power ; NameOfPostProcessing postPro ;
     Operation {{
       Print [ Ploss[DomainDiel], OnGlobal, Format Table, {xs_file} StrCat[myDir, "Ploss.txt"] ] ;
-      Print [ Prad[Abc], OnGlobal, Format Table, {xs_file} StrCat[myDir, "Prad.txt"] ] ;
+{chr(10).join(pcond_op)}
+{chr(10).join(pdrv_op)}
     }}
   }}
 }}

@@ -711,7 +711,9 @@ def _sweep_from_meta(
         "V_*.txt",
         "I_*.txt",
         "Ploss.txt",
-        "Prad.txt",
+        "Pcond_*.txt",
+        "Vdrv_*.txt",
+        "Idrv_*.txt",
     ]
     for pattern in stale_patterns:
         for stale in outdir.glob(pattern):
