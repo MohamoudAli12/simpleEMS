@@ -129,8 +129,8 @@ def add_fdtd_setup(
         ``(fmin + fmax) / 2`` with cutoff ``(fmax - fmin) / 2``, matching
         :func:`~simpleEMS.sim_tools.setup_simulation`.
     output_xml_path : str | Path, optional
-        Where to write the result. Defaults to ``<stem>_fdtd.xml`` beside
-        the source file.
+        Where to write the result. Defaults to ``<stem>_fdtd.xml`` in
+        ``cwd / "Sim_Path"``.
     excitation : str
         ``"gauss"`` (default), ``"sinus"``, ``"dirac"`` or ``"step"``.
         Only ``"gauss"`` lets :func:`simulate_model` derive its
@@ -171,7 +171,7 @@ def add_fdtd_setup(
     dst = (
         Path(output_xml_path)
         if output_xml_path
-        else src.with_name(f"{src.stem}_fdtd.xml")
+        else Path.cwd() / "Sim_Path" / f"{src.stem}_fdtd.xml"
     )
     if dst.exists() and not overwrite:
         raise FileExistsError(
@@ -348,7 +348,7 @@ def reconstruct_ports(csx: ContinuousStructure) -> tuple[list[LumpedPort], float
 
 def simulate_model(
     structure_xml_path: str | Path,
-    output_path: str | Path,
+    output_path: str | Path | None = None,
     num_points: int = 1000,
     run: bool = True,
     freqs: NDArray | None = None,
@@ -361,9 +361,9 @@ def simulate_model(
     ----------
     structure_xml_path : str | Path
         Path to the ``structure.xml`` file exported by CSXCAD.
-    output_path : str | Path
+    output_path : str | Path, optional
         Directory where simulation results will be written / already
-        exist.
+        exist. Defaults to ``cwd / "Sim_Path"``.
     num_points : int
         Number of frequency points for post-processing. Default ``1000``.
         Ignored when ``freqs`` is given.
@@ -393,7 +393,7 @@ def simulate_model(
     RuntimeError
         If no ports are found in the loaded structure.
     """
-    output_path = Path(output_path)
+    output_path = Path(output_path) if output_path else Path.cwd() / "Sim_Path"
     output_path.mkdir(parents=True, exist_ok=True)
 
     if freqs is None:
