@@ -84,6 +84,27 @@ class FEMOptions:
         ``None`` for the structure centre. Halves the mesh.
     fe_order : int
         Nedelec edge-element order: ``1`` (default) or ``2``.
+
+        Order 1 (Whitney elements) gets the *guided propagation constant*
+        wrong, which no amount of mesh refinement fixes -- see
+        ``elems_per_wavelength``. Measured on a 24.09 mm, 3.04 mm-wide line on
+        1.6 mm FR4 by fitting ``Ez(y) = A exp(+i.beta.y) + B exp(-i.beta.y)``
+        to the solved field along the line, well clear of both ports, so the
+        ports play no part::
+
+                          eps_eff from the field   from S21   closed form
+            fe_order=1            3.83 (+14.6%)      4.16        3.345
+            fe_order=2            3.25  (-2.9%)      3.89        3.345
+
+        Order 2 all but removes the line error, at about 3x the solve cost
+        (measured, 9 frequency points). What is left is the gap between the
+        field and S21: roughly 20% at order 2, contributed by the two lumped
+        port discontinuities, which de-embedding rather than a better basis
+        would have to remove.
+
+        So: use ``2`` for anything that depends on phase, delay or group
+        delay. ``1`` remains the default because the extra cost buys nothing
+        for a resonance or return-loss magnitude.
     air_pad_frac : float
         Air padding as a fraction of the longest wavelength. Default ``0.25``
         (a quarter-wavelength, the minimum the near-to-far-field transform
@@ -114,19 +135,15 @@ class FEMOptions:
         limit, at about 8% more elements.
 
         Note what this does *not* fix, so nobody re-runs the experiment. A
-        quarter-wave microstrip carries a delay error corresponding to
-        ``eps_eff ~ 3.72`` where the closed form and the FDTD backend both
-        give ~3.33. Refining does not remove it and does not converge towards
-        the closed form::
+        microstrip line carries a delay error that mesh density does not move
+        and can even worsen::
 
-            N=8,  min_layers=3   163.8 ps   eps_eff 3.730
-            N=16, min_layers=3   163.8 ps   eps_eff 3.720
-            N=16, min_layers=6   165.2 ps   eps_eff 3.785   (worse)
-            FDTD                 151.3 ps   eps_eff 3.350
+            N=8,  min_layers=3   163.8 ps
+            N=16, min_layers=3   163.8 ps
+            N=16, min_layers=6   165.2 ps   (worse)
 
-        Refining the far field and refining the near-conductor mesh both fail
-        to move it, so the guided propagation constant is wrong for a reason
-        that is not discretisation. Do not reach for mesh knobs to chase it.
+        Mesh knobs are the wrong tool, but the cause *is* discretisation --
+        element order, not element size. See ``fe_order``.
     mesh_fine_scale : float
         Multiplier on the near-conductor element size. Default ``1.0``.
     min_layers : int
@@ -584,6 +601,9 @@ def _mesh_problem(
         "ref_impedances": {
             str(pm.number): pm.ref_impedance for pm in mesh.port_regions.values()
         },
+        # gap lengths, needed to turn the .pro's field overlaps into wave
+        # amplitudes when ports differ (see _sweep_from_meta)
+        "port_gaps": {str(pm.number): pm.gap for pm in mesh.port_regions.values()},
         "fingerprint": fingerprint,
     }
     (output_path / _MESH_META).write_text(json.dumps(meta, indent=2))
@@ -689,6 +709,43 @@ def _sweep_from_meta(
     npt = len(port_numbers)
     ref_port = port_numbers[0]  # SimData reports V/I/input_power for this port only
 
+    # --- field overlap -> wave amplitude --------------------------------------
+    # The .pro reports xS_n = <E.dir_n> - delta_nk: the reflected/transmitted
+    # *voltage* at port n divided by that port's gap, against an incident
+    # voltage of gap_k. An S-parameter is a ratio of wave amplitudes,
+    # b_n/a_k with b = V/sqrt(Z), so
+    #     S_nk = xS_n * (gap_n / gap_k) * sqrt(Z_k / Z_n).
+    # That factor is 1 on the diagonal and whenever the ports share a gap and
+    # a reference impedance -- true of every shipped example, which is why the
+    # omission went unnoticed -- but not for a 2-port spanning different
+    # substrate thicknesses or reference impedances. Applied here rather than
+    # in compute_sim_data so the stored matrix is a real S-matrix: the rational
+    # sweep interpolates it and fem_sweep judges passivity from its singular
+    # values, both of which need true wave amplitudes.
+    ref_z = meta["ref_impedances"]
+    gaps = meta.get("port_gaps")
+    if gaps is None:
+        # Mesh predates port_gaps, and fem_backend is not part of the mesh
+        # fingerprint so it will not rebuild on its own.
+        wave_norm = np.ones((npt, npt))
+        if verbose and len({ref_z[str(n)] for n in port_numbers}) > 1:
+            console.print(
+                "[warning]fem_mesh.json has no port_gaps (stale mesh) and the "
+                "ports differ in reference impedance; cross-port S-parameters "
+                "are not wave-normalised. Re-run build_mesh.[/warning]"
+            )
+    else:
+        wave_norm = np.array(
+            [
+                [
+                    (gaps[str(n)] / gaps[str(k)])
+                    * math.sqrt(ref_z[str(k)] / ref_z[str(n)])
+                    for k in port_numbers
+                ]
+                for n in port_numbers
+            ]
+        )
+
     # GetDP appends to these Format Table files (write_problem's xs_file =
     # "File >") instead of overwriting, so a sweep's per-solve rows accumulate
     # in one file. Clear any left over from a previous sweep/run first, or
@@ -739,7 +796,7 @@ def _sweep_from_meta(
         for n in port_numbers:
             row = fem_solver.read_complex_rows(outdir / f"xS_{n}.txt", npt)
             for active, value in zip(port_numbers, row, strict=True):
-                s[idx[n], idx[active]] = value
+                s[idx[n], idx[active]] = value * wave_norm[idx[n], idx[active]]
         # V/I of the reference port while it is the driven one.
         v_rows = fem_solver.read_complex_rows(outdir / f"V_{ref_port}.txt", npt)
         i_rows = fem_solver.read_complex_rows(outdir / f"I_{ref_port}.txt", npt)
