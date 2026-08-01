@@ -6,7 +6,7 @@ from a standalone STEP file (CSXCAD polyhedron import -> openEMS FDTD)."""
 from pathlib import Path
 import numpy as np
 from simpleEMS import SimTools
-from simpleEMS.fdtd_import_step import simulate_step_FDTD
+from simpleEMS import simulate_step_FDTD
 # IMPORTS
 
 # PARAMS
@@ -25,7 +25,7 @@ sim_data, nf2ff = simulate_step_FDTD(
     pec=["patch_inset", "feed", "ground"],
     ports={"port_resist_1": {"z0": 50.0, "direction": "z", "number": 1}},
     charac_imp=50.0,
-    FDTD_end_criteria=1e-5,  # match InsetFedPatch_24GHz.py's convergence criterion
+    FDTD_end_criteria=1e-5,
 )
 # SIMULATE
 

@@ -23,7 +23,6 @@ sim_data = simulate_step_FEM(
     pec=["patch_inset", "feed", "ground"],
     ports={"port_resist_1": {"z0": 50.0, "direction": "z", "number": 1}},
     FEM_boundary="silver_muller",
-    FEM_port_type="lumped",
     FEM_num_solve_points=12,
     charac_imp=50.0,
 )

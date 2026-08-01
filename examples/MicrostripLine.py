@@ -45,5 +45,6 @@ sim_data = microstrip.compute_sim_data(sim, ports)
 microstrip.plot_s_param(sim_data.freqs, sim_data.s11, sim_data.s21)
 microstrip.plot_impedance(sim_data.freqs, sim_data.z11)
 microstrip.plot_phase(sim_data.freqs, sim_data.s21)
+microstrip.plot_group_delay(sim_data.freqs, sim_data.s21)
 microstrip.show_plots()
 # PPROCESS
