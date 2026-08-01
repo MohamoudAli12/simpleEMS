@@ -1,29 +1,31 @@
 # Standalone openEMS FDTD Model
 
-Do you have an existing openEMS `.xml` model? if the answer is yes, then you are in the right place.
+This tutorial tells you how to simulate an openEMS model that you have
+already. You do not have to build the geometry again. All the simpleEMS tools
+apply to the results.
 
-This tutorial will show you how to load and simulate your existing model with simpleEMS and take advantage of all
-the tools that simpleEMS offers.
+## Model structure
 
-## Model Structure
+The model must contain the FDTD simulation settings and the CSXCAD properties
+and primitives. The openEMS `Write2XML` method writes a model of this type.
 
-Your model will need to have `FDTD` simulation data along with `CSXCAD` properties and primitives.
+A supported model looks like this:
 
-The supported model should be similar to the below
 ```{literalinclude} ../../../examples/structure.xml
 :language: xml
 ```
-The model should be generated from openEMS `Write2XML` method to have `FDTD` properties.
 
-## Geometry-only models
+## Models with geometry only
 
-A model written by CSXCAD's `Write2XML` instead (root element `<ContinuousStructure>`) carries the
-mesh, materials, metals, lumped ports and probes, but none of the solver settings — the excitation
-waveform, the boundary conditions and the run limits all live in the `<FDTD>` section that only
-openEMS' `Write2XML` writes. Simulating such a file directly raises a `ValueError`.
+The CSXCAD `Write2XML` method writes a different model. The root element of
+that model is `<ContinuousStructure>`. It contains the mesh, the materials, the
+metals, the ports, and the probes, but no simulation settings. The excitation,
+the boundary conditions, and the run limits are all absent.
 
-Use {func}`simpleEMS.fdtd_standalone_model.add_fdtd_setup` to supply those settings and re-write the
-model as a full `<openEMS>` document:
+You cannot simulate such a model. The function stops and shows a `ValueError`.
+
+Use {func}`simpleEMS.fdtd_standalone_model.add_fdtd_setup` to add the
+simulation settings and write a complete model:
 
 ```python
 from simpleEMS import add_fdtd_setup, simulate_model
@@ -36,25 +38,39 @@ xml = add_fdtd_setup(
 sim_data, sim, charac_imp = simulate_model(xml, output_path)
 ```
 
-The result is written to `structure_fdtd.xml` beside the source file unless `output_xml_path` says
-otherwise. An existing `<openEMS>` file is accepted too — its `<FDTD>` section is replaced, so you
-can re-band or re-terminate a model without rebuilding its geometry. The geometry itself is never
-touched: the model must already carry its own mesh and at least one lumped port.
+`add_fdtd_setup` writes the result to `structure_fdtd.xml`, next to the source
+file. Give `output_xml_path` to write it somewhere else.
 
-## Loading and simulating the model
+`add_fdtd_setup` also accepts a complete model and replaces its simulation
+settings. Use this to change the frequency band or the boundary conditions of a
+model. It does not change the geometry, so the model must already contain a
+mesh and a minimum of one port.
 
-To load the model and simulate it we will use {func}`simpleEMS.model.simulate_model` function from simpleEMS.
-This function returns a tuple containing `sim_data` (a `SimData` named tuple with `freqs`, `s11`, `s21`, `z11`, `vswr`, and `input_power`), `sim` (a `SimSetup` named tuple with the `CSX` geometry and `FDTD` solver), and `charac_imp` (the characteristic impedance). All of the returned values are used for postprocessing.
+## Simulate the model
 
-## Postprocessing
-once the simulation is finished, you can use all available tools from simpleEMS's `SimTools` class to postprocess and plot any data
-for visualisation.
+Use {func}`simpleEMS.fdtd_standalone_model.simulate_model` to load the model
+and simulate it. The function returns three items:
+
+- `sim_data` — the S-parameters, the impedance, the VSWR, and the port power
+- `sim` — the CSXCAD geometry and the FDTD solver
+- `charac_imp` — the characteristic impedance
+
+Use all three to examine and export the results.
+
+## Show the results
+
+Use the `SimTools` class to plot and to export the results. The same tools
+apply to a model that you build with simpleEMS.
+
+```{seealso}
+- {class}`simpleEMS.sim_tools.SimTools`
+```
 
 ## Example code
 
-The example code below shows how load, simulate and postprocess an openEMS `structure.xml` model.
+The example below loads `structure.xml`, simulates it, shows the results, and
+writes them to different formats.
 
 ```{literalinclude} ../../../examples/run_model.py
 :language: python
 ```
-

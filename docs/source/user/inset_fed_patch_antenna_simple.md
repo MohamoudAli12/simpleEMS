@@ -1,15 +1,19 @@
 # Inset Fed Patch Antenna Design - simple
-This tutorial will walk you through the process of designing a simple Inset-Fed Patch Antenna using simpleEMS.
+
+This tutorial tells you how to design a simple inset-fed patch antenna with
+simpleEMS.
 
 ```{note}
-You will need to have a working installation of simpleEMS and openEMS.
+You must have simpleEMS and openEMS on your computer. See
+[Installation](installation.md).
 ```
 
-First create a file named `inset_fed_patch_antenna.py` in your favourite editor.
+Make a file with the name `inset_fed_patch_antenna.py`.
 
-## Import Modules
+## Import the modules
 
-import `InsetFedPatchParams`, `InsetFedPatchAntenna` and `setup_simulation` from `simpleEMS`
+Import `InsetFedPatchParams`, `InsetFedPatchAntenna`, and `setup_simulation`
+from `simpleEMS`.
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
@@ -17,24 +21,26 @@ import `InsetFedPatchParams`, `InsetFedPatchAntenna` and `setup_simulation` from
 :end-before: IMPORTS
 ```
 
-This import will give us access to `InsetFedPatchParams` class which holds all parameters that will be used to define the antenna and simulation domain.
+`InsetFedPatchParams` holds the parameters of the antenna and of the simulation.
+
 ```{seealso}
 - {class}`simpleEMS.patch_antenna.InsetFedPatchParams`
-
 ```
 
-We also get access to the `InsetFedPatchAntenna` class which will create the antenna object.
+`InsetFedPatchAntenna` makes the antenna.
+
 ```{seealso}
 - {class}`simpleEMS.patch_antenna.InsetFedPatchAntenna`
 ```
 
-The third imported function is `setup_simulation` function which will create the `CSX` geometry and `FDTD` engine and we can use to setup various aspects of the simulation and `freqs` which define the frequency range of the simulation.
+`setup_simulation` makes the CSXCAD geometry and the FDTD solver. It also sets
+the frequency range of the simulation.
+
 ```{seealso}
 - {func}`simpleEMS.sim_tools.setup_simulation`
 ```
 
-Now we are ready to define all the parameters needed to create the `Inset Fed Patch antenna` and simulation domain.
-## Parameter definition
+## Set the parameters
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
@@ -42,8 +48,10 @@ Now we are ready to define all the parameters needed to create the `Inset Fed Pa
 :end-before: PARAMS
 ```
 
-The `InsetFedPatchParams` class defines parameters such as resonant frequency, substrate properties, and characteristic impedance of the antenna.
-## Setup simulation
+`InsetFedPatchParams` holds the resonant frequency, the properties of the
+substrate, and the characteristic impedance of the antenna.
+
+## Set up the simulation
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
@@ -51,32 +59,32 @@ The `InsetFedPatchParams` class defines parameters such as resonant frequency, s
 :end-before: SETUP
 ```
 
-The `setup_simulation` function is used to setup the `FDTD` simulation engine and `CSXCAD` geometry which will be used to visualise the design. The function returns a `SimSetup` named tuple with `.CSX`, `.FDTD`, and `.freqs` attributes.
+`setup_simulation` prepares the FDTD solver and the CSXCAD geometry. It returns
+a `SimSetup` with the `CSX`, `FDTD`, and `freqs` attributes.
 
-## Antenna Creation
+## Build the antenna
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
 :start-after: BUILD
 :end-before: BUILD
 ```
-The above code creates the `Inset Fed Patch Antenna` and launches `AppCSXCAD` to visualise the antenna structure.
-Now we have finished the antenna structure and it is ready for simulation with `openEMS`.
 
-## openEMS simulation
+These commands build the antenna. Then they show the structure in AppCSXCAD.
+Close the AppCSXCAD window to continue. The antenna is now ready for the
+simulation.
+
+## Run the simulation
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
 :start-after: SIMULATE
 :end-before: SIMULATE
 ```
-This calls the openEMS FDTD engine to run the simulation of the antenna. wait for the simulation to finish.
 
-## Post-processing
+This command runs the openEMS solver. Wait until the solver stops.
 
-Once the simulation is finished, it is time to postprocess the simulation result to see some amazing plots and 3D visualisation.
-The visualisation includes plotting S11, VSWR, Complex Impedance, Radiation Pattern, Directivity and 3D view of radiation pattern.
-
+## Show the results
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
@@ -84,8 +92,13 @@ The visualisation includes plotting S11, VSWR, Complex Impedance, Radiation Patt
 :end-before: PPROCESS
 ```
 
-## External Export
-You can export the model to various format for further processing/visualisation and exporting to other CAD software.
+These commands show the S11 curve, the VSWR, and the complex impedance. They
+also show the radiation pattern and the directivity in 2D and in 3D.
+
+## Export the results
+
+You can write the model to different formats. Use these files in other tools,
+or send them to a PCB manufacturer.
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
@@ -95,10 +108,9 @@ You can export the model to various format for further processing/visualisation 
 
 ## Complete script
 
-Below is the complete script to design, simulate and post-process the inset fed patch antenna.
+The complete script is below. It designs the antenna, runs the simulation, and
+shows the results.
 
 ```{literalinclude} ../../../examples/simple_inset_fed_patch_antenna.py
 :language: python
 ```
-
-Wow! how simple is designing an antenna. 

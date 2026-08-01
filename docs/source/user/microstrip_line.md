@@ -1,15 +1,19 @@
 # Microstrip Line Design - simple
-This tutorial will walk you through the process of designing a simple Microstrip Transmission Line using simpleEMS.
+
+This tutorial tells you how to design a simple microstrip transmission line
+with simpleEMS.
 
 ```{note}
-You will need to have a working installation of simpleEMS and openEMS.
+You must have simpleEMS and openEMS on your computer. See
+[Installation](installation.md).
 ```
 
-First create a file named `microstrip_line.py` in your favourite editor.
+Make a file with the name `microstrip_line.py`.
 
-## Import Modules
+## Import the modules
 
-Import `MicrostripLineParams`, `MicrostripLine` and `setup_simulation` from `simpleEMS`
+Import `MicrostripLineParams`, `MicrostripLine`, and `setup_simulation` from
+`simpleEMS`.
 
 ```{literalinclude} ../../../examples/MicrostripLine.py
 :language: python
@@ -17,24 +21,26 @@ Import `MicrostripLineParams`, `MicrostripLine` and `setup_simulation` from `sim
 :end-before: IMPORTS
 ```
 
-This import will give us access to `MicrostripLineParams` class which holds all parameters that will be used to define the microstrip line and simulation domain.
+`MicrostripLineParams` holds the parameters of the line and of the simulation.
+
 ```{seealso}
 - {class}`simpleEMS.microstrip_line.MicrostripLineParams`
-
 ```
 
-We also get access to the `MicrostripLine` class which will create the microstrip line object.
+`MicrostripLine` makes the line.
+
 ```{seealso}
 - {class}`simpleEMS.microstrip_line.MicrostripLine`
 ```
 
-The third imported function is `setup_simulation` function which will create the `CSX` geometry and `FDTD` engine and we can use to setup various aspects of the simulation.
+`setup_simulation` makes the CSXCAD geometry and the FDTD solver. It also sets
+the frequency range of the simulation.
+
 ```{seealso}
 - {func}`simpleEMS.sim_tools.setup_simulation`
 ```
 
-Now we are ready to define all the parameters needed to create the `Microstrip Line` and simulation domain.
-## Parameter definition
+## Set the parameters
 
 ```{literalinclude} ../../../examples/MicrostripLine.py
 :language: python
@@ -42,9 +48,10 @@ Now we are ready to define all the parameters needed to create the `Microstrip L
 :end-before: PARAMS
 ```
 
-The `MicrostripLineParams` class defines parameters such as target frequency, substrate properties, and characteristic impedance of the microstrip line.
+`MicrostripLineParams` holds the target frequency, the properties of the
+substrate, and the characteristic impedance of the line.
 
-## Setup simulation
+## Set up the simulation
 
 ```{literalinclude} ../../../examples/MicrostripLine.py
 :language: python
@@ -52,9 +59,10 @@ The `MicrostripLineParams` class defines parameters such as target frequency, su
 :end-before: SETUP
 ```
 
-The `setup_simulation` function is used to setup the `FDTD` simulation engine and `CSXCAD` geometry which will be used to visualise the design. The function returns a `SimSetup` named tuple with `.CSX`, `.FDTD`, and `.freqs` attributes.
+`setup_simulation` prepares the FDTD solver and the CSXCAD geometry. It returns
+a `SimSetup` with the `CSX`, `FDTD`, and `freqs` attributes.
 
-## Microstrip Line Creation
+## Build the line
 
 ```{literalinclude} ../../../examples/MicrostripLine.py
 :language: python
@@ -62,11 +70,11 @@ The `setup_simulation` function is used to setup the `FDTD` simulation engine an
 :end-before: BUILD
 ```
 
-The above code creates the `MicrostripLine` and launches `AppCSXCAD` to visualise the microstrip structure.
-The line is constructed by creating the substrate, ground plane, microstrip trace, ports, FDTD mesh, and near-field to far-field transformation.
-Now we have finished the microstrip structure and it is ready for simulation with `openEMS`.
+These commands build the substrate, the ground plane, the trace, the ports, and
+the mesh. Then they show the structure in AppCSXCAD. Close the AppCSXCAD window
+to continue. The line is now ready for the simulation.
 
-## openEMS simulation
+## Run the simulation
 
 ```{literalinclude} ../../../examples/MicrostripLine.py
 :language: python
@@ -74,13 +82,9 @@ Now we have finished the microstrip structure and it is ready for simulation wit
 :end-before: SIMULATE
 ```
 
-This calls the openEMS FDTD engine to run the simulation of the microstrip line. Wait for the simulation to finish.
+This command runs the openEMS solver. Wait until the solver stops.
 
-## Post-processing
-
-Once the simulation is finished, it is time to postprocess the simulation result to see some amazing plots and 3D visualisation.
-The visualisation includes plotting S11, S21, VSWR, Complex Impedance, Radiation Pattern, Directivity and 3D view of radiation pattern.
-
+## Show the results
 
 ```{literalinclude} ../../../examples/MicrostripLine.py
 :language: python
@@ -88,21 +92,15 @@ The visualisation includes plotting S11, S21, VSWR, Complex Impedance, Radiation
 :end-before: PPROCESS
 ```
 
-## External Export
-You can export the model to various format for further processing/visualisation and exporting to other CAD software.
-
-```{literalinclude} ../../../examples/MicrostripLine.py
-:language: python
-:start-after: EXPORT
-:end-before: EXPORT
-```
+These commands show the S11 and the S21 curves, the complex impedance, the
+phase, and the group delay. A good line has a low S11 and a group delay that
+stays constant with frequency.
 
 ## Complete script
 
-Below is the complete script to design, simulate and post-process the microstrip transmission line.
+The complete script is below. It designs the line, runs the simulation, and
+shows the results.
 
 ```{literalinclude} ../../../examples/MicrostripLine.py
 :language: python
 ```
-
-Wow! how simple is designing a microstrip line.

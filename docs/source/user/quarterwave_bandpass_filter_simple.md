@@ -1,15 +1,20 @@
 # Quarter-Wave Bandpass Filter Design - simple
-This tutorial will walk you through the process of designing a simple Quarter-Wave Bandpass Stub Filter using simpleEMS.
+
+This tutorial tells you how to design a simple quarter-wave bandpass stub
+filter with simpleEMS. This filter passes the frequencies in one band and stops
+the others.
 
 ```{note}
-You will need to have a working installation of simpleEMS and openEMS.
+You must have simpleEMS and openEMS on your computer. See
+[Installation](installation.md).
 ```
 
-First create a file named `quarterwave_bandpass_filter.py` in your favourite editor.
+Make a file with the name `quarterwave_bandpass_filter.py`.
 
-## Import Modules
+## Import the modules
 
-Import `QuarterWaveFilterParams`, `BandPassQuarterWaveFilter` and `setup_simulation` from `simpleEMS`
+Import `QuarterWaveFilterParams`, `BandPassQuarterWaveFilter`, and
+`setup_simulation` from `simpleEMS`.
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
@@ -17,24 +22,27 @@ Import `QuarterWaveFilterParams`, `BandPassQuarterWaveFilter` and `setup_simulat
 :end-before: IMPORTS
 ```
 
-This import will give us access to `QuarterWaveFilterParams` class which holds all parameters that will be used to define the filter and simulation domain.
+`QuarterWaveFilterParams` holds the parameters of the filter and of the
+simulation.
+
 ```{seealso}
 - {class}`simpleEMS.quarterwave_stub_filter.QuarterWaveFilterParams`
-
 ```
 
-We also get access to the `BandPassQuarterWaveFilter` class which will create the filter object.
+`BandPassQuarterWaveFilter` makes the filter.
+
 ```{seealso}
 - {class}`simpleEMS.quarterwave_stub_filter.BandPassQuarterWaveFilter`
 ```
 
-The third imported function is `setup_simulation` function which will create the `CSX` geometry and `FDTD` engine and we can use to setup various aspects of the simulation.
+`setup_simulation` makes the CSXCAD geometry and the FDTD solver. It also sets
+the frequency range of the simulation.
+
 ```{seealso}
 - {func}`simpleEMS.sim_tools.setup_simulation`
 ```
 
-Now we are ready to define all the parameters needed to create the `Quarter-Wave Bandpass Filter` and simulation domain.
-## Parameter definition
+## Set the parameters
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
@@ -42,9 +50,10 @@ Now we are ready to define all the parameters needed to create the `Quarter-Wave
 :end-before: PARAMS
 ```
 
-The `QuarterWaveFilterParams` class defines parameters such as centre frequency, bandwidth, filter response type, filter order, and substrate properties of the filter.
+`QuarterWaveFilterParams` holds the centre frequency, the bandwidth, the type
+of response, the order of the filter, and the properties of the substrate.
 
-## Setup simulation
+## Set up the simulation
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
@@ -52,9 +61,10 @@ The `QuarterWaveFilterParams` class defines parameters such as centre frequency,
 :end-before: SETUP
 ```
 
-The `setup_simulation` function is used to setup the `FDTD` simulation engine and `CSXCAD` geometry which will be used to visualise the design. The function returns a `SimSetup` named tuple with `.CSX`, `.FDTD`, and `.freqs` attributes.
+`setup_simulation` prepares the FDTD solver and the CSXCAD geometry. It returns
+a `SimSetup` with the `CSX`, `FDTD`, and `freqs` attributes.
 
-## Filter Creation
+## Build the filter
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
@@ -62,12 +72,15 @@ The `setup_simulation` function is used to setup the `FDTD` simulation engine an
 :end-before: BUILD
 ```
 
-The above code creates the `BandPassQuarterWaveFilter` and launches `AppCSXCAD` to visualise the filter structure.
-The filter is constructed by creating the substrate, ground plane, series transmission line sections, shunt stubs, shorted shunt ends, ports, and FDTD mesh.
-Unlike the band-stop variant, the band-pass filter uses shorted shunt stubs, created via the `create_shunt_line_short()` method.
-Now we have finished the filter structure and it is ready for simulation with `openEMS`.
+These commands build the substrate, the ground plane, the series lines, the
+stubs, the ports, and the mesh. Then they show the structure in AppCSXCAD.
+Close the AppCSXCAD window to continue. The filter is now ready for the
+simulation.
 
-## openEMS simulation
+The bandpass filter has a short circuit at the end of each stub. The bandstop
+filter does not. `create_shunt_line_short()` makes this short circuit.
+
+## Run the simulation
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
@@ -75,13 +88,9 @@ Now we have finished the filter structure and it is ready for simulation with `o
 :end-before: SIMULATE
 ```
 
-This calls the openEMS FDTD engine to run the simulation of the filter. Wait for the simulation to finish.
+This command runs the openEMS solver. Wait until the solver stops.
 
-## Post-processing
-
-Once the simulation is finished, it is time to postprocess the simulation result to see the filter response.
-The visualisation includes plotting S11 and S21 to observe the passband characteristic.
-
+## Show the results
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
@@ -89,8 +98,13 @@ The visualisation includes plotting S11 and S21 to observe the passband characte
 :end-before: PPROCESS
 ```
 
-## External Export
-You can export the model to Gerber format for PCB fabrication and to Touchstone format for use in other EDA tools.
+These commands show the S11 and the S21 curves. Use them to examine the
+passband of the filter.
+
+## Export the results
+
+You can write the model to the Gerber format for a PCB manufacturer. You can
+also write the results to the Touchstone format for other EDA tools.
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
@@ -100,10 +114,9 @@ You can export the model to Gerber format for PCB fabrication and to Touchstone 
 
 ## Complete script
 
-Below is the complete script to design, simulate and post-process the quarter-wave bandpass stub filter.
+The complete script is below. It designs the filter, runs the simulation, and
+shows the results.
 
 ```{literalinclude} ../../../examples/BandPassQuarterWaveFilter.py
 :language: python
 ```
-
-Wow! how simple is designing a filter.

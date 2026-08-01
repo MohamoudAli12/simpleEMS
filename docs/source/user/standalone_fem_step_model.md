@@ -1,21 +1,19 @@
 # Standalone FEM STEP Model
 
-Do you have an existing `.step` CAD file and want to simulate it directly with
-the FEM (GetDP) backend, without building a CSXCAD geometry first? Then you
-are in the right place.
+This tutorial tells you how to simulate a STEP CAD file with the FEM (GetDP)
+backend. You do not have to build a CSXCAD geometry first.
 
-This tutorial shows how to feed a raw STEP file straight into simpleEMS's FEM
-solver and postprocess the results with the same `SimTools` used by the FDTD
-workflows.
+The FDTD backend has a related function. See
+[Standalone FDTD STEP Model](standalone_fdtd_step_model.md).
 
 ```{note}
-This backend needs the `getdp` binary on your `PATH`. See
-[Installation](installation.md) for how to install it.
+This backend needs the `getdp` program on your `PATH`. See
+[Installation](installation.md).
 ```
 
-First create a file named `inset_fed_patch_step_fem.py` in your favourite editor.
+Make a file with the name `inset_fed_patch_step_fem.py`.
 
-## Import Modules
+## Import the modules
 
 ```{literalinclude} ../../../examples/InsetFedPatch_24GHz_StepFEM.py
 :language: python
@@ -23,43 +21,42 @@ First create a file named `inset_fed_patch_step_fem.py` in your favourite editor
 :end-before: IMPORTS
 ```
 
-`simulate_step_FEM` comes from the FEM backend, and `SimTools` is the same
-postprocessing/plotting toolkit used across simpleEMS.
+`simulate_step_FEM` reads the STEP file and runs the FEM solver. `SimTools`
+shows and exports the results. All the simpleEMS workflows use `SimTools`.
 
 ```{seealso}
 - {func}`simpleEMS.fem_backend.simulate_step_FEM`
 ```
 
-## Model Structure
+## Model structure
 
-Unlike the CSXCAD-driven tutorials, a standalone STEP model has no
-`ConductingSheet`/`Metal`/`Material`/`LumpedElement` properties to read roles
-from -- each solid is just a named shape in the CAD file. Roles are assigned
-by matching each solid's name against the arguments you pass to
-{func}`simpleEMS.fem_backend.simulate_step_FEM`:
+A STEP file contains only named solids. It contains no material data and no
+port data. You must tell the function what each solid is.
 
-- `dielectrics={name: (eps_r, tan_d)}` -- dielectric volumes (e.g. the substrate)
-- `pec=[name, ...]` -- perfect-conductor solids
-- `lossy_conductor={name: sigma}` -- lossy (surface-impedance) conductors
-- `ports={name: {"z0": ..., "direction": "x|y|z", "number": ...}}` -- excitation ports
+Four arguments give the role of each solid:
 
-Any solid not covered by these overrides falls back to a name-based guess
-(e.g. a name containing `"substrate"` is guessed as a dielectric, `"ground"`
-or `"patch"` as PEC, `"port"` as a port) -- but explicit overrides always win,
-so naming your solids sensibly in the CAD tool is enough to skip most of the
-bookkeeping.
+- `dielectrics={name: (eps_r, tan_d)}` — the dielectric solids, for example the
+  substrate
+- `pec=[name, ...]` — the solids that are perfect conductors
+- `lossy_conductor={name: sigma}` — the conductors that have losses
+- `ports={name: {"z0": ..., "direction": "x|y|z", "number": ...}}` — the ports
 
-The example below uses a STEP file with five named solids:
+The FEM backend also reads the name of each solid that these arguments do not
+name. A name that contains `substrate` becomes a dielectric. A name that
+contains `ground` or `patch` becomes a perfect conductor. A name that contains
+`port` becomes a port. The four arguments above always win.
 
-| Solid          | Role assigned via     | Meaning                     |
-|----------------|------------------------|------------------------------|
-| `substrate`    | `dielectrics`          | dielectric substrate         |
-| `patch_inset`  | `pec`                  | radiating patch              |
-| `feed`         | `pec`                  | inset feed line               |
-| `ground`       | `pec`                  | ground plane                 |
-| `port_resist_1`| `ports`                | lumped excitation port       |
+The example uses a STEP file with five named solids:
 
-## Parameter definition
+| Solid           | Role from     | Function              |
+|-----------------|---------------|-----------------------|
+| `substrate`     | `dielectrics` | dielectric substrate  |
+| `patch_inset`   | `pec`         | radiant patch         |
+| `feed`          | `pec`         | inset feed line       |
+| `ground`        | `pec`         | ground plane          |
+| `port_resist_1` | `ports`       | lumped port           |
+
+## Set the parameters
 
 ```{literalinclude} ../../../examples/InsetFedPatch_24GHz_StepFEM.py
 :language: python
@@ -67,10 +64,10 @@ The example below uses a STEP file with five named solids:
 :end-before: PARAMS
 ```
 
-`STEP_FILE` points at the CAD file to mesh and solve, and `freqs` is the dense
-output frequency grid centred on the resonant frequency.
+`STEP_FILE` gives the path to the CAD file. `freqs` gives the frequency points
+of the results.
 
-## Simulating the model
+## Simulate the model
 
 ```{literalinclude} ../../../examples/InsetFedPatch_24GHz_StepFEM.py
 :language: python
@@ -78,17 +75,26 @@ output frequency grid centred on the resonant frequency.
 :end-before: SIMULATE
 ```
 
-{func}`simpleEMS.fem_backend.simulate_step_FEM` meshes the STEP geometry,
-generates the GetDP problem, runs the adaptive frequency sweep, and reads the
-results back -- all in one call. Solver/mesh tuning (outer boundary type,
-symmetry, element order, port type, mesh density, number of adaptive solve
-points, ...) is set directly via the flat `FEM_*` keyword arguments, the same
-way `SimParams` exposes them -- no separate options object to build. It
-returns a single `SimData` named tuple with `freqs`, `s11`, `s21` (`None` for
-a single-port problem), `z11`, `vswr`, `input_power`, `port_voltage`,
-`port_current`, and `ref_impedance`.
+One call does all of these steps:
 
-## Postprocessing
+1. It reads the named solids from the STEP file.
+2. It makes the mesh.
+3. It runs the GetDP solver at a small number of frequencies.
+4. It calculates the results at all the frequencies you asked for.
+
+The `FEM_*` arguments control the solver and the mesh. They set the outer
+boundary, the symmetry plane, the element order, the air padding, the density
+of the mesh, and the number of frequencies to solve at. `SimParams` gives the
+same settings the same names.
+
+```{seealso}
+- {class}`simpleEMS.fem_backend.FEMOptions`
+```
+
+The function returns the S-parameters, the impedance, the VSWR, and the port
+power in one `SimData`.
+
+## Show the results
 
 ```{literalinclude} ../../../examples/InsetFedPatch_24GHz_StepFEM.py
 :language: python
@@ -96,17 +102,18 @@ a single-port problem), `z11`, `vswr`, `input_power`, `port_voltage`,
 :end-before: PPROCESS
 ```
 
-This plots S11, the Smith chart, VSWR, and input impedance with the same
-`SimTools` methods used across simpleEMS. For radiation patterns, get the
-NF2FF adapter from `SimTools.create_nf2ff()` and feed it into the usual
-`plot_2d_directivity` / `plot_2d_rad_pattern` / `plot_3d_directivity` /
-`plot_3d_gain` / `plot_3d_power` helpers.
+These commands show the S11 curve, the Smith chart, the VSWR, and the input
+impedance.
+
+To show a radiation pattern, first get the far-field object from
+`SimTools.create_nf2ff()`. Then give it to the radiation plots, for example
+`plot_2d_directivity` or `plot_3d_gain`.
 
 ```{seealso}
 - {class}`simpleEMS.sim_tools.SimTools`
 ```
 
-## External Export
+## Export the results
 
 ```{literalinclude} ../../../examples/InsetFedPatch_24GHz_StepFEM.py
 :language: python
@@ -114,14 +121,15 @@ NF2FF adapter from `SimTools.create_nf2ff()` and feed it into the usual
 :end-before: EXPORT
 ```
 
-Exports the S11 results to a Touchstone file for use in other RF tools.
+This command writes the S11 results to a Touchstone file. Other RF tools can
+read this file.
 
 ## Complete script
 
-Below is the complete script: it simulates an inset-fed patch antenna at
-24.125 GHz directly from `structure.step`, then plots S11, the Smith chart,
-VSWR, input impedance, and the 2D/3D radiation pattern before exporting a
-Touchstone file.
+The complete script is below. It simulates an inset-fed patch antenna at
+24.125 GHz directly from `structure.step`. Then it shows the S11 curve, the
+Smith chart, the VSWR, the input impedance, and the radiation patterns. At the
+end it writes a Touchstone file.
 
 ```{literalinclude} ../../../examples/InsetFedPatch_24GHz_StepFEM.py
 :language: python

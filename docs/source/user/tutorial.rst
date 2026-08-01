@@ -10,5 +10,6 @@ Tutorial
     quarterwave_bandpass_filter_simple
     microstrip_line
     standalone_model
+    standalone_fdtd_step_model
     standalone_fem_step_model
 
