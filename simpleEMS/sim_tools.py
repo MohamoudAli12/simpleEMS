@@ -431,6 +431,11 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
+        # openEMS's Run() chdirs into this path and then asserts that it
+        # matches os.getcwd(), so a relative path never compares equal and
+        # trips its internal "this should never happen" check.
+        output_path = Path(output_path).resolve()
+
         if sim.backend_engine == "FEM":
             from . import fem_backend
 
