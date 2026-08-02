@@ -163,8 +163,10 @@ def rational_sweep(
     zg = zof(fgrid)
 
     # Seed with a few uniform full solves to give AAA something to fit.
+    # A single-point grid has nothing to spread across: np.linspace(f, f, 5)
+    # would solve the same frequency five times and discard four of them.
     solved: dict[float, NDArray] = {}
-    n_init = min(5, num_solves)
+    n_init = min(5, num_solves) if fgrid.size >= 2 else 1
     for f in np.linspace(fmin, fmax, n_init):
         solved[float(f)] = solve_at(float(f))
         if verbose:
