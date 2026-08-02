@@ -206,8 +206,11 @@ def rational_sweep(
 
     # Greedily add solves up to the budget, stopping early only if the model has
     # essentially stopped changing (tol > 0). Each iteration = one FEM solve.
+    #
+    # pick_next bisects intervals between output points, so it needs at least
+    # two of them; with a single-point grid the seeded model is already final.
     prev = build_model()
-    while len(solved) < num_solves:
+    while len(solved) < num_solves and fgrid.size >= 2:
         fnext = pick_next(prev)
         if fnext in solved:
             break
