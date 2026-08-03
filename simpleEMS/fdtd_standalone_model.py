@@ -403,7 +403,7 @@ def simulate_model(
         freqs = np.asarray(freqs, dtype=float)
 
     FDTD = openEMS()
-    FDTD.ReadFromXML(structure_xml_path)
+    FDTD.ReadFromXML(str(structure_xml_path))
     _CSX = FDTD.GetCSX()
 
     with tempfile.NamedTemporaryFile(suffix=".xml") as tmp:
