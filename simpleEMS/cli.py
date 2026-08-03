@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import shutil
+import site
 import subprocess
 import sys
 import tarfile
@@ -94,7 +95,10 @@ def _check_package_import(import_name, pip_name):
             except importlib.metadata.PackageNotFoundError:
                 version = "unknown"
         return True, version, None
-    except ImportError as error:
+    except Exception as error:
+        # Not just ImportError: a compiled extension that is installed but
+        # cannot dlopen its shared library raises OSError, and reporting that
+        # as "not installed" is more useful than a traceback out of the CLI.
         return False, None, str(error).split("(")[0].strip()
 
 
@@ -181,6 +185,12 @@ def _run_subprocess(cmd, cwd, dry_run):
 
 
 def _add_dir_to_path(bin_dir, dry_run, extra_env_vars=None):
+    # The persistent edit below -- rc file or registry -- only reaches future
+    # shells. Put the directory on this process's PATH as well, so the health
+    # check that runs straight after an install sees what was just installed.
+    if not dry_run:
+        _prepend_to_process_path(bin_dir)
+
     if sys.platform == "win32":
         import ctypes
         import winreg
@@ -241,6 +251,19 @@ def _add_dir_to_path(bin_dir, dry_run, extra_env_vars=None):
             return
     console.print("  [yellow]No shell rc file found. Add to your PATH manually:[/]")
     console.print(f'    export PATH="{bin_dir}:$PATH"')
+
+
+def _prepend_to_process_path(bin_dir):
+    """Put ``bin_dir`` on this process's PATH if it is not already there."""
+    bin_dir = str(bin_dir)
+    current = os.environ.get("PATH", "")
+    if bin_dir not in current.split(os.pathsep):
+        os.environ["PATH"] = bin_dir + os.pathsep + current if current else bin_dir
+
+
+def _in_virtualenv():
+    """True when the running interpreter is inside a venv/virtualenv."""
+    return sys.prefix != sys.base_prefix
 
 
 def _download_with_progress(url, dest):
@@ -408,7 +431,23 @@ def _install_unix(prefix, dry_run):
     console.print()
     console.print("Building openEMS (this may take 10-30 minutes)...")
     prefix.mkdir(parents=True, exist_ok=True)
-    _run_subprocess(["./update_openEMS.sh", str(prefix), "--python"], repo_dir, dry_run)
+    # The build script installs the Python extensions into a venv of its own
+    # under <prefix> unless one is already active. That venv is not the
+    # environment simpleEMS is running in, so the build would report success
+    # while `import openEMS` still fails here. Install into the active venv if
+    # there is one, and into the user site directory otherwise.
+    venv_mode = "auto" if _in_virtualenv() else "disable"
+    _run_subprocess(
+        [
+            "./update_openEMS.sh",
+            str(prefix),
+            "--python",
+            "--python-venv-mode",
+            venv_mode,
+        ],
+        repo_dir,
+        dry_run,
+    )
     console.print("  ✅ Build complete")
     console.print()
     _add_dir_to_path(prefix / "bin", dry_run)
@@ -423,6 +462,11 @@ def _install_python_bindings_only(prefix, dry_run):
     repo_dir = _ensure_repo(cache_dir, dry_run)
     csxcad_path = repo_dir / "CSXCAD" / "python"
     openems_path = repo_dir / "openEMS" / "python"
+    # Both setup.py files locate the headers and libraries of the existing C++
+    # install through these variables; without them the extension build guesses
+    # from VIRTUAL_ENV and fails when the C++ side lives somewhere else.
+    os.environ["CSXCAD_INSTALL_PATH"] = str(prefix)
+    os.environ["OPENEMS_INSTALL_PATH"] = str(prefix)
     if dry_run:
         console.print(f"  [yellow]Would install:[/] {csxcad_path}")
         console.print(f"  [yellow]Would install:[/] {openems_path}")
@@ -500,11 +544,6 @@ def _install_getdp_archive(prefix, version, dry_run):
     bin_dir = binary.parent
     _add_dir_to_path(bin_dir, dry_run)
 
-    bin_dir_str = str(bin_dir)
-    current_path = os.environ.get("PATH", "")
-    if bin_dir_str not in current_path.split(os.pathsep):
-        os.environ["PATH"] = bin_dir_str + os.pathsep + current_path
-
     return binary
 
 
@@ -523,8 +562,23 @@ def _print_summary(ok, prefix, label="openEMS"):
     raise typer.Exit(code=0 if ok else 1)
 
 
+def _refresh_import_paths():
+    """Make packages installed during this run importable by this process.
+
+    The extensions are pip-installed after the interpreter started. When they
+    land in the user site directory and that directory did not exist at
+    startup, it is not on ``sys.path`` at all, so the health check below would
+    report a perfectly good install as missing.
+    """
+    user_site = site.getusersitepackages()
+    if os.path.isdir(user_site) and user_site not in sys.path:
+        site.addsitedir(user_site)
+    importlib.invalidate_caches()
+
+
 def _verify_installation():
     console.print("Running health check...")
+    _refresh_import_paths()
     all_ok = True
     for import_name, label in [
         ("openEMS", "openEMS Python API"),
@@ -536,16 +590,22 @@ def _verify_installation():
         else:
             console.print(f"  ❌ {label}: {error}")
             all_ok = False
-    for binary, label in [
-        ("AppCSXCAD", "AppCSXCAD binary"),
-        ("openEMS", "openEMS solver"),
+    for binary, label, required in [
+        # AppCSXCAD is the Qt geometry viewer. It is not built when the Qt
+        # development packages are missing, which is the normal state of a
+        # headless machine -- and an install without it still simulates, so it
+        # is reported but does not make the install a failure.
+        ("AppCSXCAD", "AppCSXCAD binary", False),
+        ("openEMS", "openEMS solver", True),
     ]:
         ok, path, error = _check_system_binary(binary)
         if ok:
             console.print(f"  ✅ {label}: {path}")
-        else:
+        elif required:
             console.print(f"  ❌ {label}: {error}")
             all_ok = False
+        else:
+            console.print(f"  ⚠️  {label}: {error} (optional, GUI viewer)")
     console.print()
     return all_ok
 

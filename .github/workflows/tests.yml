@@ -33,6 +33,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # The gmsh wheel links against libGLU and the X client libraries and
+      # dlopen()s them at import time, none of which the runner image ships.
+      # Without them `import gmsh` raises OSError and every module that reaches
+      # the FEM meshing code fails to collect. libglu1-mesa and libxft2 pull in
+      # libGL/libX11 and libXrender/libfontconfig respectively.
+      - name: Install the system libraries gmsh links against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglu1-mesa libxcursor1 libxinerama1 libxft2
+
       - name: Install package with dev dependencies
         run: pip install -e ".[dev]"
 
@@ -84,7 +95,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git libhdf5-dev \
             libvtk9-dev libboost-all-dev libcgal-dev libtinyxml-dev \
-            qtbase5-dev libvtk9-qt-dev
+            qtbase5-dev libvtk9-qt-dev \
+            libglu1-mesa libxcursor1 libxinerama1 libxft2
 
       - name: Cache the openEMS install
         id: cache-openems
@@ -103,6 +115,18 @@ jobs:
       - name: Install package
         run: pip install -e ".[dev]"
 
+      # Both installers short-circuit when their binary is already on PATH, so
+      # a restored cache is only worth anything if PATH is set before they run.
+      # The directories are harmless to add when the cache missed and they do
+      # not exist yet.
+      - name: Put the cached solver binaries on PATH
+        run: |
+          echo "$HOME/opt/openEMS/bin" >> "$GITHUB_PATH"
+          if [ -d "$HOME/opt/getdp" ]; then
+            find "$HOME/opt/getdp" -name getdp -type f -printf '%h\n' -quit \
+              >> "$GITHUB_PATH"
+          fi
+
       - name: Install openEMS and CSXCAD
         run: simpleems install openems --prefix "$HOME/opt/openEMS"
 
@@ -110,9 +134,10 @@ jobs:
         if: steps.cache-getdp.outputs.cache-hit != 'true'
         run: simpleems install getdp --prefix "$HOME/opt/getdp"
 
-      - name: Put the solver binaries on PATH
+      # getdp unpacks into a versioned directory, so its bin directory is only
+      # known after the install above has run.
+      - name: Put the installed getdp on PATH
         run: |
-          echo "$HOME/opt/openEMS/bin" >> "$GITHUB_PATH"
           find "$HOME/opt/getdp" -name getdp -type f -printf '%h\n' -quit \
             >> "$GITHUB_PATH"
 
@@ -122,16 +147,20 @@ jobs:
       # Anything whose dependency is still genuinely missing skips itself
       # rather than failing the job.
       #
-      # Deliberately NOT run under --cov. Something in the CSXCAD/openEMS
-      # bindings corrupts memory once enough structures have been built and
-      # torn down in one process: a property comes back whose Python wrapper
-      # class disagrees with its own GetTypeString(), and the test that reads
-      # it dies on a missing method. Coverage tracing perturbs allocation
-      # timing enough to make this far more likely -- measured at 3 failures
-      # in 15 instrumented runs of tests/test_fdtd_standalone_model.py, versus
-      # none in 12 uninstrumented ones. The root cause is below the Python
-      # layer and is not fixed here. The `unit` job above reports coverage for
-      # everything that does not need CSXCAD, and is stable.
+      # Deliberately NOT run under --cov. This job fails intermittently once
+      # enough structures have been built and torn down in one process: a
+      # property comes back whose Python wrapper class disagrees with its own
+      # GetTypeString(), and the test that reads it dies on a missing method.
+      # The cause is in the CSXCAD bindings, which cache one wrapper per
+      # property keyed by the raw C++ pointer (CSProperties._instances) and
+      # never evict an entry when the property is freed -- so a property
+      # allocated on a dead one's address is handed the dead one's wrapper.
+      # That is an upstream fix, not one to make here. Coverage tracing
+      # perturbs allocation timing enough to make it far more likely --
+      # measured at 3 failures in 15 instrumented runs of
+      # tests/test_fdtd_standalone_model.py, versus none in 12 uninstrumented
+      # ones. The `unit` job above reports coverage for everything that does
+      # not need CSXCAD, and is stable.
       - name: Run the full suite
         env:
           MPLBACKEND: Agg

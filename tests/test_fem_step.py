@@ -15,10 +15,24 @@ solve stages get one test each at the bottom.
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.needs_cadquery
+pytestmark = [pytest.mark.needs_cadquery, pytest.mark.needs_csxcad]
 
 pytest.importorskip("cadquery")
-pytest.importorskip("gmsh")
+
+# The STEP path itself needs no CSXCAD geometry, but fem_backend imports the
+# bindings at module scope for the paths that do, so this module cannot even be
+# collected without them.
+pytest.importorskip("CSXCAD")
+pytest.importorskip("openEMS")
+
+# gmsh dlopen()s libGLU at import time, so on a host without it the import
+# raises OSError rather than ImportError. importorskip only catches the latter,
+# which turns a missing system library into a collection error for the whole
+# module; skip on any import failure instead.
+try:
+    import gmsh  # noqa: F401
+except Exception as error:  # pragma: no cover - depends on the host
+    pytest.skip(f"gmsh is not importable: {error}", allow_module_level=True)
 
 import cadquery as cq  # noqa: E402
 

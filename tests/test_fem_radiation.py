@@ -21,9 +21,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from simpleEMS import fem_radiation
-from simpleEMS.fem_materials import C0
-from simpleEMS.fem_radiation import (
+# ``fem_radiation`` imports gmsh, which dlopen()s libGLU at import time. On a
+# host without it -- a bare CI image, say -- that surfaces as OSError rather
+# than ImportError, so importorskip does not catch it and the whole module
+# fails to collect. Skip on any import failure instead.
+try:
+    import gmsh  # noqa: F401
+except Exception as error:  # pragma: no cover - depends on the host
+    pytest.skip(f"gmsh is not importable: {error}", allow_module_level=True)
+
+from simpleEMS import fem_radiation  # noqa: E402
+from simpleEMS.fem_materials import C0  # noqa: E402
+from simpleEMS.fem_radiation import (  # noqa: E402
     FEMFarField,
     FEMNF2FF,
     _check_farfield_margin,
@@ -76,6 +85,7 @@ class TestFEMFarField:
         for name in ("E_norm", "Dmax", "Prad", "P_rad", "theta", "phi", "Ploss"):
             assert hasattr(ff, name)
 
+    @pytest.mark.needs_csxcad
     def test_ploss_is_the_fem_only_extra(self):
         """openEMS's nf2ff has no Ploss; the FEM one adds it so gain can be
         de-rated by the radiation efficiency."""
@@ -946,6 +956,7 @@ def test_a_fresh_calculator_has_an_empty_cache():
     assert FEMNF2FF()._cache == {}
 
 
+@pytest.mark.needs_csxcad
 def test_create_nf2ff_returns_the_fem_adapter_without_a_sim():
     """The standalone STEP-FEM workflow has no SimSetup to dispatch on."""
     from simpleEMS.sim_tools import SimTools

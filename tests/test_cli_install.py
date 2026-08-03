@@ -93,15 +93,20 @@ def spy_subprocess(monkeypatch):
 
 @pytest.fixture
 def spy_path_edit(monkeypatch):
-    """Record ``_add_dir_to_path`` calls instead of editing a profile."""
+    """Record ``_add_dir_to_path`` calls instead of editing a profile.
+
+    The process-PATH half of the real function is kept: it touches nothing
+    outside this interpreter, and the installers rely on it so that the health
+    check they run at the end can see what they just installed.
+    """
     calls = []
-    monkeypatch.setattr(
-        cli,
-        "_add_dir_to_path",
-        lambda bin_dir, dry_run, extra_env_vars=None: calls.append(
-            (bin_dir, dry_run, extra_env_vars)
-        ),
-    )
+
+    def record(bin_dir, dry_run, extra_env_vars=None):
+        calls.append((bin_dir, dry_run, extra_env_vars))
+        if not dry_run:
+            cli._prepend_to_process_path(bin_dir)
+
+    monkeypatch.setattr(cli, "_add_dir_to_path", record)
     return calls
 
 
@@ -152,6 +157,12 @@ class TestFindExtractedBinary:
 # ---------------------------------------------------------------------
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell-profile branch")
 class TestAddDirToPath:
+    @pytest.fixture(autouse=True)
+    def _isolated_path(self, monkeypatch):
+        """The function edits this process's PATH as well as the rc file, so
+        every test in the class gets a PATH of its own to edit."""
+        monkeypatch.setenv("PATH", "/usr/bin")
+
     def test_appends_the_export_line(self, home):
         rc = home / ".bashrc"
         rc.write_text("# existing config\n")
@@ -225,6 +236,35 @@ class TestAddDirToPath:
         cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
 
         assert rc.read_text().endswith("\n")
+
+    def test_the_running_process_gets_the_directory_too(self, home):
+        """The rc file only helps the next shell; the health check that runs
+        seconds later in this process needs the directory now."""
+        (home / ".bashrc").write_text("")
+
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
+
+        assert os.environ["PATH"].split(os.pathsep)[0] == "/opt/getdp/bin"
+
+    def test_the_process_path_is_updated_without_an_rc_file(self, home):
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
+
+        assert "/opt/getdp/bin" in os.environ["PATH"].split(os.pathsep)
+
+    def test_the_process_path_is_not_duplicated(self, home):
+        (home / ".bashrc").write_text("")
+
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
+
+        assert os.environ["PATH"].split(os.pathsep).count("/opt/getdp/bin") == 1
+
+    def test_dry_run_leaves_the_process_path_alone(self, home):
+        (home / ".bashrc").write_text("")
+
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=True)
+
+        assert os.environ["PATH"] == "/usr/bin"
 
 
 # ---------------------------------------------------------------------
@@ -628,6 +668,31 @@ class TestInstallUnix:
 
         assert "--python" in spy_subprocess[-1][0]
 
+    def test_outside_a_venv_the_bindings_go_to_the_user_site(
+        self, tmp_path, home, monkeypatch, spy_subprocess, spy_path_edit
+    ):
+        """The build script otherwise makes a venv of its own under the prefix
+        and installs into that, which the interpreter running simpleEMS never
+        activates -- the build reports success and `import openEMS` still
+        fails."""
+        monkeypatch.setattr(cli, "_in_virtualenv", lambda: False)
+
+        cli._install_unix(tmp_path / "prefix", dry_run=False)
+
+        build_cmd = spy_subprocess[-1][0]
+        assert "--python-venv-mode" in build_cmd
+        assert build_cmd[build_cmd.index("--python-venv-mode") + 1] == "disable"
+
+    def test_inside_a_venv_the_bindings_go_to_that_venv(
+        self, tmp_path, home, monkeypatch, spy_subprocess, spy_path_edit
+    ):
+        monkeypatch.setattr(cli, "_in_virtualenv", lambda: True)
+
+        cli._install_unix(tmp_path / "prefix", dry_run=False)
+
+        build_cmd = spy_subprocess[-1][0]
+        assert build_cmd[build_cmd.index("--python-venv-mode") + 1] == "auto"
+
     def test_creates_the_prefix(self, tmp_path, home, spy_subprocess, spy_path_edit):
         prefix = tmp_path / "prefix"
 
@@ -678,6 +743,29 @@ class TestInstallBindingsOnly:
 
         out = capsys.readouterr().out
         assert "Would install" in out
+
+    def test_the_extension_build_is_pointed_at_the_prefix(
+        self, tmp_path, home, monkeypatch, spy_subprocess
+    ):
+        """Both setup.py files find the headers and libraries of the existing
+        C++ install through these variables. Without them the build guesses
+        from VIRTUAL_ENV and fails wherever the C++ side actually lives."""
+        monkeypatch.delenv("CSXCAD_INSTALL_PATH", raising=False)
+        monkeypatch.delenv("OPENEMS_INSTALL_PATH", raising=False)
+        seen = {}
+        monkeypatch.setattr(
+            cli,
+            "_pip_install",
+            lambda path, dry, force=False: seen.update(
+                CSXCAD=os.environ.get("CSXCAD_INSTALL_PATH"),
+                openEMS=os.environ.get("OPENEMS_INSTALL_PATH"),
+            ),
+        )
+        prefix = tmp_path / "prefix"
+
+        cli._install_python_bindings_only(prefix, dry_run=False)
+
+        assert seen == {"CSXCAD": str(prefix), "openEMS": str(prefix)}
 
 
 # ---------------------------------------------------------------------
@@ -891,6 +979,41 @@ class TestSummaryAndVerification:
         )
         monkeypatch.setattr(
             cli, "_check_system_binary", lambda name: (False, None, "not found")
+        )
+
+        assert cli._verify_installation() is False
+
+    def test_a_missing_AppCSXCAD_does_not_fail_the_install(self, monkeypatch, capsys):
+        """AppCSXCAD is the Qt viewer and is not built on a machine without the
+        Qt development packages -- a headless install still simulates."""
+        monkeypatch.setattr(
+            cli, "_check_package_import", lambda imp, pip: (True, "1.0", None)
+        )
+        monkeypatch.setattr(
+            cli,
+            "_check_system_binary",
+            lambda name: (
+                (False, None, "not found in PATH")
+                if name == "AppCSXCAD"
+                else (True, f"/usr/bin/{name}", None)
+            ),
+        )
+
+        assert cli._verify_installation() is True
+        assert "optional" in capsys.readouterr().out
+
+    def test_verification_still_fails_on_a_missing_solver(self, monkeypatch):
+        monkeypatch.setattr(
+            cli, "_check_package_import", lambda imp, pip: (True, "1.0", None)
+        )
+        monkeypatch.setattr(
+            cli,
+            "_check_system_binary",
+            lambda name: (
+                (False, None, "not found in PATH")
+                if name == "openEMS"
+                else (True, f"/usr/bin/{name}", None)
+            ),
         )
 
         assert cli._verify_installation() is False

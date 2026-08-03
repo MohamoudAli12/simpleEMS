@@ -7,9 +7,10 @@ silently until somebody runs one by hand. (That is not hypothetical: commit
 
 Two tiers here:
 
-* Static checks, which run everywhere and take milliseconds. Every example
-  must compile, and every name it imports from ``simpleEMS`` or calls on
-  ``SimTools`` must actually exist.
+* Static checks, which take milliseconds. Every example must compile, and
+  every name it imports from ``simpleEMS`` or calls on ``SimTools`` must
+  actually exist. Parsing runs anywhere; the two checks that have to import
+  what they found need the CSXCAD bindings and say so.
 * A ``slow`` execution pass that runs each script with the solver and the GUI
   stubbed out, so all the geometry building, plotting and exporting really
   happens. Scripts are copied to a temp directory first, because they write
@@ -85,12 +86,18 @@ class TestStatic:
                 f"{path.name} imports {name!r}, which simpleEMS does not export"
             )
 
+    @pytest.mark.needs_csxcad
     def test_every_imported_name_resolves(self, path):
         """``__all__`` agreeing is not enough -- the lazy loader has to be able
-        to actually produce the object."""
+        to actually produce the object.
+
+        Producing it imports the submodule it lives in, which is why this one
+        needs the CSXCAD bindings while the checks around it do not.
+        """
         for name in simpleems_imports(parsed(path)):
             assert getattr(simpleEMS, name) is not None
 
+    @pytest.mark.needs_csxcad
     def test_simtools_methods_exist(self, path):
         from simpleEMS.sim_tools import SimTools
 
