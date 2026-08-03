@@ -258,21 +258,38 @@ def _download_with_progress(url, dest):
                 progress.update(task, advance=len(chunk))
 
 
-def _pip_install(package_path, dry_run):
+def _pip_install(package_path, dry_run, force: bool = False):
     if shutil.which("uv") is not None:
-        cmd = ["uv", "pip", "install", "--python", sys.executable, str(package_path)]
+        cmd = ["uv", "pip", "install", "--python", sys.executable]
     else:
-        cmd = [sys.executable, "-m", "pip", "install", str(package_path)]
+        cmd = [sys.executable, "-m", "pip", "install"]
+    if force:
+        cmd.append("--force-reinstall")
+    cmd.append(str(package_path))
     _run_subprocess(cmd, None, dry_run)
 
 
-def _install_windows(prefix, version, dry_run):
+def _install_windows(prefix, version, dry_run, force: bool = False):
     cache_dir = Path.home() / ".cache" / "simpleems"
     cache_dir.mkdir(parents=True, exist_ok=True)
     console.print(Panel.fit("[bold]Installing openEMS...[/]", border_style="cyan"))
     console.print()
 
-    existing = (prefix / "openEMS" / "AppCSXCAD.exe").exists()
+    install_dir = prefix / "openEMS"
+    existing = (install_dir / "AppCSXCAD.exe").exists()
+
+    if existing and force:
+        # Extraction merges into the target, so files dropped between releases
+        # would survive a reinstall. Clear the tree the archive owns -- never
+        # the user's --prefix, which may hold unrelated things.
+        console.print(f"Removing the existing install at {install_dir}...")
+        if dry_run:
+            console.print(f"  [yellow]Would delete:[/] {install_dir}")
+        else:
+            shutil.rmtree(install_dir)
+        console.print("  ✅ Removed")
+        console.print()
+        existing = False
 
     if not existing:
         console.print("Querying GitHub releases...")
@@ -321,10 +338,10 @@ def _install_windows(prefix, version, dry_run):
             console.print("  ✅ Extraction complete")
             console.print()
     else:
-        console.print(f"  ✅ openEMS already present at {prefix}")
+        console.print(f"  ✅ openEMS already present at {install_dir}")
         console.print()
 
-    python_dir = prefix / "openEMS" / "python"
+    python_dir = install_dir / "python"
     if python_dir.exists():
         py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
 
@@ -352,20 +369,20 @@ def _install_windows(prefix, version, dry_run):
             raise typer.Exit(code=1)
 
         console.print("Installing Python bindings...")
-        _pip_install(str(matching_csxcad[0]), dry_run)
-        _pip_install(str(matching_openems[0]), dry_run)
+        _pip_install(str(matching_csxcad[0]), dry_run, force=force)
+        _pip_install(str(matching_openems[0]), dry_run, force=force)
         console.print("  ✅ Python bindings installed")
         console.print()
     _add_dir_to_path(
-        prefix / "openEMS",
+        install_dir,
         dry_run,
         extra_env_vars={
-            "OPENEMS_INSTALL_PATH": str(prefix / "openEMS"),
-            "CSXCAD_INSTALL_PATH": str(prefix / "openEMS"),
+            "OPENEMS_INSTALL_PATH": str(install_dir),
+            "CSXCAD_INSTALL_PATH": str(install_dir),
         },
     )
 
-    bin_dir = str(prefix / "openEMS")
+    bin_dir = str(install_dir)
     current_path = os.environ.get("PATH", "")
     dirs = current_path.split(os.pathsep)
     if bin_dir not in dirs:
@@ -698,7 +715,9 @@ def install_openems(
         False, "--dry-run", help="Print actions without executing"
     ),
     force: bool = typer.Option(
-        False, "--force", help="Reinstall even if already installed"
+        False,
+        "--force",
+        help="Reinstall even if already installed (deletes <prefix>/openEMS)",
     ),
 ):
     """Install openEMS and CSXCAD."""
@@ -726,7 +745,7 @@ def install_openems(
             return
 
     if sys.platform == "win32":
-        _install_windows(prefix, version, dry_run)
+        _install_windows(prefix, version, dry_run, force=force)
     else:
         _install_unix(prefix, dry_run)
 
