@@ -16,5 +16,13 @@ ignore = []
 # fem_formulation.py emits a GetDP .pro template with intentionally long
 # embedded DSL lines that cannot be wrapped without breaking the syntax.
 exclude = ["simpleEMS/cli.py", "simpleEMS/fem_formulation.py"]
+
+# Tests are already exempt from ruff-check in prek.toml; this mirrors that for
+# a bare `ruff check .` run. Annotating every test function and fixture would
+# add noise without catching anything -- pytest supplies the arguments and
+# ignores the return value -- but the real-bug rules (F, B, E) still apply.
+[lint.per-file-ignores]
+"tests/**" = ["ANN"]
+
 [format]
 quote-style = "double"

@@ -40,6 +40,8 @@ dev = [
     "myst-parser==5.0.0",
     "prek==0.3.13",
     "pydata-sphinx-theme==0.16.1",
+    "pytest==9.0.1",
+    "pytest-cov==7.0.0",
     "ruff==0.15.12",
     "sphinx>=7.2",
     "sphinx-automodapi==0.22.0",
@@ -56,6 +58,21 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "simpleEMS"
 module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -ra"
+markers = [
+    "slow: takes more than a few seconds (solver runs, full example scripts)",
+    "needs_csxcad: requires the CSXCAD/openEMS Python bindings",
+    "needs_openems_bin: requires the openEMS solver binary on PATH",
+    "needs_getdp_bin: requires the getdp solver binary on PATH",
+    "needs_cadquery: requires cadquery (STEP/STL export)",
+]
+filterwarnings = [
+    # skrf emits this for every Network built from a raw frequency vector
+    "ignore:Frequency:DeprecationWarning",
+]
 
 [tool.bumpversion]
 current_version = "0.2.0"
