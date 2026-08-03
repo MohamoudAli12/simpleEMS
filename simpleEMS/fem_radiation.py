@@ -425,19 +425,22 @@ def _read_scalar_points(
         phi.append(math.atan2(y, x) % (2 * math.pi))
         val.append(v)
 
+    # gmsh list data stores coordinates per axis, not per node: an element's
+    # block is x1..xn, y1..yn, z1..zn, then one value per node. Reading it as
+    # interleaved triples silently transposes the sample positions, which
+    # scrambles the interpolated pattern rather than failing.
+    nodes_per_type = {"SP": 1, "ST": 3, "SQ": 4}
     for dt, _tag, arr in zip(dtypes, tags, data, strict=True):
+        nnodes = nodes_per_type.get(dt)
+        if nnodes is None:
+            continue
         arr = np.asarray(arr, dtype=float)
-        if dt == "SP":  # 1 node: x,y,z then v
-            for row in arr.reshape(-1, 4):
-                add(row[0], row[1], row[2], row[3])
-        elif dt == "ST":  # 3 nodes: 9 coords then v1,v2,v3
-            for row in arr.reshape(-1, 12):
-                for n in range(3):
-                    add(row[3 * n], row[3 * n + 1], row[3 * n + 2], row[9 + n])
-        elif dt == "SQ":  # 4 nodes: 12 coords then v1..v4
-            for row in arr.reshape(-1, 16):
-                for n in range(4):
-                    add(row[3 * n], row[3 * n + 1], row[3 * n + 2], row[12 + n])
+        ncoord = 3 * nnodes
+        for row in arr.reshape(-1, ncoord + nnodes):
+            coords = row[:ncoord].reshape(3, nnodes)
+            values = row[ncoord:]
+            for n in range(nnodes):
+                add(coords[0, n], coords[1, n], coords[2, n], values[n])
     return theta, phi, val
 
 
