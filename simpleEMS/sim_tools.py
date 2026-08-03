@@ -2025,7 +2025,9 @@ class SimTools:
         SimTools.plot_3d_power(nf2ff_3d_result, target_freq, output_path)
         SimTools.save_plots(output_path)
         SimTools.show_plots()
-        SimTools.export_stl(output_path)
+        # export_stl takes the SimSetup first; passing only the path bound it
+        # to `sim` and raised AttributeError on `sim.CSX`.
+        SimTools.export_stl(sim, output_path)
         SimTools.export_touchstone(
             freqs,
             s11,
