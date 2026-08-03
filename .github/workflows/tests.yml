@@ -1,0 +1,138 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast gate on every push. openEMS and CSXCAD are NOT on PyPI and cannot be
+  # pip-installed, and simpleEMS imports CSXCAD at module scope -- so the
+  # modules that need it skip themselves here (tests/conftest.py plus a
+  # module-level importorskip). This job therefore covers the closed-form
+  # design formulas, filter prototypes, the FEM sweep algorithm, the region-tag
+  # contract, and the CLI. Full coverage is the `full` job below.
+  unit:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        env:
+          MPLBACKEND: Agg
+        run: pytest -m "not slow" -ra --cov=simpleEMS --cov-report=term-missing
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+
+      # Scoped to match prek.toml, which excludes examples/ and docs/ from
+      # ruff-check. Running `ruff check .` here would fail on pre-existing
+      # findings in those directories.
+      - name: Lint
+        run: ruff check simpleEMS tests
+
+      - name: Check formatting
+        run: ruff format --check simpleEMS tests
+
+  # The whole suite, including geometry construction and real openEMS/GetDP
+  # solves. openEMS is built from source, so the build is cached and this job
+  # is kept off the pull-request path.
+  full:
+    name: Full suite (with solvers)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build dependencies for openEMS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git libhdf5-dev \
+            libvtk9-dev libboost-all-dev libcgal-dev libtinyxml-dev \
+            qtbase5-dev libvtk9-qt-dev
+
+      - name: Cache the openEMS install
+        id: cache-openems
+        uses: actions/cache@v4
+        with:
+          path: ~/opt/openEMS
+          key: openems-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+
+      - name: Cache the getdp install
+        id: cache-getdp
+        uses: actions/cache@v4
+        with:
+          path: ~/opt/getdp
+          key: getdp-${{ runner.os }}-stable
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Install openEMS and CSXCAD
+        run: simpleems install openems --prefix "$HOME/opt/openEMS"
+
+      - name: Install getdp (FEM backend)
+        if: steps.cache-getdp.outputs.cache-hit != 'true'
+        run: simpleems install getdp --prefix "$HOME/opt/getdp"
+
+      - name: Put the solver binaries on PATH
+        run: |
+          echo "$HOME/opt/openEMS/bin" >> "$GITHUB_PATH"
+          find "$HOME/opt/getdp" -name getdp -type f -printf '%h\n' -quit \
+            >> "$GITHUB_PATH"
+
+      - name: Report the environment
+        run: simpleems checkhealth || true
+
+      # Anything whose dependency is still genuinely missing skips itself
+      # rather than failing the job.
+      #
+      # Deliberately NOT run under --cov. Something in the CSXCAD/openEMS
+      # bindings corrupts memory once enough structures have been built and
+      # torn down in one process: a property comes back whose Python wrapper
+      # class disagrees with its own GetTypeString(), and the test that reads
+      # it dies on a missing method. Coverage tracing perturbs allocation
+      # timing enough to make this far more likely -- measured at 3 failures
+      # in 15 instrumented runs of tests/test_fdtd_standalone_model.py, versus
+      # none in 12 uninstrumented ones. The root cause is below the Python
+      # layer and is not fixed here. The `unit` job above reports coverage for
+      # everything that does not need CSXCAD, and is stable.
+      - name: Run the full suite
+        env:
+          MPLBACKEND: Agg
+        run: pytest -ra
