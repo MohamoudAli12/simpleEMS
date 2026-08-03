@@ -41,25 +41,8 @@ from .sim_tools import SimData, SimTools, setup_simulation
 
 __all__ = ["simulate_step_FDTD"]
 
-# STEP can't represent a degenerate (zero-volume) solid, so export_cad.py's
-# `_make_box` floors every box dimension to 1e-3 mm. A port that started life
-# as a genuine zero-thickness CSXCAD sheet (as in patch_antenna.py's native
-# ports: `port_start[1] == port_stop[1]`) comes back from STEP with a real
-# 1e-3 mm box instead -- e.g. port_resist_1's y-extent is exactly 0.001 mm.
-# That's still wide enough to be a real (non-floating-point-noise) interval,
-# so Mesh's "at least min_lines" rule over-refines it same as a real feature
-# would. Anything under this threshold on a port's non-excitation axes is
-# treated as that padding artifact, not real geometry, and collapsed to a
-# single point -- comfortably above the 1e-3 mm floor (with margin) and
-# comfortably below any real trace dimension in this project (e.g.
-# `min_trace_width_mm` defaults to 0.1 mm).
 _DEGENERATE_PORT_THICKNESS_MM = 1e-2
 
-# A solid whose volume matches its bounding box to within this relative
-# tolerance (and which has exactly six faces) is an axis-aligned box, so it can
-# be rebuilt as a native CSXCAD box instead of a tessellated polyhedron -- see
-# :func:`_axis_aligned_box`. The tolerance only has to absorb OCC's own
-# volume-integration error, hence the tight value.
 _BOX_VOLUME_RTOL = 1e-9
 
 
@@ -77,13 +60,6 @@ def _quantize_f32(value: float) -> float:
     float
         ``value`` rounded to the nearest 32-bit float.
     """
-    # STL stores every vertex as a 32-bit float, so a tessellated edge is only
-    # ever as precise as that. A coordinate built straight from CadQuery stays
-    # at full float64, and Mesh only merges coordinates that match to near
-    # float64 precision -- so an edge meant to sit flush against a tessellated
-    # trace, but off by a few nanometres, becomes a second boundary and gets
-    # pathologically over-refined. Rounding it the same way lands it on the
-    # bit-identical value, and Mesh sees one boundary instead of two.
     return struct.unpack("<f", struct.pack("<f", value))[0]
 
 
@@ -105,12 +81,6 @@ def _axis_aligned_box(solid: cq.Solid) -> tuple[list[float], list[float]] | None
         The opposite corners of the box, each ``[x, y, z]``, or ``None`` if
         the solid is not a box.
     """
-    # Rebuilding a box as a real box rather than a tessellated shape matters
-    # beyond fidelity: fdtd_mesh treats every tessellated solid as possibly
-    # concave, so an unnotched metal imported that way can cancel the notch
-    # verdict of a genuinely notched neighbour overlapping it along the queried
-    # axis. That suppresses the refinement at the notched metal's edge and
-    # shifts the modelled resonance.
     try:
         if len(solid.Faces()) != 6:
             return None
@@ -177,14 +147,6 @@ class StepFDTDParams(SimParams):
         Extents of all the imported solids together, in mm, as
         ``(xmin, xmax, ymin, ymax, zmin, zmax)``.
     """
-
-    # substrate_tand is unused and only satisfies the base class, but
-    # substrate_eps_r matters: the base class derives lambda0 from it, and with
-    # it the mesh resolution and the air padding. simulate_step_FDTD sets it to
-    # the largest eps_r imported, so lambda0 matches what a hand-built version
-    # of the same structure would give. Left at the air default it would
-    # compute a vacuum wavelength -- overpadding the box and, worse,
-    # under-resolving the mesh at the metal edges.
 
     freqs: NDArray
     struct_bbox_mm: tuple[float, float, float, float, float, float]
@@ -363,8 +325,11 @@ def simulate_step_FDTD(
         Show the geometry in AppCSXCAD before the solver runs. Default
         ``True``.
     run : bool
-        Whether to run the solver. Set to ``False`` to build and inspect the
-        structure only. Default ``True``.
+        Whether to run the solver. Default ``True``. Set to ``False`` to
+        re-read results already in ``output_path`` without solving again;
+        post-processing still runs either way, so a ``False`` call against a
+        directory holding no results raises ``FileNotFoundError`` on the
+        missing port probes.
 
     Returns
     -------
@@ -399,10 +364,6 @@ def simulate_step_FDTD(
         raise KeyError(f"solid(s) not found in {step_file.name}: {sorted(missing)}")
 
     bbox_mm = _combined_bbox_mm(list(solids.values()))
-    # lambda0 (and everything derived from it: mesh resolution, air padding)
-    # is computed by the base class from substrate_eps_r -- use the most
-    # dielectrically-loaded imported material so it matches a native build
-    # of the same structure instead of assuming vacuum (see StepFDTDParams).
     substrate_eps_r = max((eps_r for eps_r, _ in dielectrics.values()), default=1.0)
     params = StepFDTDParams(
         freqs=freqs,
@@ -446,9 +407,6 @@ def simulate_step_FDTD(
         kind = _add_solid(metal, name, priority=10)
         console.print(f"[info]  pec: {name} ({kind})[/info]")
 
-    # A port solid is not rebuilt as geometry like the others: openEMS needs a
-    # real lumped element with an excitation there, so the solid only supplies
-    # the extents to place one on.
     port_objs = []
     for i, (name, spec) in enumerate(ports.items()):
         bb = solids[name].BoundingBox()
@@ -476,8 +434,6 @@ def simulate_step_FDTD(
 
     Mesh(CSX, params)
 
-    # Must exist before FDTD.Run() -- it registers the dump boxes the solver
-    # records far-field data into while running.
     nf2ff = SimTools.create_nf2ff(sim)
 
     if show_structure:
