@@ -1,11 +1,13 @@
 """Shared pytest configuration and fixtures for the simpleEMS test suite.
 
-Two things happen here that every test depends on:
+Three things happen here that every test depends on:
 
 * matplotlib is forced onto the headless Agg backend *before* anything imports
   ``simpleEMS.sim_tools``, which sets ``plt.rcParams`` at import time. Without
   this, the PyQt6 backend is selected and any ``plot_*`` call blocks on a
   window that never opens in CI.
+* rich is pinned to plain text at a fixed width, so what the CLI prints does
+  not depend on the terminal the suite happens to run in (see below).
 * ``availability`` fixtures skip the tiers that need external binaries
   (openEMS, getdp) or heavyweight optional imports, so the pure-Python tier
   still runs anywhere.
@@ -15,6 +17,17 @@ import os
 import shutil
 
 os.environ.setdefault("MPLBACKEND", "Agg")
+
+# Every assertion on CLI output is a substring check against text rich has
+# rendered, and rich renders differently depending on what it believes about
+# the terminal. With colour on it styles the two dashes of an option
+# separately, so "--prefix" is never in the output as a literal string; at 80
+# columns it folds a long path across a line break, so a tmp-path check fails
+# on a narrow terminal and passes on a wide one. A CI runner forces colour on
+# and gives 80 columns, which is why those tests pass locally and fail there.
+os.environ.pop("FORCE_COLOR", None)
+os.environ["NO_COLOR"] = "1"
+os.environ["COLUMNS"] = "200"
 
 import matplotlib  # noqa: E402
 
