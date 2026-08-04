@@ -28,6 +28,10 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.pop("FORCE_COLOR", None)
 os.environ["NO_COLOR"] = "1"
 os.environ["COLUMNS"] = "200"
+# typer force-enables colour when GITHUB_ACTIONS (or FORCE_COLOR/PY_COLORS)
+# is set, and its force_terminal overrides NO_COLOR, so NO_COLOR alone is not
+# enough to make the rendered help plain text.
+os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
 
 import matplotlib  # noqa: E402
 
