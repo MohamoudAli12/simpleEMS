@@ -847,9 +847,9 @@ def compute_sim_data(
         )
 
     data = np.load(npz_path)
-    s = np.conj(data["S"])
-    port_voltage = np.conj(data["port_voltage"])
-    port_current = np.conj(data["port_current"])
+    s = data["S"]
+    port_voltage = data["port_voltage"]
+    port_current = data["port_current"]
     freqs_out = data["freqs"]
     ref_impedances = data["ref_impedances"]
     nports = s.shape[1]

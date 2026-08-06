@@ -89,7 +89,7 @@ class Dielectric:
             ``eps_r * (1 - 1j * tan_d)``, in the engineering sign convention.
         """
         # convenience helper only: fem_formulation writes its own permittivity
-        # into the problem file, in the opposite sign convention
+        # into the problem file, in the same (engineering) sign convention
         return self.eps_r * (1.0 - 1j * self.tan_d)
 
 

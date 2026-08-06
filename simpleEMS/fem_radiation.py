@@ -212,12 +212,11 @@ def compute_pattern(
 
     k0 = 2 * math.pi * freq / C0
     gmsh.plugin.setNumber("NearToFarField", "Wavenumber", k0)
-    # The .pro solves in exp(-i w t) (see fem_formulation), so the transform
-    # has to be told: left at its default the plugin assumes exp(+i w t) and
-    # returns a different pattern. That branch returns |E_inf|^2, scaled
-    # arbitrarily, so callers normalise by the peak and take the level from
-    # the directivity.
-    gmsh.plugin.setNumber("NearToFarField", "NegativeTime", 1)
+    # The .pro solves in exp(+i w t) (GetDP's native convention, see
+    # fem_formulation), which is the plugin's default, so the transform is
+    # left as-is. That branch returns |E_inf|^2, scaled arbitrarily, so
+    # callers normalise by the peak and take the level from the directivity.
+    gmsh.plugin.setNumber("NearToFarField", "NegativeTime", 0)
     gmsh.plugin.setNumber("NearToFarField", "NumPointsPhi", nphi)
     gmsh.plugin.setNumber("NearToFarField", "NumPointsTheta", ntheta)
     gmsh.plugin.setNumber("NearToFarField", "EView", view_index(e_box))

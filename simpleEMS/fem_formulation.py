@@ -24,30 +24,6 @@ conditions, the port excitation, and the results to report. Nothing is solved
 here.
 """
 
-# The physics this module emits:
-#
-# * Unknown -- the electric field E, in Nedelec edge elements (Type Form1,
-#   BF_Edge; FEorder == 2 adds BF_Edge_2E for 2nd order). Edge elements are the
-#   standard choice for the vector wave equation: they allow tangential jumps
-#   and kill spurious modes.
-# * Equation -- the time-harmonic curl-curl wave equation
-#   curl(nuR curl E) - k0^2 epsR E = 0 in weak (Galerkin) form, complex-valued,
-#   with k0 = w/c0 and nuR = 1/muR.
-#
-#   SIGN CONVENTION: this file is written for exp(-i w t), following GetDP's
-#   models/MicrostripLine. It is a choice made here, not a property of GetDP.
-#   The absorbing term, epsR, the PML stretch, Zs and h all depend on it, and
-#   results are conjugated back to the engineering convention in
-#   fem_backend.compute_sim_data. Change one sign and you must change all.
-# * Truncation -- a first-order Silver-Muller absorbing boundary on the outer
-#   air box, or a complex-coordinate-stretched PML shell.
-# * Excitation -- each port sheet carries an impedance term (eta0/Zs) plus an
-#   impressed quasi-TEM mode source; S-parameters come from the mode overlap of
-#   the solved field on each port.
-#
-# The driven port is the runtime variable $ActivePort, so one GetDP launch can
-# walk every port reusing a single factorisation.
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -131,11 +107,11 @@ def write_problem(
         spec = problem.solids[name]
         d = spec.dielectric
         diel_lines.append(f"  Diel_{name} = Region[{rid}];")
-        # This .pro is written for exp(-i w t) (see the module docstring), so
-        # a passive lossy dielectric has Im[eps]>0: eps_r*(1 + i*tan_d)
+        # This .pro is written for exp(+i w t) (see the module docstring), so
+        # a passive lossy dielectric has Im[eps]<0: eps_r*(1 - i*tan_d)
         epsr_lines.append(
             f"  epsR[Diel_{name}] = Complex[{_fmt(d.eps_r)}, "
-            f"{_fmt(d.eps_r * d.tan_d)}];"
+            f"-{_fmt(d.eps_r * d.tan_d)}];"
         )
         if d.mu_r != 1.0:
             mur_lines.append(f"  muR[Diel_{name}] = {_fmt(d.mu_r)};")
@@ -148,7 +124,7 @@ def write_problem(
         port_group_lines.append(f"  Port_{pm.number} = Region[{pm.region}];")
     ports_list = ", ".join(f"Port_{pm.number}" for pm in ports)
 
-    # lossy conductors: surface-impedance (Leontovich) boundary, Zs = Rs*(1-i),
+    # lossy conductors: surface-impedance (Leontovich) boundary, Zs = Rs*(1+i),
     # Rs = sqrt(pi*f*mu0/sigma) (frequency dependent, hence a Function of freqvar).
     imped_group_lines, imped_fun_lines, imped_eq_lines, imped_names = [], [], [], []
     for j, (rid, sig) in enumerate(mesh.impedance_regions):
@@ -156,11 +132,11 @@ def write_problem(
         imped_names.append(f"Imped_{j}")
         imped_fun_lines.append(f"  Rs_{j}[] = Sqrt[Pi*{freqvar}*mu0/({_fmt(sig)})];")
         imped_fun_lines.append(
-            f"  Yimp_{j}[] = eta0 / (Rs_{j}[]*(1 - I[]));  // eta0/Zs, Zs=Rs*(1-i)"
+            f"  Yimp_{j}[] = eta0 / (Rs_{j}[]*(1 + I[]));  // eta0/Zs, Zs=Rs*(1+i)"
         )
         imped_eq_lines.append(
             f"""      // lossy conductor {j}: surface impedance (sigma={sig:g} S/m)
-      Galerkin {{ [ I[]*k0[]*Yimp_{j}[]*(1/muR[]) * Normal[] /\\ (Normal[] /\\ Dof{{e}}) , {{e}} ] ;
+      Galerkin {{ [ -I[]*k0[]*Yimp_{j}[]*(1/muR[]) * Normal[] /\\ (Normal[] /\\ Dof{{e}}) , {{e}} ] ;
         In Imped_{j} ; Integration I1 ; Jacobian Jac ; }}"""
         )
     imped_extra = (", ".join(imped_names) + ", ") if imped_names else ""
@@ -172,7 +148,7 @@ def write_problem(
     sym_in_tot = ", Sym" if sym else ""
 
     # PML: complex coordinate stretching in the outer shell. epsR and nuR (=1/muR)
-    # become anisotropic tensors there; cX/cY/cZ = 1 + i*Damp/k0.
+    # become anisotropic tensors there; cX/cY/cZ = 1 - i*Damp/k0.
     pml = getattr(mesh, "pml_region", 0)
     if pml:
         ib = mesh.inner_bbox
@@ -186,9 +162,9 @@ def write_problem(
             "  DampX[] = ((X[]>=PmlXmax)||(X[]<=PmlXmin)) ? ((X[]>=PmlXmax) ? 1/(PmlDelta-(X[]-PmlXmax)) : 1/(PmlDelta-(PmlXmin-X[]))) : 0;\n"
             "  DampY[] = ((Y[]>=PmlYmax)||(Y[]<=PmlYmin)) ? ((Y[]>=PmlYmax) ? 1/(PmlDelta-(Y[]-PmlYmax)) : 1/(PmlDelta-(PmlYmin-Y[]))) : 0;\n"
             "  DampZ[] = ((Z[]>=PmlZmax)||(Z[]<=PmlZmin)) ? ((Z[]>=PmlZmax) ? 1/(PmlDelta-(Z[]-PmlZmax)) : 1/(PmlDelta-(PmlZmin-Z[]))) : 0;\n"
-            "  cX[] = Complex[1, DampX[]/k0[]];\n"
-            "  cY[] = Complex[1, DampY[]/k0[]];\n"
-            "  cZ[] = Complex[1, DampZ[]/k0[]];\n"
+            "  cX[] = Complex[1, -DampX[]/k0[]];\n"
+            "  cY[] = Complex[1, -DampY[]/k0[]];\n"
+            "  cZ[] = Complex[1, -DampZ[]/k0[]];\n"
             "  epsR[Pml] = TensorDiag[ cY[]*cZ[]/cX[], cX[]*cZ[]/cY[], cX[]*cY[]/cZ[] ];\n"
             "  nuR[Pml]  = TensorDiag[ cX[]/(cY[]*cZ[]), cY[]/(cX[]*cZ[]), cZ[]/(cX[]*cY[]) ];"
         )
@@ -258,9 +234,9 @@ def write_problem(
     for pm in ports:
         port_eq_lines.append(
             f"""      // lumped port {pm.number}: resistive sheet (Z0={pm.z0}) + source
-      Galerkin {{ [ I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ Dof{{e}}) , {{e}} ] ;
+      Galerkin {{ [ -I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ Dof{{e}}) , {{e}} ] ;
         In Port_{pm.number} ; Integration I1 ; Jacobian Jac ; }}
-      Galerkin {{ [ -2*I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ eInc[]) , {{e}} ] ;
+      Galerkin {{ [ 2*I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ eInc[]) , {{e}} ] ;
         In Port_{pm.number} ; Integration I1 ; Jacobian Jac ; }}"""
         )
 
@@ -413,7 +389,7 @@ Formulation {{
         In Domain ; Integration I1 ; Jacobian Jac ; }}
 
       // outer free-space Silver-Muller ABC (first-order outgoing-wave boundary)
-      Galerkin {{ [ I[]*k0[] * (1/muR[]) * Normal[] /\\ ( Normal[] /\\ Dof{{e}} ) , {{e}} ] ;
+      Galerkin {{ [ -I[]*k0[] * (1/muR[]) * Normal[] /\\ ( Normal[] /\\ Dof{{e}} ) , {{e}} ] ;
         In Abc ; Integration I1 ; Jacobian Jac ; }}
 
 {chr(10).join(imped_eq_lines)}
@@ -449,13 +425,13 @@ PostProcessing {{
     Quantity {{
 {chr(10).join(sparam_q)}
       {{ Name e ; Value {{ Local {{ [ {{e}} ] ; In Domain ; Jacobian Jac ; }} }} }}
-      {{ Name h ; Value {{ Local {{ [ -I[]*(1/muR[])*{{d e}}/(k0[]*eta0) ] ; In Domain ; Jacobian Jac ; }} }} }}
+      {{ Name h ; Value {{ Local {{ [ I[]*(1/muR[])*{{d e}}/(k0[]*eta0) ] ; In Domain ; Jacobian Jac ; }} }} }}
       // dielectric loss  P = (1/2) w eps0 Im[epsR] |E|^2  integrated over the volume.
       // Over DomainDiel, not Domain: in the PML epsR is a TensorDiag, so the
       // integrand there is a tensor rather than a scalar (and the PML's
       // absorption is not dielectric loss anyway). Air is lossless, so
       // dropping it too costs nothing.
-      {{ Name Ploss ; Value {{ Integral {{ [ Pi*{freqvar}*eps0*Im[epsR[]]*SquNorm[{{e}}] ] ;
+      {{ Name Ploss ; Value {{ Integral {{ [ -Pi*{freqvar}*eps0*Im[epsR[]]*SquNorm[{{e}}] ] ;
         In DomainDiel ; Jacobian Jac ; Integration I1 ; }} }} }}
       // conductor loss, one quantity per distinct sheet conductivity
 {chr(10).join(pcond_q)}
