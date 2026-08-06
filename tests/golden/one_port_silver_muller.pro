@@ -35,7 +35,7 @@ Group {
 
 Function {
   I[] = Complex[0., 1.];
-  epsR[Diel_substrate] = Complex[4.4, 0.0044];
+  epsR[Diel_substrate] = Complex[4.4, -0.0044];
   epsR[Air] = 1.;
   muR[] = 1.;
 
@@ -100,14 +100,14 @@ Formulation {
         In Domain ; Integration I1 ; Jacobian Jac ; }
 
       // outer free-space Silver-Muller ABC (first-order outgoing-wave boundary)
-      Galerkin { [ I[]*k0[] * (1/muR[]) * Normal[] /\ ( Normal[] /\ Dof{e} ) , {e} ] ;
+      Galerkin { [ -I[]*k0[] * (1/muR[]) * Normal[] /\ ( Normal[] /\ Dof{e} ) , {e} ] ;
         In Abc ; Integration I1 ; Jacobian Jac ; }
 
 
       // lumped port 1: resistive sheet (Z0=50.0) + source
-      Galerkin { [ I[]*k0[]*Yrel_1*(1/muR[]) * Normal[] /\ (Normal[] /\ Dof{e}) , {e} ] ;
+      Galerkin { [ -I[]*k0[]*Yrel_1*(1/muR[]) * Normal[] /\ (Normal[] /\ Dof{e}) , {e} ] ;
         In Port_1 ; Integration I1 ; Jacobian Jac ; }
-      Galerkin { [ -2*I[]*k0[]*Yrel_1*(1/muR[]) * Normal[] /\ (Normal[] /\ eInc[]) , {e} ] ;
+      Galerkin { [ 2*I[]*k0[]*Yrel_1*(1/muR[]) * Normal[] /\ (Normal[] /\ eInc[]) , {e} ] ;
         In Port_1 ; Integration I1 ; Jacobian Jac ; }
     }
   }
@@ -154,13 +154,13 @@ PostProcessing {
           Value { Integral { [ (0.0016/50.0) * (2*(eInc[]*dir_1[]) - ({e}*dir_1[])) / #(1) ] ;
             In Port_1 ; Jacobian Jac ; Integration I1 ; } } }
       { Name e ; Value { Local { [ {e} ] ; In Domain ; Jacobian Jac ; } } }
-      { Name h ; Value { Local { [ -I[]*(1/muR[])*{d e}/(k0[]*eta0) ] ; In Domain ; Jacobian Jac ; } } }
+      { Name h ; Value { Local { [ I[]*(1/muR[])*{d e}/(k0[]*eta0) ] ; In Domain ; Jacobian Jac ; } } }
       // dielectric loss  P = (1/2) w eps0 Im[epsR] |E|^2  integrated over the volume.
       // Over DomainDiel, not Domain: in the PML epsR is a TensorDiag, so the
       // integrand there is a tensor rather than a scalar (and the PML's
       // absorption is not dielectric loss anyway). Air is lossless, so
       // dropping it too costs nothing.
-      { Name Ploss ; Value { Integral { [ Pi*FREQ*eps0*Im[epsR[]]*SquNorm[{e}] ] ;
+    { Name Ploss ; Value { Integral { [ -Pi*FREQ*eps0*Im[epsR[]]*SquNorm[{e}] ] ;
         In DomainDiel ; Jacobian Jac ; Integration I1 ; } } }
       // conductor loss, one quantity per distinct sheet conductivity
 

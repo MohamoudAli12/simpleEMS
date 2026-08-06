@@ -190,13 +190,14 @@ class TestWriteProblem:
         assert f"Port_1 = Region[{port_region(1)}];" in content
         assert f"Abc  = Region[{ABC}];" in content
 
-    def test_permittivity_uses_the_positive_loss_convention(self, tmp_path):
-        """The .pro is written for exp(-iwt), so a passive lossy dielectric
-        needs Im[eps] > 0 -- the opposite sign to ``Dielectric.eps_complex``.
-        Getting this backwards makes the material gain energy."""
+    def test_permittivity_uses_the_negative_loss_convention(self, tmp_path):
+        """The .pro is written for exp(+iwt) (GetDP's native convention), so a
+        passive lossy dielectric needs Im[eps] < 0 -- the same sign as
+        ``Dielectric.eps_complex``. Getting this backwards makes the material
+        gain energy."""
         content = write(make_problem(), make_mesh(), tmp_path)
 
-        assert "epsR[Diel_substrate] = Complex[4.4, 0.0044];" in content
+        assert "epsR[Diel_substrate] = Complex[4.4, -0.0044];" in content
 
     def test_lossless_dielectric_has_zero_imaginary_part(self, tmp_path):
         problem = make_problem(
@@ -208,7 +209,7 @@ class TestWriteProblem:
 
         content = write(problem, make_mesh(), tmp_path)
 
-        assert "epsR[Diel_substrate] = Complex[2.2, 0.0];" in content
+        assert "epsR[Diel_substrate] = Complex[2.2, -0.0];" in content
 
     def test_magnetic_material_emits_a_permeability_override(self, tmp_path):
         problem = make_problem(
