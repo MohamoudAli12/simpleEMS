@@ -1608,8 +1608,9 @@ class SimTools:
     def add_field_dump(
         sim: SimSetup,
         params: SimParams,
+        dump_freq: float | None = None,
         output_path: Path | None = None,
-        dump_type: DumpType = DumpType.efield_time,
+        dump_type: DumpType = DumpType.efield_frequency,
     ) -> None:
         """
         Add a field dump box to the simulation setup.
@@ -1642,6 +1643,16 @@ class SimTools:
         -------
         None
         """
+        if params.backend_engine == "FEM":
+            import warnings
+
+            warnings.warn(
+                """\nField dump is not implemented in FEM engine, 
+                use FDTD engine for field dump\n""",
+                UserWarning,
+                stacklevel=2,
+            )
+            return
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
@@ -1694,6 +1705,10 @@ class SimTools:
             params.substrate_thickness_mm + params.copper_thickness_mm,
         ]
         dump.AddBox(start=start, stop=stop)
+        if dump_type.value[0] >= 10:
+            if dump_freq is None:
+                dump_freq = params.main_freq
+            dump.AddFrequency(dump_freq)
 
     @staticmethod
     def export_touchstone(
