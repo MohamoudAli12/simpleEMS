@@ -1608,8 +1608,8 @@ class SimTools:
     def add_field_dump(
         sim: SimSetup,
         params: SimParams,
-        dump_freq: float | None = None,
         output_path: Path | None = None,
+        dump_freq: float | None = None,
         dump_type: DumpType = DumpType.efield_frequency,
     ) -> None:
         """
