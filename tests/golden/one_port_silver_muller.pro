@@ -160,7 +160,7 @@ PostProcessing {
       // integrand there is a tensor rather than a scalar (and the PML's
       // absorption is not dielectric loss anyway). Air is lossless, so
       // dropping it too costs nothing.
-    { Name Ploss ; Value { Integral { [ -Pi*FREQ*eps0*Im[epsR[]]*SquNorm[{e}] ] ;
+      { Name Ploss ; Value { Integral { [ -Pi*FREQ*eps0*Im[epsR[]]*SquNorm[{e}] ] ;
         In DomainDiel ; Jacobian Jac ; Integration I1 ; } } }
       // conductor loss, one quantity per distinct sheet conductivity
 
