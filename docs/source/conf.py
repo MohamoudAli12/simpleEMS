@@ -76,7 +76,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/MohamoudAli12",
+            "url": "https://github.com/MohamoudAli12/simpleEMS",
             "icon": "fab fa-github",
         }
     ],
