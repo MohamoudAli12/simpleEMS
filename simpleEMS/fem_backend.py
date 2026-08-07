@@ -955,6 +955,8 @@ def simulate_step_FEM(
     charac_imp: float = 50.0,
     output_path: str | Path = "Sim_Path",
     run: bool = True,
+    show_mesh: bool = True,
+    mesh_style: str = "wireframe",
     verbose: bool = True,
 ) -> SimData:
     """
@@ -1016,6 +1018,11 @@ def simulate_step_FEM(
         Whether to solve. If ``False``, the geometry is only meshed and the
         results are read back from an earlier run in ``output_path``. Default
         ``True``.
+    show_mesh:bool
+        Whether to show the created mesh. Default is ``True``.
+    mesh_style: str
+        mesh style to be used for visualisation. default is "wireframe".
+        other options are: "surface" | "wireframe" | "points",
     verbose : bool
         Print progress. Default ``True``.
 
@@ -1064,7 +1071,25 @@ def simulate_step_FEM(
             "or name a port solid so it can be auto-detected."
         )
 
-    _mesh_problem(prob, output_path, verbose)
+    msh_path = _mesh_problem(prob, output_path, verbose)
+    if show_mesh:
+        import pyvista as pv
+
+        vtk_path = Path(msh_path).with_suffix(".vtk")
+        grid = pv.read(str(vtk_path if vtk_path.exists() else msh_path))
+        plotter = pv.Plotter()
+        plotter.add_mesh(
+            grid,
+            style=mesh_style,
+            show_edges=mesh_style != "wireframe",
+            opacity=0.5,
+            scalars="CellEntityIds",
+            cmap="tab20",
+            show_scalar_bar=False,
+        )
+        plotter.add_axes()
+        plotter.view_xy()
+        plotter.show()
     if run:
         _sweep_from_meta(freqs, prob.num_solve_points, output_path, verbose)
     return compute_sim_data(freqs, charac_imp, output_path)
