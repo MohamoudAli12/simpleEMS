@@ -116,6 +116,6 @@ __all__ = [
     "FEMNF2FF",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "Mohamoud Ali"
 __license__ = "AGPL-3.0-or-later"
