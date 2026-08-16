@@ -749,7 +749,7 @@ class Mesh:
             geo_min = dim_bounds[dim][0]
             geo_max = dim_bounds[dim][-1]
             span = geo_max - geo_min
-            padding = max(self._lambda0 / 2, span * 0.15)
+            padding = max(self._lambda0, span * 0.15)
             new_sim_box.append((geo_min - padding, geo_max + padding))
         self._sim_box = tuple(new_sim_box)
 
