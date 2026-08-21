@@ -35,7 +35,7 @@ from .sim_params import SimParams
 
 __all__ = ["Mesh"]
 
-PREC = 20
+PREC = 5
 
 
 class Type(Enum):
