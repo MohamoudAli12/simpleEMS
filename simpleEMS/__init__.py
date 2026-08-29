@@ -23,6 +23,7 @@ import importlib
 
 
 _NAMES_BY_MODULE = {
+    "sim_params": ["GenericParams"],
     "microstrip_line": ["MicrostripLine", "MicrostripLineParams"],
     "patch_antenna": [
         "InsetFedPatchAntenna",
@@ -35,6 +36,7 @@ _NAMES_BY_MODULE = {
         "BandStopQuarterWaveFilter",
         "BandPassQuarterWaveFilter",
     ],
+    "ifa_antenna": ["InvertedFAntennaParams", "InvertedFAntenna"],
     "fdtd_standalone_model": ["add_fdtd_setup", "simulate_model"],
     "fdtd_import_step": ["simulate_step_FDTD"],
     "fem_backend": ["simulate_step_FEM", "FEMOptions"],
@@ -92,6 +94,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "GenericParams",
     "InsetFedPatchAntenna",
     "ProbeFedPatchAntenna",
     "MicrostripLine",
@@ -101,6 +104,8 @@ __all__ = [
     "QuarterWaveFilterParams",
     "BandStopQuarterWaveFilter",
     "BandPassQuarterWaveFilter",
+    "InvertedFAntenna",
+    "InvertedFAntennaParams",
     "DumpType",
     "SimTools",
     "setup_simulation",
