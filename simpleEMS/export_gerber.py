@@ -97,13 +97,23 @@ def primitive_box(file: TextIO, box: CSPrimBox) -> None:
     #                    │               │
     #                    │               │
     # (start.x,start.y)  └───────────────┘ (stop.x,start.y)
+    corners = [
+        (start[0], start[1]),
+        (stop[0], start[1]),
+        (stop[0], stop[1]),
+        (start[0], stop[1]),
+    ]
+
+    if box.HasTransform():
+        transform = box.GetTransform()
+        corners = [transform.Transform([x, y, start[2]])[:2] for x, y in corners]
 
     file.write("G36*\n")
-    file.write(gerber_coord(start) + "D02*\n")
-    file.write(gerber_coord([stop[0], start[1]]) + "D01*\n")
-    file.write(gerber_coord(stop) + "D01*\n")
-    file.write(gerber_coord([start[0], stop[1]]) + "D01*\n")
-    file.write(gerber_coord(start) + "D01*\n")
+    file.write(gerber_coord(corners[0]) + "D02*\n")
+    file.write(gerber_coord(corners[1]) + "D01*\n")
+    file.write(gerber_coord(corners[2]) + "D01*\n")
+    file.write(gerber_coord(corners[3]) + "D01*\n")
+    file.write(gerber_coord(corners[0]) + "D01*\n")
     file.write("G37*\n")
 
 
@@ -137,7 +147,18 @@ def primitive_polygon(file: TextIO, poly: CSPrimPolygon | CSPrimLinPoly) -> None
     if len(x0) < 3:
         print("Skipping polygon: not enough points")
         return
-
+    if poly.HasTransform():
+        transform = poly.GetTransform()
+        elevation = poly.GetElevation()
+        transformed = [
+            transform.Transform([x, y, elevation])[:2]
+            for x, y in zip(
+                x0,
+                x1,
+                strict=True,
+            )
+        ]
+        x0, x1 = zip(*transformed, strict=True)
     file.write("G36*\n")
 
     # Move to first vertex
