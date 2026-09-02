@@ -5,6 +5,7 @@ API
 
     sim_tools
     patch_antenna
+    ifa_antenna
     quarterwave_stub_filter
     microstrip_line
     standalone_model
