@@ -124,16 +124,39 @@ def _prim_materialp(prim: CSPrimitives) -> bool:
 
 def _get_prim_bounds(prim: CSPrimitives) -> np.ndarray:
     """Return ``prim``'s axis-aligned bounding box, with its CSXCAD
-    transform applied, as ``[[xmin, xmax], [ymin, ymax], [zmin, zmax]]``."""
+    transform applied, as ``[[xmin, xmax], [ymin, ymax], [zmin, zmax]]``.
+
+    Transforms all 8 corners of the untransformed box and takes the min/max
+    of the transformed set per axis -- not just the 2 diagonal corners
+    ``GetBoundBox()`` returns. Transforming only those 2 corners is exact
+    for a translation or an axis-aligned (90-degree-multiple) rotation, but
+    silently wrong for any other rotation: e.g. a box rotated 45 degrees
+    becomes a diamond, and the two transformed diagonal corners can land at
+    the same coordinate along an axis, reporting a fully degenerate
+    (zero-width) bound along that axis when the rotated shape actually spans
+    a wide range there. A primitive built with a non-90-degree
+    ``RotateAxis`` transform (e.g. a rotated radial stub) hits this
+    directly.
+    """
     orig_bounds = prim.GetBoundBox()
     tr = prim.GetTransform()
-    orig_bounds[0] = np.array(tr.Transform(orig_bounds[0]))
-    orig_bounds[1] = np.array(tr.Transform(orig_bounds[1]))
+    lo, hi = orig_bounds[0], orig_bounds[1]
+    corners = [
+        [
+            lo[0] if cx == 0 else hi[0],
+            lo[1] if cy == 0 else hi[1],
+            lo[2] if cz == 0 else hi[2],
+        ]
+        for cx in (0, 1)
+        for cy in (0, 1)
+        for cz in (0, 1)
+    ]
+    if tr is not None:
+        corners = [tr.Transform(c) for c in corners]
+    corners = np.array(corners, dtype=float)
     bounds = np.array([[None, None], [None, None], [None, None]])
     for i in range(3):
-        lower = np.min([orig_bounds[0][i], orig_bounds[1][i]])
-        upper = np.max([orig_bounds[0][i], orig_bounds[1][i]])
-        bounds[i] = np.array([lower, upper])
+        bounds[i] = np.array([corners[:, i].min(), corners[:, i].max()])
     return bounds
 
 
@@ -211,6 +234,116 @@ def _get_polyhedron_vertex_bounds(prim: CSPrimitives) -> list[list[float]]:
     return bounds
 
 
+def _prim_centroid(prim: CSPrimitives) -> list[float] | None:
+    """Return the average of a polygon/polyhedron primitive's own vertices
+    in world space, or ``None`` if ``prim`` has no vertices to average (not
+    a linpoly/polyhedron, or its coordinates could not be read).
+
+    A weaker fallback than :func:`_linpoly_cross_section_point` (see there
+    for why a single fixed point is unreliable in general) -- the vertex
+    average is not even reliably interior by itself for a shape whose
+    vertices are unevenly distributed around its boundary (many points
+    along a stub's outer arc, only two at its neck skews the average toward
+    the arc, possibly past the opposite edge entirely). Used only where
+    slicing isn't available: a polyhedron (a 3D vertex loop isn't a single
+    cross-section to slice) or the z axis of a linpoly (uniform thickness,
+    no real cross-section shape to get wrong).
+    """
+    if _is_linpoly(prim):
+        coords = _get_linpoly_vertex_bounds(prim)
+    elif _is_polyhedron(prim):
+        coords = _get_polyhedron_vertex_bounds(prim)
+    else:
+        return None
+    if not coords[0]:
+        return None
+    return [float(np.mean(c)) for c in coords]
+
+
+def _linpoly_cross_section_point(
+    prim: CSPrimitives, dim: int, pos: float
+) -> list[float] | None:
+    """Return a point known to lie inside ``prim``'s flat outline at
+    ``pos`` along ``dim``, or ``None`` if ``prim`` isn't a linpoly, ``dim``
+    isn't one of its two in-plane axes (``0``/x or ``1``/y -- its z extent
+    is a uniform extrusion thickness, not a shape to slice), or no edge of
+    the polygon actually straddles ``pos``.
+
+    Slices the polygon's vertex loop at ``pos``: walks each edge, and where
+    it straddles ``pos`` along ``dim``, linearly interpolates the crossing's
+    position along the other in-plane axis, then returns the midpoint
+    between the outermost two crossings. This is the shape's own local
+    cross-section at exactly the position being classified, not one point
+    meant to represent the whole shape -- which matters whenever the
+    cross-section varies along the sliced axis: a radial stub's width
+    changes with radius, and a right-triangle miter's bounding-box
+    midpoint (or even its vertex centroid) can land outside the triangle,
+    or exactly on its hypotenuse, depending where along the axis you ask.
+    """
+    if not _is_linpoly(prim) or dim not in (0, 1):
+        return None
+    coords = _get_linpoly_vertex_bounds(prim)
+    if not coords[0]:
+        return None
+    other_dim = 1 - dim
+    axis_vals = coords[dim]
+    other_vals = coords[other_dim]
+    elev = coords[2][0]
+    n = len(axis_vals)
+    crossings = []
+    for i in range(n):
+        j = (i + 1) % n
+        a, b = axis_vals[i], axis_vals[j]
+        if a == b:
+            continue
+        if (a <= pos <= b) or (b <= pos <= a):
+            t = (pos - a) / (b - a)
+            crossings.append(other_vals[i] + t * (other_vals[j] - other_vals[i]))
+    if len(crossings) < 2:
+        return None
+    point = [0.0, 0.0, 0.0]
+    point[dim] = pos
+    point[other_dim] = (min(crossings) + max(crossings)) / 2.0
+    point[2] = elev
+    return point
+
+
+def _linpoly_interior_xy(prim: CSPrimitives, bb: np.ndarray) -> list[float] | None:
+    """Return an ``[x, y]`` point known to lie inside ``prim``'s flat
+    outline, or ``None`` if it can't be found.
+
+    For testing coverage along z, the outline's shape at *some* x,y is what
+    matters, not a value that varies along the tested axis (z is just a
+    uniform extrusion thickness for a linpoly) -- so, unlike
+    :func:`_linpoly_cross_section_point`, there is no caller-given position
+    to slice at. Slices along x at the shape's own bounding-box midpoint and
+    takes the midpoint of the resulting y-crossings; if that particular
+    slice misses the outline (a rotated shape whose vertices might all sit
+    to one side of it), falls back to slicing along y at its own
+    bounding-box midpoint instead.
+
+    Neither the vertex centroid nor the bounding-box midpoint stand in for
+    this reliably in general: an inset notch skews the vertex average
+    toward the cut -- which can be well outside the polygon, e.g. inside
+    the notch's own gap -- while a shape with a varying cross-section can
+    put the bounding-box midpoint outside the polygon too (see
+    :func:`_linpoly_cross_section_point`). Slicing at a fixed axis value
+    still assumes the resulting cross-section's *midpoint* is solid rather
+    than, say, a second notch splitting it in two -- true for every shape
+    this codebase currently generates, but not guaranteed for an arbitrary
+    concave outline.
+    """
+    x_mid = 0.5 * (bb[0][0] + bb[0][1])
+    point = _linpoly_cross_section_point(prim, 0, x_mid)
+    if point is not None:
+        return [point[0], point[1]]
+    y_mid = 0.5 * (bb[1][0] + bb[1][1])
+    point = _linpoly_cross_section_point(prim, 1, y_mid)
+    if point is not None:
+        return [point[0], point[1]]
+    return None
+
+
 def _physical_prims(prims: list[CSPrimitives]) -> list[CSPrimitives]:
     """Filter ``prims`` down to the conductor and dielectric primitives that
     should drive mesh generation (helper/non-physical primitives are
@@ -258,16 +391,51 @@ def _remove_dups(lst: list, fixed: list | None = None) -> list:
     return new_lst
 
 
+def _decimate_curve_coords(coords: list[float], min_feature: float) -> list[float]:
+    """Collapse a single primitive's own vertex sequence down to points that
+    are actually distinguishable at the mesh's resolution.
+
+    Walks ``coords`` in their original (per-primitive, not globally sorted)
+    order and keeps a point only once it has moved at least ``min_feature``
+    from the last kept point, always keeping the sequence's true last point
+    so the shape's full extent survives.
+
+    A finely-faceted curve (e.g. a round pad's arc, built from many straight
+    polygon segments) otherwise contributes one near-duplicate mesh-boundary
+    candidate per facet vertex -- tens of them, each a tiny fraction of the
+    target resolution apart. :func:`_gen_mesh_in_bounds`'s thin-interval
+    collapse keeps any *one* of those gaps from ballooning into several
+    lines, but does nothing about there being dozens of separate gaps in the
+    first place, each still getting its own line barely a facet-width from
+    the next -- exactly the runaway that forces an FDTD timestep far smaller
+    than the geometry warrants. Decimating here, before the vertices are
+    merged into the global candidate list, fixes that at the source. A
+    genuine polygon corner (a miter, a taper, an inset notch) sits many
+    resolution-widths from its neighbors, so this never touches it.
+    """
+    if not coords:
+        return []
+    kept = [coords[0]]
+    for c in coords[1:]:
+        if abs(c - kept[-1]) >= min_feature:
+            kept.append(c)
+    if not fp_equalp(kept[-1], coords[-1]):
+        kept.append(coords[-1])
+    return kept
+
+
 def _collect_all_bounds(
-    prims: list[CSPrimitives], fixed: list[list[float]]
+    prims: list[CSPrimitives], fixed: list[list[float]], min_feature: float
 ) -> list[list[float]]:
     """Collect candidate mesh-line positions from ``prims``, per dimension.
 
     Adds both bounding-box edges of every primitive along all three
     dimensions; for polygon and polyhedron primitives, also adds every
-    vertex coordinate so the mesh conforms to non-rectangular metal edges
-    (including tessellated STL/PLY imports). Near-duplicates are then
-    removed per dimension via :func:`_remove_dups`.
+    vertex coordinate (decimated per :func:`_decimate_curve_coords`) so the
+    mesh conforms to non-rectangular metal edges (including tessellated
+    STL/PLY imports) without flooding it with a faceted curve's redundant
+    near-duplicate vertices. Near-duplicates are then removed per dimension
+    via :func:`_remove_dups`.
 
     Parameters
     ----------
@@ -275,6 +443,10 @@ def _collect_all_bounds(
         Physical primitives to collect bounds from.
     fixed : list[list[float]]
         Per-dimension must-keep positions, forwarded to :func:`_remove_dups`.
+    min_feature : float
+        Minimum spacing, along a single dimension, between two vertices of
+        the same polygon/polyhedron primitive for both to be kept as
+        separate mesh-boundary candidates; see :func:`_decimate_curve_coords`.
 
     Returns
     -------
@@ -290,12 +462,12 @@ def _collect_all_bounds(
         if _is_linpoly(prim):
             vert_bounds = _get_linpoly_vertex_bounds(prim)
             for dim in range(3):
-                for v in vert_bounds[dim]:
+                for v in _decimate_curve_coords(vert_bounds[dim], min_feature):
                     dim_bounds[dim].append(v)
         elif _is_polyhedron(prim):
             vert_bounds = _get_polyhedron_vertex_bounds(prim)
             for dim in range(3):
-                for v in vert_bounds[dim]:
+                for v in _decimate_curve_coords(vert_bounds[dim], min_feature):
                     dim_bounds[dim].append(v)
     for dim, bounds in enumerate(dim_bounds):
         dim_bounds[dim] = sorted(bounds)
@@ -345,10 +517,36 @@ def _type_at_pos(prims: list[CSPrimitives], dim: int, pos: float) -> Type | None
         at ``pos`` along ``dim``, tested via CSXCAD's own solid-membership
         test (``IsInside``) rather than just its bounding box ``bb`` --
         e.g. an inset notch cut into a patch, or a cutout in a tessellated
-        polyhedron import. The other two dimensions are sampled at their
-        bounding-box midpoint."""
+        polyhedron import.
+
+        The other two dimensions are sampled via, in order of preference:
+        :func:`_linpoly_cross_section_point` (a linpoly's own local
+        cross-section at ``pos``, when ``dim`` is one of its two in-plane
+        axes -- correct regardless of how its shape varies along ``dim``);
+        :func:`_linpoly_interior_xy` (a linpoly's z axis, where the in-plane
+        shape doesn't vary with ``pos`` but still needs a reliably-interior
+        x,y -- an inset notch, say, skews the vertex centroid outside the
+        polygon); :func:`_prim_centroid` (a polyhedron); or, failing all of
+        those, the bounding-box midpoint. Never the bounding-box midpoint
+        for a linpoly's in-plane axes: for a shape whose cross-section
+        changes along ``dim``, one fixed point can be outside the polygon
+        at some positions and, for a diagonally-cut shape like a
+        full-miter triangle, exactly on an edge at every position along a
+        slice through the bbox center -- where ``IsInside()`` gives an
+        implementation-defined answer right where it matters most."""
         try:
-            point = [pos if d == dim else 0.5 * (bb[d][0] + bb[d][1]) for d in range(3)]
+            sample = _linpoly_cross_section_point(prim, dim, pos)
+            if sample is None and _is_linpoly(prim):
+                xy = _linpoly_interior_xy(prim, bb)
+                if xy is not None:
+                    sample = [xy[0], xy[1], 0.5 * (bb[2][0] + bb[2][1])]
+            if sample is None:
+                centroid = _prim_centroid(prim)
+                sample = [
+                    centroid[d] if centroid is not None else 0.5 * (bb[d][0] + bb[d][1])
+                    for d in range(3)
+                ]
+            point = [pos if d == dim else sample[d] for d in range(3)]
             return bool(prim.IsInside(point))
         except Exception:
             return True
@@ -666,7 +864,9 @@ class Mesh:
         for prim in physical_prims:
             prim.Update()
         self._set_fixed_lines(physical_prims)
-        bounds = _collect_all_bounds(physical_prims, self.fixed_lines)
+        bounds = _collect_all_bounds(
+            physical_prims, self.fixed_lines, min_feature=self._metal_res
+        )
         self._set_sim_bounds_from_geometry(bounds)
         bounded_types = self._bounded_types(bounds, physical_prims)
         bounded_types = self._set_expanded_bounds(bounded_types)
@@ -903,10 +1103,52 @@ class Mesh:
                 )
                 self._add_to_ranges_meshed(dim, lower, upper)
 
-    def _min_spacing(self, dist: float) -> float:
+    def _scaled_min_lines(self, dist: float, is_metal: bool, dim: int) -> int:
+        """Return the minimum mesh-line count to force across an interval of
+        size ``dist``, scaled down for a feature much smaller than its own
+        target resolution -- in the x/y dimensions only.
+
+        ``self._min_lines`` (the configured default, e.g. 5) is a sensible
+        minimum for an interval that actually spans close to a full
+        resolution cell -- but forcing that same count onto a feature far
+        smaller than the resolution (a via a third the size of
+        ``FDTD_metal_mesh_resolution``, say) packs unnecessarily fine lines
+        into it for no accuracy benefit. Scales linearly (rounded down, so a
+        feature has to actually earn the next line rather than being rounded
+        up to it) from a floor of 3 lines (2 edges plus one interior line --
+        fewer would give no interior resolution at all) as ``dist`` goes from
+        0 up to its target resolution (``FDTD_metal_mesh_resolution`` for
+        metal, ``FDTD_mesh_resolution`` otherwise), reaching the full
+        ``self._min_lines`` once the interval is at least one resolution
+        cell wide. An interval already much larger than its resolution
+        (the common case -- a trace, a patch) saturates at
+        ``self._min_lines`` unchanged, so this only affects features
+        smaller than their own target resolution.
+
+        ``dim == 2`` (z) is exempted and always returns ``self._min_lines``
+        unscaled. In every structure this codebase generates, z is the
+        layer stackup -- ground, substrate, conductor, air -- not a
+        collection of independent lateral features. A via or a stub being
+        physically small relative to the mesh resolution is a reasonable
+        excuse for fewer lines across *it specifically*; the substrate
+        being electrically thin at a high operating frequency (so its
+        thickness ends up small relative to ``FDTD_mesh_resolution``,
+        itself derived from the wavelength) is not the same kind of
+        "small feature" -- it is the primary region of field variation
+        between patch and ground, and under-resolving it for that reason
+        measurably changes the simulation, not just its cell count.
+        """
+        if dim == 2:
+            return self._min_lines
+        res = self._metal_res if is_metal else self._mesh_res
+        floor = min(3, self._min_lines)
+        scaled = floor + (self._min_lines - floor) * (dist / res)
+        return int(np.clip(np.floor(scaled), floor, self._min_lines))
+
+    def _min_spacing(self, dist: float, is_metal: bool, dim: int) -> float:
         """Return the largest cell spacing that still fits at least
-        ``self._min_lines`` mesh lines across a distance of ``dist``."""
-        return dist / (self._min_lines - 1)
+        :func:`_scaled_min_lines` mesh lines across a distance of ``dist``."""
+        return dist / (self._scaled_min_lines(dist, is_metal, dim) - 1)
 
     def _lower_spacing(
         self,
@@ -945,7 +1187,7 @@ class Mesh:
             Target spacing at the lower edge.
         """
         lower_spacing = self._metal_res if is_metal else self._mesh_res
-        lower_spacing = np.min([lower_spacing, self._min_spacing(dist)])
+        lower_spacing = np.min([lower_spacing, self._min_spacing(dist, is_metal, dim)])
         if line_below is not None and self._type_below_meshed(dim, lower):
             factor = 1.0
             if self._is_metal_bound(dim, lower) and not self._is_fixed_line(dim, lower):
@@ -967,7 +1209,7 @@ class Mesh:
         """Mirror of :func:`_lower_spacing` for the upper edge of an
         interval."""
         upper_spacing = self._metal_res if is_metal else self._mesh_res
-        upper_spacing = np.min([upper_spacing, self._min_spacing(dist)])
+        upper_spacing = np.min([upper_spacing, self._min_spacing(dist, is_metal, dim)])
         if line_above is not None and self._type_above_meshed(dim, upper):
             factor = 1.0
             if self._is_metal_bound(dim, upper) and not self._is_fixed_line(dim, upper):
@@ -989,10 +1231,20 @@ class Mesh:
     ) -> None:
         """Generate and add mesh lines across one bounded interval.
 
-        A degenerate (zero-length) interval gets a single line. A metal
-        interval in z thinner than a quarter of ``FDTD_metal_mesh_resolution``
-        gets a single line at its midpoint, since it is too thin to resolve
-        with a full metal-resolution grid. Otherwise, generates a
+        A degenerate (zero-length) interval gets a single line. An interval
+        thinner than a quarter of its target resolution (``FDTD_metal_mesh_resolution``
+        for metal, ``FDTD_mesh_resolution`` otherwise) gets a single line at
+        its midpoint instead of a full geometric-series grid, since it is too
+        thin to resolve with that grid -- without this, ``_gen_lines_in_bounds``
+        would still be forced to place at least ``min_lines`` lines across it
+        (via ``_min_spacing``), collapsing a sub-resolution sliver into a
+        cluster of needlessly dense lines. This most commonly matters in z,
+        for copper layers far thinner than the metal resolution, but applies
+        in any dimension -- e.g. the many near-duplicate x/y vertices a
+        finely-faceted curved polygon (a round pad's arc, say) contributes to
+        the candidate bounds in :func:`_collect_all_bounds`, each pair of
+        which would otherwise open its own over-resolved micro-interval.
+        Otherwise, generates a
         geometric-series grid across the interval (:func:`_gen_lines_in_bounds`);
         for a metal interval, the interval is first shrunk at each edge that
         is not a fixed line or the outer simulation boundary, by a third (or
@@ -1031,14 +1283,29 @@ class Mesh:
         else:
             max_spacing = self._mesh_res
 
+        thin_threshold = (self._metal_res if is_metal else self._mesh_res) / 4.0
+        # Deliberately much smaller than thin_threshold above, and not
+        # scaled off either resolution: this one only guards the
+        # post-thirds-rule-shrink regeneration below against the shrink
+        # degenerating the interval to near-zero or negative width, which
+        # _gen_lines_in_bounds cannot handle. It is not a second "is this
+        # interval thin enough to deserve only one line" judgment -- a
+        # regular, moderately-sized interval (a via's own diameter, a
+        # substrate's post-shrink thickness) can easily fall below a
+        # resolution-scaled cutoff (e.g. metal_res / 4) purely from the
+        # shrink's roughly one-cell pullback, without being anywhere near
+        # actually degenerate; using that looser cutoff here once collapsed
+        # both a legitimate ~1mm substrate sub-interval and a via's own
+        # ~0.36mm remaining span down to a single line apiece.
+        regen_threshold = self._metal_res * 0.01
         if fp_equalp(lower, upper):
             self._add_lines_to_mesh([lower], dim)
-        elif is_metal and dim == 2 and dist < self._metal_res / 4.0:
+        elif dist < thin_threshold:
             mid = fp_nearest((lower + upper) / 2.0)
             self._add_lines_to_mesh(np.array([mid]), dim)
         else:
             lines = self._gen_lines_in_bounds(
-                lower, upper, lower_spacing, upper_spacing, max_spacing, dim
+                lower, upper, lower_spacing, upper_spacing, max_spacing, dim, is_metal
             )
 
             if is_metal:
@@ -1066,8 +1333,15 @@ class Mesh:
                     else:
                         adj = last_spacing / 3
                     upper -= adj
-                lines = self._gen_lines_in_bounds(
-                    lower, upper, lower_spacing, upper_spacing, max_spacing, dim
+                lines = self._regen_lines_or_collapse(
+                    lower,
+                    upper,
+                    lower_spacing,
+                    upper_spacing,
+                    max_spacing,
+                    regen_threshold,
+                    dim,
+                    is_metal,
                 )
             else:
                 rebuild_lines = False
@@ -1082,11 +1356,62 @@ class Mesh:
                     spacing = np.min([last_spacing, self._metal_res])
                     upper -= 2 * spacing / 3
                 if rebuild_lines:
-                    lines = self._gen_lines_in_bounds(
-                        lower, upper, lower_spacing, upper_spacing, max_spacing, dim
+                    lines = self._regen_lines_or_collapse(
+                        lower,
+                        upper,
+                        lower_spacing,
+                        upper_spacing,
+                        max_spacing,
+                        regen_threshold,
+                        dim,
+                        is_metal,
                     )
 
             self._add_lines_to_mesh(lines, dim)
+
+    def _regen_lines_or_collapse(
+        self,
+        lower: float,
+        upper: float,
+        lower_spacing: float,
+        upper_spacing: float,
+        max_spacing: float,
+        regen_threshold: float,
+        dim: int,
+        is_metal: bool,
+    ) -> np.ndarray:
+        """Regenerate lines across a thirds-rule-shrunk interval, or collapse
+        it to a single midpoint line if the shrink left it too thin to
+        resolve.
+
+        The thirds-rule shrink in :func:`_gen_mesh_in_bounds` moves ``lower``
+        and ``upper`` inward by roughly a third of a cell each, *after* that
+        function's own thin-interval check already passed on the pre-shrink
+        bounds -- so a shrunk interval can end up thinner than
+        ``regen_threshold`` (or even inverted, if the two shrinks together
+        exceed the original span) without ever being caught by that check.
+        Calling :func:`_gen_lines_in_bounds` unconditionally on such a sliver
+        would still force :func:`_scaled_min_lines` lines across it via
+        ``_min_spacing``, reproducing the exact runaway the thin-interval
+        check exists to prevent.
+
+        ``regen_threshold`` is deliberately an absolute floor
+        (``FDTD_metal_mesh_resolution * 0.01``) rather than the type-scaled
+        ``thin_threshold`` used for the pre-shrink check in
+        :func:`_gen_mesh_in_bounds`: the question here is whether the shrink
+        degenerated the interval into a sliver too thin for *any* resolution
+        to usefully resolve, not whether it is thinner than its own
+        (possibly much coarser, ``FDTD_mesh_resolution``-scaled) target. A
+        substrate's post-shrink thickness sub-interval, for instance, is
+        routinely well above this floor even though it can be well below the
+        coarser, type-scaled threshold.
+        """
+        if upper - lower < regen_threshold:
+            mid = fp_nearest((lower + upper) / 2.0)
+            return np.array([mid])
+        return self._gen_lines_in_bounds(
+            lower, upper, lower_spacing, upper_spacing, max_spacing, dim, is_metal
+        )
 
     def _gen_lines_in_bounds(
         self,
@@ -1096,6 +1421,7 @@ class Mesh:
         upper_spacing: float,
         max_spacing: float,
         dim: int,
+        is_metal: bool,
     ) -> np.ndarray:
         """Generate mesh line positions across ``[lower, upper]``.
 
@@ -1120,6 +1446,9 @@ class Mesh:
             Largest cell spacing allowed anywhere in the interval.
         dim : int
             Dimension being meshed (selects ``self._smooth[dim]``).
+        is_metal : bool
+            Whether the interval is metal; passed to :func:`_scaled_min_lines`
+            so the minimum line count scales off the right target resolution.
 
         Returns
         -------
@@ -1127,12 +1456,13 @@ class Mesh:
             Mesh line positions from ``lower`` to ``upper``.
         """
         dist = upper - lower
+        min_lines = self._scaled_min_lines(dist, is_metal, dim)
         smaller_spacing = np.min([lower_spacing, upper_spacing])
         larger_spacing = np.max([lower_spacing, upper_spacing])
         num_lower = dist / larger_spacing
 
         if (
-            num_lower < self._min_lines
+            num_lower < min_lines
             or _spacing_at_dist(smaller_spacing, dist, self._smooth[dim])
             < larger_spacing
         ):
@@ -1142,7 +1472,7 @@ class Mesh:
                 lower_spacing,
                 upper_spacing,
                 dim,
-                self._min_lines,
+                min_lines,
                 self._smooth[dim],
             )
 
@@ -1164,7 +1494,7 @@ class Mesh:
             ]
         )
 
-        while lower_num + upper_num < self._min_lines:
+        while lower_num + upper_num < min_lines:
             lower_num += 1
             upper_num += 1
 
@@ -1205,9 +1535,18 @@ class Mesh:
 
         Reads the current lines from the CSXCAD grid (after
         ``SmoothMeshLines`` has run) and, for each dimension, collapses any
-        pair closer than ``min_spacing`` into one -- keeping whichever line
-        of the pair is fixed, or averaging the two if neither is -- then
-        writes the cleaned lines back into the grid.
+        run of lines closer than ``min_spacing`` into one -- keeping
+        whichever line is fixed, or averaging if neither is -- then writes
+        the cleaned lines back into the grid.
+
+        Walks left to right comparing each line against the last *accepted*
+        (possibly already-merged) line, rather than pairing lines two at a
+        time: pairing would merge a close pair and then move on to compare
+        the next line against whatever followed the pair, never re-checking
+        the pair's own average against its neighbor -- so a chain of three
+        or more mutually-close lines could still leave a sub-``min_spacing``
+        gap next to the merged result. Comparing against the last accepted
+        line instead folds an entire close run into one line, however long.
 
         Parameters
         ----------
@@ -1223,24 +1562,16 @@ class Mesh:
             if len(lines) < 2:
                 continue
             cleaned = []
-            i = 0
-            while i < len(lines):
-                j = i + 1
-                if j < len(lines) and (lines[j] - lines[i]) < min_spacing:
-                    if self._is_fixed_line(dim, lines[i]):
-                        cleaned.append(lines[i])
-                        i = j + 1
+            for line in lines:
+                if cleaned and (line - cleaned[-1]) < min_spacing:
+                    if self._is_fixed_line(dim, cleaned[-1]):
                         continue
-                    if self._is_fixed_line(dim, lines[j]):
-                        cleaned.append(lines[j])
-                        i = j + 1
-                        continue
-                    avg = fp_nearest((lines[i] + lines[j]) / 2.0)
-                    cleaned.append(avg)
-                    i = j + 1
+                    if self._is_fixed_line(dim, line):
+                        cleaned[-1] = line
+                    else:
+                        cleaned[-1] = fp_nearest((cleaned[-1] + line) / 2.0)
                 else:
-                    cleaned.append(lines[i])
-                    i += 1
+                    cleaned.append(line)
             cleaned = _remove_dups(cleaned, self.fixed_lines[dim])
             self.mesh_lines[dim] = cleaned
             grid = self._csx.GetGrid()
