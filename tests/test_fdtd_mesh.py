@@ -62,11 +62,11 @@ class TestFloatingPointComparators:
         assert result == pytest.approx([0.0, 2.5, 3.5])
 
     def test_tolerance_is_absolute_not_relative(self):
-        """Rounding to 20 decimals means the tolerance vanishes for
+        """Rounding to 5 decimals means the tolerance vanishes for
         millimetre-scale coordinates -- there, these are exact comparisons.
-        Only sub-1e-20 values are actually collapsed."""
-        assert fp_equalp(1e-21, 2e-21) is np.True_
-        assert not fp_equalp(1.0, 1.0000001)
+        Only sub-1e-5 values are actually collapsed."""
+        assert fp_equalp(1e-7, 2e-7) is np.True_
+        assert not fp_equalp(1.0, 1.00001)
 
     @pytest.mark.parametrize(
         ("func", "a", "b", "expected"),
@@ -99,8 +99,12 @@ class TestFloatingPointComparators:
             assert bool(fp_gep(a, b)) == bool(fp_lep(b, a))
             assert bool(fp_gep(a, b)) == (bool(fp_gtp(a, b)) or bool(fp_equalp(a, b)))
 
-    def test_prec_is_twenty_decimals(self):
-        assert PREC == 20
+    def test_prec_absorbs_last_place_noise(self):
+        """``PREC`` has to collapse the ~1e-16 discrepancy between an edge
+        written as a literal and the same edge reached through trigonometry,
+        or the mesher builds a degenerate interval between them. It must stay
+        well clear of real geometry, so it is set as tight as that allows."""
+        assert PREC == 5
 
 
 # ---------------------------------------------------------------------
