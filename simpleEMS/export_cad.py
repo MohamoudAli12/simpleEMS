@@ -78,6 +78,22 @@ def _make_linpoly(
     )
 
 
+def _apply_transform(solid: cq.Workplane, prim: object) -> cq.Workplane:
+    """Apply prim's CSXCAD transform, if any, to solid.
+
+    CSXCAD builds primitives in a local frame and applies AddTransform
+    (translate/rotate/scale) on top via CSTransform; export_cad must do
+    the same or a transformed primitive (e.g. a rotated stub or taper
+    from components.py) is exported, meshed, and plotted untransformed.
+    transformGeometry (not transformShape) is used because a CSTransform
+    matrix may carry scale, which transformShape's rigid gp_Trsf rejects.
+    """
+    if not prim.HasTransform():
+        return solid
+    matrix = cq.Matrix(prim.GetTransform().GetMatrix().tolist())
+    return cq.Workplane(obj=solid.val().transformGeometry(matrix))
+
+
 def _process_property(
     prop: object,
 ) -> list[cq.Workplane]:
@@ -94,7 +110,7 @@ def _process_property(
         if cls == "CSPrimBox":
             start = prim.GetStart()
             stop = prim.GetStop()
-            solids.append(_make_box(start, stop))
+            solids.append(_apply_transform(_make_box(start, stop), prim))
             console.print(f"[info]  box: {name} ({start} → {stop})[/info]")
 
         elif cls == "CSPrimLinPoly":
@@ -102,7 +118,8 @@ def _process_property(
             elevation = prim.GetElevation()
             normdir = prim.GetNormDir()
             length = prim.GetLength()
-            solids.append(_make_linpoly(x_coords, y_coords, elevation, normdir, length))
+            solid = _make_linpoly(x_coords, y_coords, elevation, normdir, length)
+            solids.append(_apply_transform(solid, prim))
             nv = len(x_coords)
             console.print(
                 f"[info]  polygon: {name} ({nv} verts, elev={elevation}, "
@@ -110,6 +127,25 @@ def _process_property(
             )
 
     return solids
+
+
+def _unique_label(name: str, used: set[str]) -> str:
+    """Return ``name``, or ``name_1``/``name_2``/... if already taken.
+
+    CSXCAD allows two properties to share a name -- ``AddMetal("via")`` builds
+    a new property every call rather than returning the existing one -- but
+    CadQuery rejects a duplicate assembly part label, so a structure with two
+    vias would otherwise abort the export. Collisions are resolved here so the
+    common case (one property per name) keeps its plain name.
+    """
+    if name not in used:
+        used.add(name)
+        return name
+    i = 1
+    while f"{name}_{i}" in used:
+        i += 1
+    used.add(f"{name}_{i}")
+    return f"{name}_{i}"
 
 
 def export_step(
@@ -140,6 +176,7 @@ def export_step(
 
     physical_types = {"CSPropMetal", "CSPropMaterial", "CSPropLumpedElement"}
     assy = cq.Assembly()
+    used: set[str] = set()
     part_count = 0
 
     for prop in all_props:
@@ -157,8 +194,8 @@ def export_step(
         r, g, b, a = prop.GetFillColor()
         color = cq.Color(r / 255, g / 255, b / 255, min(a / 255, 1.0))
 
-        for i, solid in enumerate(solids):
-            label = f"{name}_{i}" if len(solids) > 1 else name
+        for solid in solids:
+            label = _unique_label(name, used)
             assy.add(solid, name=label, color=color)
             part_count += 1
 
@@ -199,6 +236,7 @@ def export_stl(
 
     physical_types = {"CSPropMetal", "CSPropMaterial", "CSPropLumpedElement"}
     assy = cq.Assembly()
+    used: set[str] = set()
     part_count = 0
 
     for prop in all_props:
@@ -216,8 +254,8 @@ def export_stl(
         r, g, b, a = prop.GetFillColor()
         color = cq.Color(r / 255, g / 255, b / 255, min(a / 255, 1.0))
 
-        for i, solid in enumerate(solids):
-            label = f"{name}_{i}" if len(solids) > 1 else name
+        for solid in solids:
+            label = _unique_label(name, used)
             assy.add(solid, name=label, color=color)
             part_count += 1
 
