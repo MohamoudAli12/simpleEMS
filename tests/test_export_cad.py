@@ -7,6 +7,8 @@ bounding box, and volume. That catches the failures that matter -- a dropped
 body, a mis-placed primitive, a polygon extruded along the wrong axis.
 """
 
+import math
+
 import pytest
 
 pytestmark = [pytest.mark.needs_csxcad, pytest.mark.needs_cadquery]
@@ -22,6 +24,8 @@ import cadquery as cq  # noqa: E402
 from CSXCAD import ContinuousStructure  # noqa: E402
 
 from simpleEMS.export_cad import (  # noqa: E402
+    _apply_transform,
+    _unique_label,
     _make_box,
     _make_linpoly,
     _normal_dir,
@@ -119,6 +123,56 @@ class TestSolidHelpers:
 
 
 # ---------------------------------------------------------------------
+# _apply_transform
+# ---------------------------------------------------------------------
+class TestApplyTransform:
+    """CSXCAD builds a primitive's start/stop/coords in its own local frame
+    and applies AddTransform on top; _apply_transform must reproduce that or
+    a rotated/translated primitive (e.g. components.py's stubs and tapers,
+    all rotated via translate-rotate-translate) exports untransformed."""
+
+    def test_untransformed_primitive_is_returned_unchanged(self):
+        csx = ContinuousStructure()
+        prim = csx.AddMetal("m").AddBox(priority=1, start=[0, 0, 0], stop=[2, 3, 4])
+
+        solid = _make_box(prim.GetStart(), prim.GetStop())
+        result = _apply_transform(solid, prim)
+
+        assert result is solid
+
+    def test_translation_shifts_the_bounding_box(self):
+        csx = ContinuousStructure()
+        prim = csx.AddMetal("m").AddBox(priority=1, start=[0, 0, 0], stop=[2, 3, 4])
+        prim.AddTransform("Translate", [5.0, -1.0, 0.0])
+
+        solid = _apply_transform(_make_box(prim.GetStart(), prim.GetStop()), prim)
+        bounds = solid.val().BoundingBox()
+
+        assert bounds.center.x == pytest.approx(1.0 + 5.0)
+        assert bounds.center.y == pytest.approx(1.5 - 1.0)
+        assert bounds.center.z == pytest.approx(2.0)
+
+    def test_rotation_preserves_volume_but_changes_the_footprint(self):
+        """A 45-degree rotation about Z turns a rectangle's axis-aligned
+        bounding box into its diagonal span; a bug that only transforms the
+        two diagonal corners (rather than the whole solid) would report a
+        collapsed or unchanged bounding box here instead."""
+        csx = ContinuousStructure()
+        prim = csx.AddMetal("m").AddBox(priority=1, start=[0, 0, 0], stop=[4, 2, 1])
+        prim.AddTransform("Translate", [-2.0, -1.0, 0.0])
+        prim.AddTransform("RotateAxis", "z", 45)
+        prim.AddTransform("Translate", [2.0, 1.0, 0.0])
+
+        solid = _apply_transform(_make_box(prim.GetStart(), prim.GetStop()), prim)
+        bounds = solid.val().BoundingBox()
+
+        theta = math.radians(45)
+        expected = 4.0 * abs(math.cos(theta)) + 2.0 * abs(math.sin(theta))
+        assert bounds.xlen == pytest.approx(expected, rel=1e-3)
+        assert solid.val().Volume() == pytest.approx(4.0 * 2.0 * 1.0, rel=1e-6)
+
+
+# ---------------------------------------------------------------------
 # export_step
 # ---------------------------------------------------------------------
 class TestExportStep:
@@ -133,6 +187,21 @@ class TestExportStep:
         result = cq.importers.importStep(str(tmp_path / "structure.step"))
 
         assert len(result.solids().vals()) == 2
+
+    def test_two_properties_sharing_a_name_both_export(self, tmp_path):
+        """``AddMetal`` returns a new property every call, so two vias share a
+        name; before deduplication this raised ValueError from CadQuery."""
+        csx = ContinuousStructure()
+        for x in (0.0, 5.0):
+            prop = csx.AddMetal("via")
+            prop.SetColor("#B87333", 255)
+            prop.AddBox(priority=4, start=[x, 0, 0], stop=[x + 1, 1, 1])
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+
+        assert len(result.val().Solids()) == 2
+        assert result.val().Volume() == pytest.approx(2.0, rel=1e-6)
 
     def test_bounding_box_spans_both_bodies(self, two_body_structure, tmp_path):
         export_step(two_body_structure, tmp_path)
@@ -218,6 +287,84 @@ class TestExportStep:
         assert bounds.xlen == pytest.approx(params.substrate_width_mm, abs=0.1)
         assert bounds.ylen == pytest.approx(params.substrate_length_mm, abs=0.1)
 
+    def test_transformed_box_exports_in_its_rotated_pose(self, tmp_path):
+        """A rotated primitive (e.g. components.py's stubs and tapers, which
+        all rotate via translate-rotate-translate) must round-trip through
+        STEP in its rotated pose, not its local, untransformed one."""
+        csx = ContinuousStructure()
+        pad = csx.AddMetal("pad")
+        pad.SetColor("#B87333", 255)
+        prim = pad.AddBox(priority=1, start=[0.0, 0.0, 0.0], stop=[4.0, 2.0, 1.0])
+        prim.AddTransform("Translate", [-2.0, -1.0, 0.0])
+        prim.AddTransform("RotateAxis", "z", 45)
+        prim.AddTransform("Translate", [2.0, 1.0, 0.0])
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+        bounds = result.val().BoundingBox()
+
+        theta = math.radians(45)
+        expected_xlen = 4.0 * abs(math.cos(theta)) + 2.0 * abs(math.sin(theta))
+        assert bounds.xlen == pytest.approx(expected_xlen, rel=1e-3)
+        assert result.val().Volume() == pytest.approx(4.0 * 2.0 * 1.0, rel=1e-6)
+
+    def test_transformed_polygon_exports_at_its_translated_position(self, tmp_path):
+        csx = ContinuousStructure()
+        metal = csx.AddMetal("poly")
+        metal.SetColor("#B87333", 255)
+        prim = metal.AddLinPoly(
+            priority=1,
+            points=[[0, 3, 3, 0], [0, 0, 4, 4]],
+            norm_dir=2,
+            elevation=0.0,
+            length=0.035,
+        )
+        prim.AddTransform("Translate", [10.0, -5.0, 0.0])
+
+        export_step(csx, tmp_path)
+        bounds = (
+            cq.importers.importStep(str(tmp_path / "structure.step"))
+            .val()
+            .BoundingBox()
+        )
+
+        assert bounds.xmin == pytest.approx(10.0, abs=1e-6)
+        assert bounds.xmax == pytest.approx(13.0, abs=1e-6)
+        assert bounds.ymin == pytest.approx(-5.0, abs=1e-6)
+        assert bounds.ymax == pytest.approx(-1.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------
+# _unique_label
+# ---------------------------------------------------------------------
+class TestUniqueLabel:
+    """CSXCAD allows two properties to share a name, CadQuery does not allow
+    two assembly parts to. Without deduplication a structure with two vias
+    aborts the export part-way through, leaving no file behind."""
+
+    def test_first_use_keeps_the_plain_name(self):
+        used = set()
+        assert _unique_label("via", used) == "via"
+
+    def test_collisions_are_suffixed_in_order(self):
+        used = set()
+        labels = [_unique_label("via", used) for _ in range(3)]
+        assert labels == ["via", "via_1", "via_2"]
+
+    def test_distinct_names_are_untouched(self):
+        used = set()
+        assert [_unique_label(n, used) for n in ("via", "ground", "taper")] == [
+            "via",
+            "ground",
+            "taper",
+        ]
+
+    def test_suffix_skips_a_name_already_taken(self):
+        """A property genuinely called ``via_1`` must not be overwritten by
+        the suffix generated for a second ``via``."""
+        used = {"via", "via_1"}
+        assert _unique_label("via", used) == "via_2"
+
 
 # ---------------------------------------------------------------------
 # export_stl
@@ -261,6 +408,19 @@ class TestExportStl:
 
         assert not (tmp_path / "structure.stl").exists()
         assert "No physical geometry" in capsys.readouterr().out
+
+    def test_two_properties_sharing_a_name_both_export(self, tmp_path):
+        """``export_stl`` carries the same deduplication as ``export_step``;
+        without it a structure with two vias aborts before writing a file."""
+        csx = ContinuousStructure()
+        for x in (0.0, 5.0):
+            prop = csx.AddMetal("via")
+            prop.SetColor("#B87333", 255)
+            prop.AddBox(priority=4, start=[x, 0, 0], stop=[x + 1, 1, 1])
+
+        export_stl(csx, tmp_path)
+
+        assert (tmp_path / "structure.stl").stat().st_size > 0
 
     def test_step_and_stl_export_the_same_bodies(self, two_body_structure, tmp_path):
         """Both exporters share ``_process_property``; a divergence means one
