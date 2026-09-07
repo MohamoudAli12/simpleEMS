@@ -392,13 +392,21 @@ def _remove_dups(lst: list, fixed: list | None = None) -> list:
 
 
 def _decimate_curve_coords(coords: list[float], min_feature: float) -> list[float]:
-    """Collapse a single primitive's own vertex sequence down to points that
-    are actually distinguishable at the mesh's resolution.
+    """Collapse a single primitive's own vertex coordinates down to points
+    that are actually distinguishable at the mesh's resolution.
 
-    Walks ``coords`` in their original (per-primitive, not globally sorted)
-    order and keeps a point only once it has moved at least ``min_feature``
-    from the last kept point, always keeping the sequence's true last point
-    so the shape's full extent survives.
+    Works on the sorted values: keeps the smallest, then each value at least
+    ``min_feature`` beyond the last one kept, and always the largest, so the
+    shape's full extent survives. Sorting is what makes that a spacing
+    guarantee -- walking the vertex sequence instead only compares
+    neighbours in a list, and an outline that doubles back over the same
+    range (a curved bend's polygon walks its inner arc out and its outer arc
+    back) restarts the walk at an arbitrary phase, so a keeper from each
+    pass can land a hundredth of a resolution apart. Where the largest value
+    is itself within ``min_feature`` of the previous keeper, that keeper is
+    dropped rather than the extent: the bounding box contributes the extent
+    anyway, so keeping both would only open the sliver interval this
+    function exists to prevent.
 
     A finely-faceted curve (e.g. a round pad's arc, built from many straight
     polygon segments) otherwise contributes one near-duplicate mesh-boundary
@@ -415,12 +423,15 @@ def _decimate_curve_coords(coords: list[float], min_feature: float) -> list[floa
     """
     if not coords:
         return []
-    kept = [coords[0]]
-    for c in coords[1:]:
-        if abs(c - kept[-1]) >= min_feature:
+    ordered = sorted(coords)
+    kept = [ordered[0]]
+    for c in ordered[1:]:
+        if c - kept[-1] >= min_feature:
             kept.append(c)
-    if not fp_equalp(kept[-1], coords[-1]):
-        kept.append(coords[-1])
+    if not fp_equalp(kept[-1], ordered[-1]):
+        if len(kept) > 1:
+            kept.pop()
+        kept.append(ordered[-1])
     return kept
 
 
@@ -434,8 +445,14 @@ def _collect_all_bounds(
     vertex coordinate (decimated per :func:`_decimate_curve_coords`) so the
     mesh conforms to non-rectangular metal edges (including tessellated
     STL/PLY imports) without flooding it with a faceted curve's redundant
-    near-duplicate vertices. Near-duplicates are then removed per dimension
-    via :func:`_remove_dups`.
+    near-duplicate vertices. A vertex strictly inside its own primitive's
+    extent counts as an edge when the outline has a second vertex at the same
+    coordinate (an inset notch, a step) and otherwise as one facet of a
+    discretised curve, which is kept only where it stays ``min_feature`` clear
+    of every edge collected here and of the facets already kept -- so a curve's
+    facet cannot open a sliver interval against a neighbouring primitive's
+    edge. Near-duplicates are then removed per dimension via
+    :func:`_remove_dups`.
 
     Parameters
     ----------
@@ -454,6 +471,7 @@ def _collect_all_bounds(
         ``[x_bounds, y_bounds, z_bounds]``, each sorted and deduplicated.
     """
     dim_bounds: list[list[float]] = [[], [], []]
+    interior: list[list[float]] = [[], [], []]
     for prim in prims:
         prim_bounds = _get_prim_bounds(prim)
         for dim, bounds in enumerate(prim_bounds):
@@ -461,17 +479,39 @@ def _collect_all_bounds(
             dim_bounds[dim].append(float(bounds[1]))
         if _is_linpoly(prim):
             vert_bounds = _get_linpoly_vertex_bounds(prim)
-            for dim in range(3):
-                for v in _decimate_curve_coords(vert_bounds[dim], min_feature):
-                    dim_bounds[dim].append(v)
         elif _is_polyhedron(prim):
             vert_bounds = _get_polyhedron_vertex_bounds(prim)
-            for dim in range(3):
-                for v in _decimate_curve_coords(vert_bounds[dim], min_feature):
+        else:
+            continue
+        for dim in range(3):
+            lower, upper = float(prim_bounds[dim][0]), float(prim_bounds[dim][1])
+            for v in _decimate_curve_coords(vert_bounds[dim], min_feature):
+                if fp_equalp(v, lower) or fp_equalp(v, upper):
+                    continue
+                repeats = sum(1 for c in vert_bounds[dim] if fp_equalp(c, v))
+                if repeats > 1:
+                    # Two vertices share the coordinate, so an edge of the
+                    # outline runs along it: a real corner (an inset notch, a
+                    # step in a stub), meshed like any other edge.
                     dim_bounds[dim].append(v)
+                else:
+                    interior[dim].append(v)
     for dim, bounds in enumerate(dim_bounds):
-        dim_bounds[dim] = sorted(bounds)
-        dim_bounds[dim] = _remove_dups(dim_bounds[dim], fixed[dim])
+        # What is left is a lone vertex on a slanted or curved run -- one facet
+        # of a discretised arc, whose position says more about how finely the
+        # curve was drawn than about the geometry. Take it only where it is at
+        # least min_feature clear of every edge (and of the facets already
+        # taken): a facet landing a fraction of a resolution from the trace the
+        # curve meets would otherwise split off a sliver interval, the same
+        # runaway _decimate_curve_coords guards against within one primitive.
+        kept = sorted(bounds)
+        for v in sorted(interior[dim]):
+            index = bisect_left(kept, v)
+            below = v - kept[index - 1] if index else np.inf
+            above = kept[index] - v if index < len(kept) else np.inf
+            if min(below, above) >= min_feature:
+                insort_left(kept, v)
+        dim_bounds[dim] = _remove_dups(kept, fixed[dim])
     return dim_bounds
 
 
