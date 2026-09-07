@@ -18,11 +18,13 @@
 STEP AP242 export utilities for CSXCAD geometries using CadQuery.
 
 Converts openEMS CSXCAD structures into STEP format for CAD interoperability.
-Supports box and linear polygon primitives.
+Supports box, linear polygon, and cylinder (solid or shell) primitives; any
+other primitive type is reported and skipped.
 """
 
 from __future__ import annotations
 
+import math
 import tempfile
 from pathlib import Path
 
@@ -78,6 +80,45 @@ def _make_linpoly(
     )
 
 
+def _make_cylinder(
+    start: tuple[float, float, float],
+    stop: tuple[float, float, float],
+    radius: float,
+    inner_radius: float = 0.0,
+) -> cq.Workplane:
+    """Build the cylinder running from ``start`` to ``stop``.
+
+    This is what a via barrel is: ``GenericStructure.create_via`` adds one
+    ``AddCylinder`` per via, so without this the whole via property exports
+    empty and the FEM mesh -- which only ever sees the STEP file -- has no
+    conductor through the board.
+
+    ``start``/``stop`` are the centres of the two end faces, so the axis is
+    taken from them directly rather than assumed to be z; ``makeCylinder``
+    accepts an arbitrary direction, which keeps a tilted or lying-down
+    cylinder correct without a separate rotation.  A non-zero
+    ``inner_radius`` cuts a coaxial bore, which is how a
+    ``CSPrimCylindricalShell`` (a plated hole rather than a solid barrel) is
+    built.  Degenerate inputs are floored at 1e-3 the way ``_make_box`` and
+    ``_make_linpoly`` floor theirs, since OCC cannot export a solid with no
+    volume.
+    """
+    axis = [b - a for a, b in zip(start, stop, strict=True)]
+    length = math.sqrt(sum(c * c for c in axis))
+    if length < 1e-9:  # no axis to point along; pick one rather than fail
+        axis, length = [0.0, 0.0, 1.0], 1e-3
+    length = max(length, 1e-3)
+
+    direction = cq.Vector(*axis)
+    origin = cq.Vector(*start)
+    solid = cq.Solid.makeCylinder(max(radius, 1e-3), length, origin, direction)
+    if inner_radius > 0:
+        solid = solid.cut(
+            cq.Solid.makeCylinder(inner_radius, length, origin, direction)
+        )
+    return cq.Workplane(obj=solid)
+
+
 def _apply_transform(solid: cq.Workplane, prim: object) -> cq.Workplane:
     """Apply prim's CSXCAD transform, if any, to solid.
 
@@ -126,6 +167,34 @@ def _process_property(
                 f"norm={normdir})[/info]"
             )
 
+        # CSPrimCylindricalShell subclasses CSPrimCylinder, so it has to be
+        # named here as well -- the dispatch is on the exact class name.
+        elif cls in ("CSPrimCylinder", "CSPrimCylindricalShell"):
+            start = prim.GetStart()
+            stop = prim.GetStop()
+            radius = prim.GetRadius()
+            if cls == "CSPrimCylindricalShell":
+                # CSXCAD gives a shell its mid-wall radius plus a wall width.
+                half = prim.GetShellWidth() / 2
+                solid = _make_cylinder(
+                    start, stop, radius + half, max(radius - half, 0.0)
+                )
+            else:
+                solid = _make_cylinder(start, stop, radius)
+            solids.append(_apply_transform(solid, prim))
+            console.print(
+                f"[info]  cylinder: {name} ({start} → {stop}, r={radius})[/info]"
+            )
+
+        else:
+            # Ten of CSXCAD's thirteen primitive types still have no branch
+            # here. Say so: a silently dropped primitive is how the missing
+            # cylinder support went unnoticed, since the property simply
+            # exported empty.
+            console.print(
+                f"[warning]  skipped: {name} ({cls} is not exported to CAD)[/warning]"
+            )
+
     return solids
 
 
@@ -148,6 +217,67 @@ def _unique_label(name: str, used: set[str]) -> str:
     return f"{name}_{i}"
 
 
+def _build_assembly(CSX: ContinuousStructure) -> tuple[cq.Assembly, int]:
+    """Collect every physical property of ``CSX`` into a coloured assembly.
+
+    Shared by the STEP and STL writers, which differ only in the file they
+    save this assembly to.
+
+    Parameters
+    ----------
+    CSX : ContinuousStructure
+        The CSXCAD geometry object containing the simulation structure.
+
+    Returns
+    -------
+    tuple[cq.Assembly, int]
+        The assembly and the number of parts added to it.
+    """
+    physical_types = {"CSPropMetal", "CSPropMaterial", "CSPropLumpedElement"}
+    assy = cq.Assembly()
+    used: set[str] = set()
+    part_count = 0
+
+    for prop in CSX.GetAllProperties():
+        cls = prop.__class__.__name__
+        if cls not in physical_types:
+            continue
+
+        name = prop.GetName()
+        console.print(f"[info]processing {name}[/info]")
+
+        solids = _process_property(prop)
+        if not solids:
+            continue
+
+        r, g, b, a = prop.GetFillColor()
+        color = cq.Color(r / 255, g / 255, b / 255, min(a / 255, 1.0))
+
+        for solid in solids:
+            label = _unique_label(name, used)
+            assy.add(solid, name=label, color=color)
+            part_count += 1
+
+    return assy, part_count
+
+
+def _write_assembly(CSX: ContinuousStructure, filename: Path, export_type: str) -> None:
+    """Build ``CSX``'s assembly and save it as ``export_type`` to ``filename``."""
+    console.print("-------------------------------------------", style="info")
+    console.print(f"Exporting Geometry to {export_type}", style="info")
+    console.print("-------------------------------------------", style="info")
+
+    assy, part_count = _build_assembly(CSX)
+
+    if part_count == 0:
+        console.print("[warning]No physical geometry found to export[/warning]")
+        return
+
+    console.print(f"[info]Writing {part_count} part(s) to {export_type}...[/info]")
+    assy.save(str(filename), exportType=export_type)
+    console.print(f"[success]{export_type} file written to {filename}[/success]")
+
+
 def export_step(
     CSX: ContinuousStructure,
     output_path: Path,
@@ -166,46 +296,7 @@ def export_step(
     output_path : Path
         Directory where the STEP file (``structure.step``) will be saved.
     """
-    console.print("-------------------------------------------", style="info")
-    console.print("Exporting Geometry to STEP", style="info")
-    console.print("-------------------------------------------", style="info")
-
-    filename = output_path / "structure.step"
-
-    all_props = CSX.GetAllProperties()
-
-    physical_types = {"CSPropMetal", "CSPropMaterial", "CSPropLumpedElement"}
-    assy = cq.Assembly()
-    used: set[str] = set()
-    part_count = 0
-
-    for prop in all_props:
-        cls = prop.__class__.__name__
-        if cls not in physical_types:
-            continue
-
-        name = prop.GetName()
-        console.print(f"[info]processing {name}[/info]")
-
-        solids = _process_property(prop)
-        if not solids:
-            continue
-
-        r, g, b, a = prop.GetFillColor()
-        color = cq.Color(r / 255, g / 255, b / 255, min(a / 255, 1.0))
-
-        for solid in solids:
-            label = _unique_label(name, used)
-            assy.add(solid, name=label, color=color)
-            part_count += 1
-
-    if part_count == 0:
-        console.print("[warning]No physical geometry found to export[/warning]")
-        return
-
-    console.print(f"[info]Writing {part_count} part(s) to STEP...[/info]")
-    assy.save(str(filename), exportType="STEP")
-    console.print(f"[success]STEP file written to {filename}[/success]")
+    _write_assembly(CSX, output_path / "structure.step", "STEP")
 
 
 def export_stl(
@@ -213,59 +304,20 @@ def export_stl(
     output_path: Path,
 ) -> None:
     """
-    Export CSXCAD geometry to a coloured, multi-layer STEP AP242 file.
+    Export CSXCAD geometry to a coloured, multi-layer STL file.
 
     Extracts all Material and Metal properties from the CSXCAD
     structure and writes them as separate coloured bodies in a
-    single ``.step`` file.
+    single ``.stl`` file.
 
     Parameters
     ----------
     CSX : ContinuousStructure
         The CSXCAD geometry object containing the simulation structure.
     output_path : Path
-        Directory where the STEP file (``structure.step``) will be saved.
+        Directory where the STL file (``structure.stl``) will be saved.
     """
-    console.print("-------------------------------------------", style="info")
-    console.print("Exporting Geometry to STL", style="info")
-    console.print("-------------------------------------------", style="info")
-
-    filename = output_path / "structure.stl"
-
-    all_props = CSX.GetAllProperties()
-
-    physical_types = {"CSPropMetal", "CSPropMaterial", "CSPropLumpedElement"}
-    assy = cq.Assembly()
-    used: set[str] = set()
-    part_count = 0
-
-    for prop in all_props:
-        cls = prop.__class__.__name__
-        if cls not in physical_types:
-            continue
-
-        name = prop.GetName()
-        console.print(f"[info]processing {name}[/info]")
-
-        solids = _process_property(prop)
-        if not solids:
-            continue
-
-        r, g, b, a = prop.GetFillColor()
-        color = cq.Color(r / 255, g / 255, b / 255, min(a / 255, 1.0))
-
-        for solid in solids:
-            label = _unique_label(name, used)
-            assy.add(solid, name=label, color=color)
-            part_count += 1
-
-    if part_count == 0:
-        console.print("[warning]No physical geometry found to export[/warning]")
-        return
-
-    console.print(f"[info]Writing {part_count} part(s) to STL...[/info]")
-    assy.save(str(filename), exportType="STL")
-    console.print(f"[success]STL file written to {filename}[/success]")
+    _write_assembly(CSX, output_path / "structure.stl", "STL")
 
 
 def export_csxcad_xml_to_step(

@@ -502,6 +502,15 @@ def _mesh_fingerprint(
                     f"linpoly:{prim.GetCoords()}:{prim.GetElevation()}:"
                     f"{prim.GetNormDir()}:{prim.GetLength()}"
                 )
+            elif cls in ("CSPrimCylinder", "CSPrimCylindricalShell"):
+                # Vias are cylinders; without their dimensions here, moving a
+                # via or resizing it leaves the fingerprint unchanged and a
+                # stale mesh is reused.
+                width = prim.GetShellWidth() if cls == "CSPrimCylindricalShell" else 0.0
+                parts.append(
+                    f"cylinder:{prim.GetStart()}:{prim.GetStop()}:"
+                    f"{prim.GetRadius()}:{width}"
+                )
             else:
                 parts.append(cls)
     parts.append(f"freqs:{np.asarray(freqs, dtype=float).tobytes()!r}")
