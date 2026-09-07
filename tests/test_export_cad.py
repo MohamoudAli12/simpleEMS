@@ -27,6 +27,7 @@ from simpleEMS.export_cad import (  # noqa: E402
     _apply_transform,
     _unique_label,
     _make_box,
+    _make_cylinder,
     _make_linpoly,
     _normal_dir,
     export_step,
@@ -121,6 +122,51 @@ class TestSolidHelpers:
 
         assert solid.val().BoundingBox().zlen == pytest.approx(1e-3)
 
+    def test_cylinder_spans_start_to_stop(self):
+        """A via barrel runs between the two face centres CSXCAD stores; a
+        cylinder built at the origin instead would pass a volume check and
+        still land in the wrong place."""
+        solid = _make_cylinder((1.0, 2.0, -0.035), (1.0, 2.0, 1.635), 0.3)
+        bounds = solid.val().BoundingBox()
+
+        assert bounds.zmin == pytest.approx(-0.035)
+        assert bounds.zmax == pytest.approx(1.635)
+        assert bounds.center.x == pytest.approx(1.0)
+        assert bounds.center.y == pytest.approx(2.0)
+        assert bounds.xlen == pytest.approx(0.6, rel=1e-3)
+
+    def test_cylinder_volume_matches_pi_r_squared_l(self):
+        solid = _make_cylinder((0.0, 0.0, 0.0), (0.0, 0.0, 1.6), 0.3)
+
+        assert solid.val().Volume() == pytest.approx(math.pi * 0.3**2 * 1.6, rel=1e-3)
+
+    def test_cylinder_follows_an_arbitrary_axis(self):
+        """start/stop need not differ on z only -- a cylinder laid on its
+        side must not be re-erected along z."""
+        solid = _make_cylinder((0.0, 0.0, 0.0), (1.0, 1.0, 0.0), 0.5)
+
+        assert solid.val().Volume() == pytest.approx(
+            math.pi * 0.5**2 * math.sqrt(2.0), rel=1e-3
+        )
+        assert solid.val().BoundingBox().zlen == pytest.approx(1.0, rel=1e-3)
+
+    def test_zero_length_cylinder_is_given_a_minimum_extent(self):
+        """start == stop leaves no axis to point along; OCC cannot export a
+        solid with no volume, so 1e-3 is substituted as for the box."""
+        solid = _make_cylinder((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.3)
+
+        assert solid.val().BoundingBox().zlen == pytest.approx(1e-3)
+        assert solid.val().Volume() > 0
+
+    def test_shell_volume_is_the_annulus(self):
+        """A CSPrimCylindricalShell is a plated hole: the bore has to be cut
+        out, or a shell exports as a solid barrel."""
+        solid = _make_cylinder((0.0, 0.0, 0.0), (0.0, 0.0, 2.0), 0.5, 0.4)
+
+        assert solid.val().Volume() == pytest.approx(
+            math.pi * (0.5**2 - 0.4**2) * 2.0, rel=1e-3
+        )
+
 
 # ---------------------------------------------------------------------
 # _apply_transform
@@ -170,6 +216,31 @@ class TestApplyTransform:
         expected = 4.0 * abs(math.cos(theta)) + 2.0 * abs(math.sin(theta))
         assert bounds.xlen == pytest.approx(expected, rel=1e-3)
         assert solid.val().Volume() == pytest.approx(4.0 * 2.0 * 1.0, rel=1e-6)
+
+    def test_transform_moves_a_cylinder_too(self):
+        """components.py rotates a primitive about a point with a
+        translate-rotate-translate triple; a via carried along by one has to
+        move with it."""
+        csx = ContinuousStructure()
+        prim = csx.AddMetal("via").AddCylinder(
+            priority=4, start=[0, 0, 0], stop=[0, 0, 1.6], radius=0.3
+        )
+        prim.AddTransform("Translate", [-2.0, -1.0, 0.0])
+        prim.AddTransform("RotateAxis", "z", 90)
+        prim.AddTransform("Translate", [2.0, 1.0, 0.0])
+
+        solid = _apply_transform(
+            _make_cylinder(prim.GetStart(), prim.GetStop(), prim.GetRadius()), prim
+        )
+        bounds = solid.val().BoundingBox()
+
+        # (0, 0) about (2, 1) through +90 degrees lands on (3, -1).
+        assert bounds.center.x == pytest.approx(3.0, abs=1e-6)
+        assert bounds.center.y == pytest.approx(-1.0, abs=1e-6)
+        # transformGeometry re-fits the barrel's curved face as a BSpline, so
+        # the volume is preserved only to within the fit -- close enough to
+        # catch a collapsed or doubled body, which is what this guards.
+        assert solid.val().Volume() == pytest.approx(math.pi * 0.3**2 * 1.6, rel=2e-2)
 
 
 # ---------------------------------------------------------------------
@@ -249,6 +320,80 @@ class TestExportStep:
 
         assert len(result.solids().vals()) == 1
         assert result.val().Volume() == pytest.approx(3.0 * 4.0 * 0.035, rel=1e-3)
+
+    def test_via_barrels_are_exported(self, tmp_path):
+        """``GenericStructure.create_via`` adds an ``AddCylinder`` barrel. It
+        used to match no branch of the primitive dispatch, so the property
+        exported empty and the FEM mesh -- whose only view of the geometry is
+        this file -- had no conductor through the board."""
+        csx = ContinuousStructure()
+        via = csx.AddMetal("via")
+        via.SetColor("#B87333", 255)
+        via.AddCylinder(priority=4, start=[0, 0, 0], stop=[0, 0, 1.6], radius=0.3)
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+
+        assert len(result.solids().vals()) == 1
+        assert result.val().Volume() == pytest.approx(math.pi * 0.3**2 * 1.6, rel=1e-3)
+
+    def test_via_keeps_its_position(self, tmp_path):
+        """A stitching via row is only meaningful if each barrel exports where
+        it was placed."""
+        csx = ContinuousStructure()
+        via = csx.AddMetal("via")
+        via.SetColor("#B87333", 255)
+        via.AddCylinder(
+            priority=4, start=[4.0, -2.0, -0.035], stop=[4.0, -2.0, 1.6], radius=0.3
+        )
+
+        export_step(csx, tmp_path)
+        bounds = (
+            cq.importers.importStep(str(tmp_path / "structure.step"))
+            .val()
+            .BoundingBox()
+        )
+
+        assert bounds.center.x == pytest.approx(4.0, abs=1e-6)
+        assert bounds.center.y == pytest.approx(-2.0, abs=1e-6)
+        assert bounds.zmin == pytest.approx(-0.035, abs=1e-6)
+        assert bounds.zmax == pytest.approx(1.6, abs=1e-6)
+
+    def test_cylindrical_shell_exports_with_its_bore(self, tmp_path):
+        """CSPrimCylindricalShell subclasses CSPrimCylinder, so a dispatch on
+        the exact class name misses it unless it is named explicitly."""
+        csx = ContinuousStructure()
+        shell = csx.AddMetal("plated_hole")
+        shell.SetColor("#B87333", 255)
+        shell.AddCylindricalShell(
+            priority=4,
+            start=[0, 0, 0],
+            stop=[0, 0, 1.6],
+            radius=0.45,
+            shell_width=0.1,
+        )
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+
+        assert len(result.solids().vals()) == 1
+        assert result.val().Volume() == pytest.approx(
+            math.pi * (0.5**2 - 0.4**2) * 1.6, rel=1e-3
+        )
+
+    def test_unsupported_primitive_is_reported(self, tmp_path, capsys):
+        """Most of CSXCAD's primitive types still have no branch. Dropping one
+        without a word is how the missing cylinder support stayed hidden."""
+        csx = ContinuousStructure()
+        metal = csx.AddMetal("blob")
+        metal.SetColor("#B87333", 255)
+        metal.AddSphere(priority=4, center=[0, 0, 0], radius=1.0)
+
+        export_step(csx, tmp_path)
+        out = capsys.readouterr().out
+
+        assert "skipped" in out
+        assert "CSPrimSphere" in out
 
     def test_empty_structure_writes_nothing(self, tmp_path, capsys):
         """Better to warn than to emit an empty file a CAD tool chokes on."""
