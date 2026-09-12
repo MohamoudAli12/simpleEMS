@@ -77,9 +77,25 @@ def write_problem(
     k0_def = "k0[] = 2*Pi*FREQ / c0;"
     freqvar = "FREQ"
 
+    # A wave port's mode is a solved field, not a formula: fem_port_mode writes
+    # it as a Gmsh view per solve, and the modal index and impedance come in as
+    # runtime constants beside it. Everything below is additive -- a problem
+    # with no wave ports emits exactly what it always did.
+    wave_ports = [pm for pm in ports if pm.is_wave]
+    wave_consts = "".join(
+        f",\n  NEFF_{pm.number} = 1.0,   // beta/k0 of port {pm.number}'s mode"
+        f"\n  ZC_{pm.number} = {_fmt(pm.z0)}   // its characteristic impedance [ohm]"
+        for pm in wave_ports
+    )
+    gmsh_reads = [
+        f'      GmshRead[ StrCat[myDir, "mode_{pm.number}.pos"], {pm.number} ] ;'
+        for pm in wave_ports
+    ]
+    single_reads = ("\n".join(gmsh_reads) + "\n") if gmsh_reads else ""
+
     # Only the source term changes between ports, so assemble and factorise
     # once and rebuild just the right-hand side for each subsequent port.
-    resolution_lines = ["CreateDir[Str[myDir]] ;"]
+    resolution_lines = ["CreateDir[Str[myDir]] ;", *gmsh_reads]
     if port_numbers:
         resolution_lines += [
             f"      Evaluate[ $ActivePort = {active_default} ] ;",
@@ -214,11 +230,24 @@ def write_problem(
     port_fun_lines = []
     for pm in ports:
         port_fun_lines.append(f"  dir_{pm.number}[] = {_dir_vector(pm.direction)};")
-        port_fun_lines.append(f"  ePort_{pm.number}[] = dir_{pm.number}[];")
-        port_fun_lines.append(
-            f"  Yrel_{pm.number} = eta0 / ({_fmt(pm.sheet_impedance)});"
-            f"  // eta0/Zs, Zs=z0*w/gap"
-        )
+        if pm.is_wave:
+            # the mode solved on this port's cross-section, read back by tag
+            port_fun_lines.append(
+                f"  ePort_{pm.number}[] = ComplexVectorField[XYZ[]]{{{pm.number}}};"
+            )
+            # a wave port terminates into its own mode, so the boundary term is
+            # scaled by the modal wave admittance beta/k0, not by a sheet
+            port_fun_lines.append(f"  Yrel_{pm.number} = NEFF_{pm.number};  // beta/k0")
+            port_fun_lines.append(
+                f"  VMODE_{pm.number} = Sqrt[2*ZC_{pm.number}];"
+                f"  // voltage of the 1 W mode"
+            )
+        else:
+            port_fun_lines.append(f"  ePort_{pm.number}[] = dir_{pm.number}[];")
+            port_fun_lines.append(
+                f"  Yrel_{pm.number} = eta0 / ({_fmt(pm.sheet_impedance)});"
+                f"  // eta0/Zs, Zs=z0*w/gap"
+            )
         # $ActivePort (not the ACTIVE_PORT constant) so the source can be
         # rebuilt per port inside one launch -- see the Resolution below.
         port_fun_lines.append(
@@ -232,8 +261,13 @@ def write_problem(
     # factor 2 launches unit incident amplitude into the matched sheet).
     port_eq_lines = []
     for pm in ports:
+        label = (
+            f"wave port {pm.number}: modal impedance sheet (beta/k0) + modal source"
+            if pm.is_wave
+            else f"lumped port {pm.number}: resistive sheet (Z0={pm.z0}) + source"
+        )
         port_eq_lines.append(
-            f"""      // lumped port {pm.number}: resistive sheet (Z0={pm.z0}) + source
+            f"""      // {label}
       Galerkin {{ [ -I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ Dof{{e}}) , {{e}} ] ;
         In Port_{pm.number} ; Integration I1 ; Jacobian Jac ; }}
       Galerkin {{ [ 2*I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ eInc[]) , {{e}} ] ;
@@ -249,6 +283,27 @@ def write_problem(
     sparam_q = []
     for pm in ports:
         n = pm.number
+        if pm.is_wave:
+            # A solved mode is a vector field with a phase, so the overlap is
+            # the full conjugated inner product rather than a projection on one
+            # axis. Dividing by the mode's self-overlap makes S independent of
+            # how the mode was normalised. V and I follow the lumped forms with
+            # the gap replaced by the mode's own voltage.
+            sparam_q.append(
+                f"""        {{ Name intPort_{n} ;
+          Value {{ Integral {{ [ ePort_{n}[] * Conj[ePort_{n}[]] ] ;
+            In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}
+        {{ Name xS_{n} ;
+          Value {{ Integral {{ [ ({{e}} - (($ActivePort == {n}) ? ePort_{n}[] : Vector[0.,0.,0.])) * Conj[ePort_{n}[]] / #({n}) ] ;
+            In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}
+        {{ Name V_{n} ;
+          Value {{ Integral {{ [ VMODE_{n} * ({{e}} * Conj[ePort_{n}[]]) / #({n}) ] ;
+            In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}
+        {{ Name I_{n} ;
+          Value {{ Integral {{ [ (VMODE_{n}/ZC_{n}) * ((2*eInc[] - {{e}}) * Conj[ePort_{n}[]]) / #({n}) ] ;
+            In Port_{n} ; Jacobian Jac ; Integration I1 ; }} }} }}"""
+            )
+            continue
         sparam_q.append(
             f"""        {{ Name intPort_{n} ;
           Value {{ Integral {{ [ (ePort_{n}[]*dir_{n}[]) * (ePort_{n}[]*dir_{n}[]) ] ;
@@ -297,7 +352,7 @@ def write_problem(
 DefineConstant[
   FREQ = {_fmt(f0)},          // Hz (override per solve with -setnumber FREQ <f>)
   ACTIVE_PORT = {active_default},   // driven port for AnalysisSinglePort only
-  FEorder = {int(problem.fe_order)}   // 1 (lowest-order Nedelec) or 2 (add BF_Edge_2E)
+  FEorder = {int(problem.fe_order)}   // 1 (lowest-order Nedelec) or 2 (add BF_Edge_2E){wave_consts}
 ];
 NbPorts = {nports};
 myDir = "output/";
@@ -414,7 +469,7 @@ Resolution {{
     System {{ {{ Name A ; NameOfFormulation eFormulation ; Type ComplexValue ; Frequency FREQ ; }} }}
     Operation {{
       CreateDir[Str[myDir]] ;
-      Evaluate[ $ActivePort = ACTIVE_PORT ] ;
+{single_reads}      Evaluate[ $ActivePort = ACTIVE_PORT ] ;
       Generate[A] ; Solve[A] ; SaveSolution[A] ;
     }}
   }}
@@ -461,5 +516,200 @@ PostOperation {{
 }}
 """
     pro_path = Path(workdir).absolute() / f"{problem.name}.pro"
+    pro_path.write_text(pro)
+    return str(pro_path)
+
+
+def write_mode_problem(
+    problem: "Problem",
+    mesh: "Mesh",
+    port_number: int,
+    workdir: str | Path,
+) -> str:
+    """
+    Write the 2D transverse mode problem for one wave port.
+
+    The port's cross-section carries a guided mode
+    ``E = [E_t(x,y) + z_hat E_z(x,y)] exp(-j*beta*z)``. Substituting
+    ``e_t = beta*E_t`` and ``phi = j*E_z`` turns the vector wave equation into
+    the generalised linear eigenproblem ``A_tt = beta^2 * C``, with
+
+    .. math::
+
+        A_{tt} &= \\int \\nu_r (\\nabla_t \\times w_t)(\\nabla_t \\times e_t)
+                  - k_0^2 \\epsilon_r\\, w_t e_t \\\\
+        C &= \\int \\nu_r (d\\Psi + \\hat z \\wedge w_t)(d\\Phi + \\hat z \\wedge e_t)
+             - k_0^2 \\epsilon_r\\, \\Psi \\Phi
+
+    ``A_tt`` goes in the default (``NoDt``) block and ``-C`` in the ``DtDtDof``
+    block, so GetDP's ``GenerateSeparate`` + ``EigenSolve`` pair reports
+    ``beta`` itself as the eigenvalue. The ``Form1`` + ``Form1P`` space pair
+    follows onelab's ``models/BlochPeriodicWaveguides/rhombus.pro``.
+
+    Parameters
+    ----------
+    problem : Problem
+        The problem being solved, supplying the dielectric materials.
+    mesh : Mesh
+        The generated mesh, supplying the region tag of each dielectric.
+    port_number : int
+        One-based number of the port whose mode is solved.
+    workdir : str | Path
+        Directory to write the ``.pro`` file into.
+
+    Returns
+    -------
+    str
+        Path to the written ``.pro`` file.
+    """
+    # The cross-section reuses the 3D mesh's material tags, so the same epsR
+    # assignment is written here as in write_problem. It is a separate mesh
+    # file, so the tags cannot collide.
+    diel_lines, epsr_lines, nur_lines = [], [], []
+    for name, rid in sorted(mesh.dielectric_regions.items()):
+        d = problem.solids[name].dielectric
+        diel_lines.append(f"  Diel_{name} = Region[{rid}];")
+        # The mode solve wants the propagation constant of the lossless line;
+        # loss is carried by the 3D solve. Using the real part here keeps beta
+        # real and the eigenvalue filter simple.
+        epsr_lines.append(f"  epsR[Diel_{name}] = {_fmt(d.eps_r)};")
+        nur_lines.append(f"  nuR[Diel_{name}] = {_fmt(1.0 / d.mu_r)};")
+    nur_lines.append("  nuR[Air] = 1.;")
+    diel_region_list = ", ".join(f"Diel_{n}" for n in sorted(mesh.dielectric_regions))
+    xsec_list = f"{diel_region_list}, Air" if diel_region_list else "Air"
+
+    pro = f"""// Auto-generated by simpleEMS: 2D transverse mode of port {port_number} of '{problem.name}'.
+// Eigenproblem A_tt = beta^2 * C in the substituted unknowns e_t = beta*E_t, phi = j*E_z.
+// GetDP reports the eigenvalue as `w`, which is beta directly; it is also written
+// into each $Solution header of the .res file, which is what fem_port_mode reads.
+
+DefineConstant[
+  FREQ     = {_fmt(float(problem.freqs[0]))},   // Hz
+  NMODES   = 6,      // eigenpairs to compute
+  SHIFT_RE = 0.,     // spectral shift, targeted at beta^2 (NOT near 0: the
+  SHIFT_IM = 0.      // gradient null space swamps a small shift)
+];
+
+myDir = "output/";
+
+eps0 = {_fmt(EPS0)};
+mu0  = {_fmt(MU0)};
+c0   = 1/Sqrt[eps0*mu0];
+
+Group {{
+{chr(10).join(diel_lines)}
+  Air  = Region[{AIR}];
+  Xsec = Region[{{{xsec_list}}}];   // NB: 'Cross' is a reserved GetDP word
+  Wall = Region[{PEC}];             // PEC edges: conductors cut by the port plane,
+  Tot  = Region[{{Xsec, Wall}}];    // plus the outer boundary of the mode box
+}}
+
+Function {{
+  I[]  = Complex[0., 1.];
+  EZ[] = Vector[0., 0., 1.];
+{chr(10).join(epsr_lines)}
+  epsR[Air] = 1.;
+{chr(10).join(nur_lines)}
+  k0 = 2*Pi*FREQ/c0;
+}}
+
+Jacobian {{
+  {{ Name Jac ; Case {{ {{ Region All ; Jacobian Vol ; }} }} }}
+}}
+
+Integration {{
+  {{ Name I1 ; Case {{ {{ Type Gauss ; Case {{
+    {{ GeoElement Point ; NumberOfPoints 1 ; }}
+    {{ GeoElement Line ; NumberOfPoints 4 ; }}
+    {{ GeoElement Triangle ; NumberOfPoints 7 ; }}
+  }} }} }} }}
+}}
+
+Constraint {{
+  {{ Name Et_wall ; Type Assign ; Case {{ {{ Region Wall ; Value 0. ; }} }} }}
+  {{ Name Ez_wall ; Type Assign ; Case {{ {{ Region Wall ; Value 0. ; }} }} }}
+}}
+
+FunctionSpace {{
+  // transverse field e_t: in-plane edge elements
+  {{ Name Et_space ; Type Form1 ;
+    BasisFunction {{
+      {{ Name se ; NameOfCoef ee ; Function BF_Edge ; Support Tot ; Entity EdgesOf[All] ; }}
+    }}
+    Constraint {{ {{ NameOfCoef ee ; EntityType EdgesOf ; NameOfConstraint Et_wall ; }} }}
+  }}
+  // longitudinal field phi: perpendicular (out-of-plane) nodal elements
+  {{ Name Ez_space ; Type Form1P ;
+    BasisFunction {{
+      {{ Name sn ; NameOfCoef en ; Function BF_PerpendicularEdge ; Support Tot ; Entity NodesOf[All] ; }}
+    }}
+    Constraint {{ {{ NameOfCoef en ; EntityType NodesOf ; NameOfConstraint Ez_wall ; }} }}
+  }}
+}}
+
+Formulation {{
+  {{ Name ModeForm ; Type FemEquation ;
+    Quantity {{
+      {{ Name et ; Type Local ; NameOfSpace Et_space ; }}
+      {{ Name ez ; Type Local ; NameOfSpace Ez_space ; }}
+    }}
+    Equation {{
+      // ---- A_tt : the NoDt block ----
+      Galerkin {{ [ nuR[] * Dof{{d et}} , {{d et}} ] ;
+        In Xsec ; Integration I1 ; Jacobian Jac ; }}
+      Galerkin {{ [ -k0^2 * epsR[] * Dof{{et}} , {{et}} ] ;
+        In Xsec ; Integration I1 ; Jacobian Jac ; }}
+
+      // ---- -C : the eigenvalue (DtDtDof) block; the minus sign is what makes
+      // GetDP's K + lambda^2 M report lambda = beta rather than j*beta ----
+      Galerkin {{ DtDtDof [ -nuR[] * Dof{{d ez}} , {{d ez}} ] ;
+        In Xsec ; Integration I1 ; Jacobian Jac ; }}
+      Galerkin {{ DtDtDof [ -nuR[] * (EZ[] /\\ Dof{{et}}) , {{d ez}} ] ;
+        In Xsec ; Integration I1 ; Jacobian Jac ; }}
+      Galerkin {{ DtDtDof [ -nuR[] * Dof{{d ez}} , EZ[] /\\ {{et}} ] ;
+        In Xsec ; Integration I1 ; Jacobian Jac ; }}
+      Galerkin {{ DtDtDof [ -nuR[] * (EZ[] /\\ Dof{{et}}) , EZ[] /\\ {{et}} ] ;
+        In Xsec ; Integration I1 ; Jacobian Jac ; }}
+      Galerkin {{ DtDtDof [ k0^2 * epsR[] * Dof{{ez}} , {{ez}} ] ;
+        In Xsec ; Integration I1 ; Jacobian Jac ; }}
+    }}
+  }}
+}}
+
+Resolution {{
+  {{ Name ModeAnalysis ;
+    System {{ {{ Name M ; NameOfFormulation ModeForm ; Type ComplexValue ; }} }}
+    Operation {{
+      CreateDir[Str[myDir]] ;
+      GenerateSeparate[M] ;
+      EigenSolve[M, NMODES, SHIFT_RE, SHIFT_IM] ;
+      SaveSolutions[M] ;
+    }}
+  }}
+}}
+
+PostProcessing {{
+  {{ Name postMode ; NameOfFormulation ModeForm ;
+    Quantity {{
+      {{ Name et ; Value {{ Local {{ [ {{et}} ] ; In Xsec ; Jacobian Jac ; }} }} }}
+      {{ Name ez ; Value {{ Local {{ [ {{ez}} ] ; In Xsec ; Jacobian Jac ; }} }} }}
+    }}
+  }}
+}}
+
+PostOperation {{
+  // Every eigenpair is written; GetDP stores a complex solution as a pair of
+  // real/imag steps, so mode k is steps 2k and 2k+1. fem_port_mode selects.
+  {{ Name Get_Mode ; NameOfPostProcessing postMode ;
+    Operation {{
+      // Format GmshParsed: with the Gmsh kernel linked in, a bare .pos comes
+      // out mesh-based or parsed depending on what else the run touched, and
+      // fem_port_mode.read_pos_steps reads the parsed form. Pin it.
+      Print [ et, OnElementsOf Xsec, Format GmshParsed, File StrCat[myDir, "et_{port_number}.pos"] ] ;
+    }}
+  }}
+}}
+"""
+    pro_path = Path(workdir).absolute() / f"{problem.name}_mode_{port_number}.pro"
     pro_path.write_text(pro)
     return str(pro_path)

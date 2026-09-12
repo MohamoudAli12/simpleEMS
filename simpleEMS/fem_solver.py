@@ -180,7 +180,16 @@ def run_getdp(
     # Output is streamed rather than captured, so getdp's progress is visible;
     # that leaves stdout/stderr as None here, hence the guard (indexing them
     # raised TypeError and hid the actual failure).
-    res = subprocess.run(args, cwd=workdir, capture_output=False, text=True)
+    # stdin is closed, not inherited: getdp's eigenvalue solver prompts for
+    # ARPACK settings when it has no eigen.par to read, and an inherited stdin
+    # that never delivers a line hangs the whole sweep with no output.
+    res = subprocess.run(
+        args,
+        cwd=workdir,
+        capture_output=False,
+        text=True,
+        stdin=subprocess.DEVNULL,
+    )
     if res.returncode != 0:
         tail = "\n".join(
             stream[-2000:] for stream in (res.stdout, res.stderr) if stream

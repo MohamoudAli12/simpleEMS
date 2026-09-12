@@ -116,6 +116,46 @@ class SimParams:
     FEM_mesh_fine_scale : float, optional
         FEM backend only. Multiplier on the near-conductor element size.
         Default is ``1.0``.
+    FEM_port_mode_modes : int, optional
+        Number of eigenpairs each wave port's transverse mode solve computes.
+        Raise it if a port reports finding no guided mode, or to reach a
+        higher ``FEM_port_mode_index``. Default is ``6``.
+    FEM_port_mode_index : int, optional
+        Which guided mode a wave port runs in, counting from ``0`` for the one
+        with the largest propagation constant. ``0`` (the default) is right for
+        microstrip and any other single-conductor line. A conductor-backed
+        coplanar waveguide carries several quasi-TEM modes -- the CPW mode the
+        line is meant to run in, and a microstrip-like mode between the trace
+        and the backside ground -- and the CPW mode is not the one with the
+        largest propagation constant, so it has to be named.
+    FEM_port_type : str, optional
+        Which port the FEM backend makes of the ports the geometry already
+        carries. ``"lumpedport"`` (the default) drives one constant field
+        direction across the port sheet -- right for a gap feed such as a
+        probe-fed patch, and what the FEM backend has always done.
+        ``"waveport"`` instead solves the transverse mode living on the port's
+        cross-section and drives the line with that, which is what a
+        transmission line needs: a microstrip quasi-TEM mode is not uniform
+        across the port face. The geometry is unchanged either way -- the
+        same ``AddLumpedPort`` or ``create_cpw_port`` call is simply read
+        differently. A coplanar waveguide port is always treated as a wave
+        port, because its mode is odd and a single constant vector excites the
+        even parallel-plate mode instead.
+    FEM_port_mode_eps_eff : float, optional
+        Effective permittivity naming which guided mode a wave port runs in.
+        A conductor-backed coplanar waveguide carries several quasi-TEM modes,
+        and this picks the one whose effective permittivity is closest --
+        naming the mode by a property of the line rather than by its position
+        in a spectrum that shifts with frequency and mesh density. Takes
+        precedence over ``FEM_port_mode_index``. Default is ``None``.
+    FEM_port_mode_zc : float, optional
+        Characteristic impedance in ohms to reference a wave port's
+        S-parameters to, overriding the value measured from the solved mode.
+        The measured value is good to a few percent on microstrip, but the
+        power-voltage impedance of a multi-conductor mode depends on the path
+        the voltage is integrated along, so on a coplanar waveguide it is
+        better to state the impedance the line was designed for. Default is
+        ``None`` (use the measured value).
     FEM_min_layers : int, optional
         FEM backend only. Element layers through the dielectric thickness.
         Default is ``3``.
@@ -177,6 +217,11 @@ class SimParams:
     FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers
+    FEM_port_type: str = _FEM_DEFAULTS.port_type
+    FEM_port_mode_modes: int = _FEM_DEFAULTS.port_mode_modes
+    FEM_port_mode_index: int = _FEM_DEFAULTS.port_mode_index
+    FEM_port_mode_zc: float | None = _FEM_DEFAULTS.port_mode_zc
+    FEM_port_mode_eps_eff: float | None = _FEM_DEFAULTS.port_mode_eps_eff
 
     FDTD_timestep: int = 90000000
     FDTD_end_criteria: float = 1e-4
@@ -206,6 +251,11 @@ class SimParams:
             mesh_fine_scale=self.FEM_mesh_fine_scale,
             min_layers=self.FEM_min_layers,
             num_solve_points=self.FEM_num_solve_points,
+            port_type=self.FEM_port_type,
+            port_mode_modes=self.FEM_port_mode_modes,
+            port_mode_index=self.FEM_port_mode_index,
+            port_mode_zc=self.FEM_port_mode_zc,
+            port_mode_eps_eff=self.FEM_port_mode_eps_eff,
         )
 
     @property
@@ -317,13 +367,19 @@ class SimParams:
         Raises
         ------
         ValueError
-            If ``backend_engine`` is not ``"FDTD"`` or ``"FEM"``, or if
+            If ``backend_engine`` is not ``"FDTD"`` or ``"FEM"``, if
+            ``FEM_port_type`` is not a supported choice, or if
             ``FEM_num_solve_points`` is below the minimum needed for a stable
             rational fit.
         """
         if self.backend_engine not in ("FDTD", "FEM"):
             raise ValueError(
                 f"backend_engine must be 'FDTD' or 'FEM', got {self.backend_engine!r}"
+            )
+        if self.FEM_port_type not in ("lumpedport", "waveport"):
+            raise ValueError(
+                f"FEM_port_type must be 'lumpedport' or 'waveport', "
+                f"got {self.FEM_port_type!r}"
             )
         if self.FEM_num_solve_points < 4:
             raise ValueError(

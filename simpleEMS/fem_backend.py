@@ -41,7 +41,14 @@ from scipy.interpolate import AAA
 
 from CSXCAD import ContinuousStructure
 
-from . import fem_formulation, fem_geometry, fem_materials, fem_solver, fem_sweep
+from . import (
+    fem_formulation,
+    fem_geometry,
+    fem_materials,
+    fem_port_mode,
+    fem_solver,
+    fem_sweep,
+)
 from .console import console
 from .export_cad import export_step
 from .fem_materials import EPS0, Dielectric, guess_role
@@ -106,6 +113,40 @@ class FEMOptions:
     num_solve_points : int
         Number of frequencies the sweep solves at, from which the full
         S-parameter curve is interpolated. Must be ``>= 4``. Default ``10``.
+    port_mode_modes : int
+        Number of eigenpairs each wave port's mode solve computes. Raise it if
+        a port reports that it found no guided mode. Default ``6``.
+    port_type : str
+        Which port the FEM backend makes of the ports the geometry already
+        carries: ``"lumpedport"`` (default) drives one constant field
+        direction across the port sheet, which is right for a gap feed;
+        ``"waveport"`` solves the transverse mode of the port's cross-section
+        and drives that instead, which is what a transmission line needs. A
+        coplanar waveguide port is always a wave port -- its mode is odd, and
+        a single constant vector excites the wrong one.
+    port_mode_eps_eff : float, optional
+        Effective permittivity naming which guided mode a wave port runs in:
+        the mode whose own effective permittivity is closest to it is used.
+        This is the robust way to pick a mode on a multi-conductor line,
+        because it names the mode by a property of the line rather than by its
+        position in a spectrum that changes with frequency and mesh density.
+        Takes precedence over ``port_mode_index``. Default ``None``.
+    port_mode_zc : float, optional
+        Characteristic impedance in ohms to reference a wave port's
+        S-parameters to, overriding the one measured from the solved mode.
+        The measured value is good to a few percent on a single-conductor line
+        such as microstrip, but the power-voltage impedance of a
+        multi-conductor mode depends on which path the voltage is integrated
+        along, so on a coplanar waveguide it is better to state the impedance
+        the line was designed for. Default ``None`` (use the measured value).
+    port_mode_index : int
+        Which guided mode a wave port runs in, counting from ``0`` for the one
+        with the largest propagation constant. ``0`` (the default) is right for
+        a single-conductor line such as microstrip. A cross-section with more
+        than one conductor above the ground plane -- conductor-backed coplanar
+        waveguide is the common case -- carries more than one quasi-TEM mode,
+        and the one with the largest ``beta`` need not be the one the line is
+        meant to run in. See :mod:`~simpleEMS.fem_port_mode`.
     """
 
     boundary: str = "silver_muller"
@@ -124,6 +165,11 @@ class FEMOptions:
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
     num_solve_points: int = 10
+    port_type: str = "lumpedport"
+    port_mode_modes: int = 6
+    port_mode_index: int = 0
+    port_mode_zc: float | None = None
+    port_mode_eps_eff: float | None = None
 
     def __post_init__(self) -> None:
         """
@@ -145,6 +191,31 @@ class FEMOptions:
             raise ValueError(
                 f"num_solve_points must be >= 4 for a stable rational fit, "
                 f"got {self.num_solve_points}"
+            )
+        if self.port_type not in ("lumpedport", "waveport"):
+            raise ValueError(
+                f"port_type must be 'lumpedport' or 'waveport', got {self.port_type!r}"
+            )
+        if self.port_mode_modes < 1:
+            raise ValueError(
+                f"port_mode_modes must be >= 1, got {self.port_mode_modes}"
+            )
+        if self.port_mode_index < 0:
+            raise ValueError(
+                f"port_mode_index must be >= 0, got {self.port_mode_index}"
+            )
+        if self.port_mode_eps_eff is not None and self.port_mode_eps_eff < 1:
+            raise ValueError(
+                "port_mode_eps_eff is an effective permittivity, so it cannot "
+                f"be below 1, got {self.port_mode_eps_eff}"
+            )
+        if self.port_mode_zc is not None and self.port_mode_zc <= 0:
+            raise ValueError(f"port_mode_zc must be positive, got {self.port_mode_zc}")
+        if self.port_mode_index >= self.port_mode_modes:
+            raise ValueError(
+                f"port_mode_index {self.port_mode_index} is out of reach of "
+                f"port_mode_modes {self.port_mode_modes}; compute at least "
+                f"{self.port_mode_index + 1} eigenpairs to select that mode"
             )
 
 
@@ -188,21 +259,68 @@ class PortSpec:
     Parameters
     ----------
     solid : str
-        Name of the solid that becomes the port.
+        Name of the solid that becomes the port. A coplanar waveguide port is
+        drawn as one solid per gap, so see ``solids`` for the rest of them.
     number : int
         One-based port index, setting the row/column order of the S-parameter
         matrix.
     z0 : float
         Reference impedance in ohms. Default ``50.0``.
     direction : str
-        Axis the port is excited along: ``"x"``, ``"y"``, or ``"z"``. Default
-        ``"z"``.
+        Axis the port is excited along: ``"x"``, ``"y"``, or ``"z"``. For a
+        wave port this is instead the axis its voltage is measured along, used
+        to report a characteristic impedance. Default ``"z"``.
+    kind : str
+        ``"lumped"`` (default) drives one constant field direction across the
+        port sheet -- right for a gap feed, wrong for a transmission line.
+        ``"wave"`` solves the transverse mode of the port's cross-section and
+        drives that instead, which is what a microstrip or coplanar waveguide
+        needs. See :mod:`~simpleEMS.fem_port_mode`.
+    prop_dir : str
+        For a wave port, the axis the line runs along; the port face is the
+        cross-section normal to it. ``"x"``, ``"y"``, or ``"z"``, or ``""``
+        (the default) to derive it from the port's own geometry. Unused by a
+        lumped port.
+    solids : list[str]
+        Every solid making up this port. A lumped port has one; a coplanar
+        waveguide port has one per gap, and all of them together define the
+        one cross-section its mode is solved on. Defaults to ``[solid]``.
     """
 
     solid: str
     number: int
     z0: float = 50.0
     direction: str = "z"  # excitation E-field axis: 'x' | 'y' | 'z'
+    kind: str = "lumped"  # 'lumped' | 'wave'
+    prop_dir: str = ""  # propagation axis of a wave port; "" derives it
+    solids: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """
+        Validate the port kind and its propagation axis.
+
+        Raises
+        ------
+        ValueError
+            If ``kind`` is not a supported choice, or if a wave port's
+            ``prop_dir`` is not an axis, or is the same axis as ``direction``
+            (the voltage across a line is measured across it, not along it).
+        """
+        if self.kind not in ("lumped", "wave"):
+            raise ValueError(f"kind must be 'lumped' or 'wave', got {self.kind!r}")
+        if not self.solids:
+            self.solids = [self.solid]
+        if self.prop_dir and self.prop_dir not in ("x", "y", "z"):
+            raise ValueError(
+                f"prop_dir must be 'x', 'y' or 'z', or '' to derive it, "
+                f"got {self.prop_dir!r}"
+            )
+        if self.kind == "wave" and self.prop_dir == self.direction:
+            raise ValueError(
+                f"a wave port's prop_dir ({self.prop_dir!r}) is the axis the "
+                f"line runs along and direction ({self.direction!r}) the axis "
+                "its voltage is measured across, so they cannot be the same"
+            )
 
 
 @dataclass
@@ -287,6 +405,31 @@ class Problem:
         """Number of frequencies the sweep solves at."""
         return self.options.num_solve_points
 
+    @property
+    def port_type(self) -> str:
+        """Port the FEM backend makes: ``"lumpedport"`` or ``"waveport"``."""
+        return self.options.port_type
+
+    @property
+    def port_mode_modes(self) -> int:
+        """Eigenpairs each wave port's mode solve computes."""
+        return self.options.port_mode_modes
+
+    @property
+    def port_mode_index(self) -> int:
+        """Which guided mode a wave port runs in, largest ``beta`` first."""
+        return self.options.port_mode_index
+
+    @property
+    def port_mode_eps_eff(self) -> float | None:
+        """Effective permittivity naming a wave port's mode, or ``None``."""
+        return self.options.port_mode_eps_eff
+
+    @property
+    def port_mode_zc(self) -> float | None:
+        """Wave-port reference impedance override, in ohms, or ``None``."""
+        return self.options.port_mode_zc
+
 
 # ----------------------------
 # CSX -> Problem mapping
@@ -304,16 +447,37 @@ def _register_port(
     number: int,
     z0: float,
     direction: str = "z",
+    kind: str = "lumped",
+    prop_dir: str = "",
 ) -> None:
-    """Append a :class:`PortSpec` for ``number`` unless already registered."""
+    """Register ``solid`` as part of port ``number``.
+
+    A coplanar waveguide port is drawn as one solid per gap, so a port number
+    can turn up more than once. The extra solids are added to the port that
+    already exists rather than dropped -- dropping them is how the second gap
+    used to end up meshed with no boundary condition at all.
+    """
     if number in seen:
+        for existing in prob.ports:
+            if existing.number == number and solid not in existing.solids:
+                existing.solids.append(solid)
         return
     seen.add(number)
-    prob.ports.append(PortSpec(solid=solid, number=number, z0=z0, direction=direction))
+    prob.ports.append(
+        PortSpec(
+            solid=solid,
+            number=number,
+            z0=z0,
+            direction=direction,
+            kind=kind,
+            prop_dir=prop_dir,
+            solids=[solid],
+        )
+    )
 
 
 def _csx_roles(
-    csx: ContinuousStructure, centre_freq: float
+    csx: ContinuousStructure, centre_freq: float, port_type: str = "lumpedport"
 ) -> tuple[dict, dict, dict, dict]:
     """
     Assign an electromagnetic role to each CSXCAD property.
@@ -324,6 +488,10 @@ def _csx_roles(
         The CSXCAD geometry.
     centre_freq : float
         Frequency in Hz at which conductivity is converted to a loss tangent.
+    port_type : str
+        ``"lumpedport"`` (default) or ``"waveport"``, deciding what the ports
+        already in the geometry become. A coplanar waveguide port is a wave
+        port either way.
 
     Returns
     -------
@@ -331,12 +499,12 @@ def _csx_roles(
         ``(role_by_name, dielectric_by_name, port_by_name, sigma_by_name)``,
         each keyed by property name: the role string, the
         :class:`~simpleEMS.fem_materials.Dielectric` of each dielectric, the
-        ``(z0, direction, number)`` of each port, and the conductivity in S/m
-        of each lossy conductor.
+        ``(z0, direction, number, kind, is_cpw)`` of each port, and the
+        conductivity in S/m of each lossy conductor.
     """
     role_by_name: dict[str, str] = {}
     dielectric_by_name: dict[str, Dielectric] = {}
-    port_by_name: dict[str, tuple[float, str, int]] = {}
+    port_by_name: dict[str, tuple[float, str, int, str, bool]] = {}
     sigma_by_name: dict[str, float] = {}
 
     # The EM role of each solid is read straight from its CSXCAD property type,
@@ -375,7 +543,19 @@ def _csx_roles(
             direction = _AXIS_TO_DIR[int(prop.GetDirection())]
             number = _port_number(name, len(port_by_name) + 1)
             role_by_name[name] = "port"
-            port_by_name[name] = (z0, direction, number)
+
+            # How many boxes the property carries says which port openEMS drew.
+            # AddLumpedPort adds exactly one; AddCPWPort adds one per gap
+            # (openEMS/ports.py), and that is the only trace of the difference
+            # a CSXCAD property keeps.
+            is_cpw = len(prop.GetAllPrimitives()) > 1
+            kind = "wave" if (is_cpw or port_type == "waveport") else "lumped"
+            if is_cpw:
+                # openEMS puts 2*Feed_R on a CPW port -- "applied to each gap
+                # as 2*R" -- so halve it to get back the line impedance the
+                # S-parameters should be referenced to.
+                z0 = z0 / 2.0
+            port_by_name[name] = (z0, direction, number, kind, is_cpw)
 
     return role_by_name, dielectric_by_name, port_by_name, sigma_by_name
 
@@ -420,8 +600,9 @@ def _build_problem(
 
     freqs = np.asarray(freqs, dtype=float)
     centre_freq = 0.5 * (float(freqs.min()) + float(freqs.max()))
+    options = FEM_options or FEMOptions()
     role_by_name, dielectric_by_name, port_by_name, sigma_by_name = _csx_roles(
-        csx, centre_freq
+        csx, centre_freq, options.port_type
     )
 
     prob = Problem(step_file=step_file, name="structure", freqs=freqs)
@@ -442,11 +623,29 @@ def _build_problem(
             sigma=sigma_by_name.get(base, 0.0),
         )
         if role == "port":
-            z0, direction, number = port_by_name[base]
-            _register_port(prob, seen_ports, solid_name, number, z0, direction)
+            z0, direction, number, kind, _is_cpw = port_by_name[base]
+            _register_port(prob, seen_ports, solid_name, number, z0, direction, kind)
 
     prob.ports.sort(key=lambda p: p.number)
     _apply_FEM_options(prob, FEM_options)
+
+    if options.port_type != "waveport":
+        promoted = sorted(
+            {
+                port.number
+                for name, (_z, _d, number, kind, is_cpw) in port_by_name.items()
+                if is_cpw and kind == "wave"
+                for port in prob.ports
+                if port.number == number
+            }
+        )
+        if promoted:
+            console.print(
+                f"[info]port(s) {promoted}: coplanar waveguide, so solved as a "
+                "wave port rather than a lumped one -- the CPW mode is odd and "
+                "a lumped port would excite the wrong one. Set "
+                'FEM_port_type="waveport" to do this everywhere.[/info]'
+            )
     return prob
 
 
@@ -578,6 +777,16 @@ def _mesh_problem(
         },
         # gap lengths, for the wave-amplitude scaling in _sweep_from_meta
         "port_gaps": {str(pm.number): pm.gap for pm in mesh.port_regions.values()},
+        # A wave port's cross-section and its 2D problem file depend only on the
+        # geometry, so they are cut and written here, once, and the sweep only
+        # re-solves the mode at each of its frequencies.
+        "port_modes": {
+            str(pm.number): fem_port_mode.prepare_port_mode(
+                prob, mesh, pm, output_path
+            ).to_dict()
+            for pm in sorted(mesh.port_regions.values(), key=lambda p: p.number)
+            if pm.is_wave
+        },
         "fingerprint": fingerprint,
     }
     (output_path / _MESH_META).write_text(json.dumps(meta, indent=2))
@@ -641,6 +850,42 @@ def build_mesh(
     return _mesh_problem(prob, output_path, verbose, fingerprint)
 
 
+def _renormalise(s: NDArray, z_old: NDArray, z_new: NDArray) -> NDArray:
+    """
+    Re-reference an S-matrix from one set of port impedances to another.
+
+    A wave port's S-parameters come out referenced to the port's *own* modal
+    impedance, because that is what a modal wave amplitude is measured
+    against, and that impedance is whatever the line happens to have at that
+    frequency. Everything downstream -- ``z11``, VSWR, a Touchstone export --
+    expects them referenced to the impedance the user asked for, so they are
+    converted here.
+
+    Parameters
+    ----------
+    s : NDArray
+        The ``(n, n)`` S-matrix as solved.
+    z_old : NDArray
+        Reference impedance of each port as solved, in ohms.
+    z_new : NDArray
+        Reference impedance to convert to, in ohms.
+
+    Returns
+    -------
+    NDArray
+        The re-referenced S-matrix.
+    """
+    z_old = np.asarray(z_old, dtype=float)
+    z_new = np.asarray(z_new, dtype=float)
+    if np.allclose(z_old, z_new):
+        return s
+    r = (z_new - z_old) / (z_new + z_old)
+    gamma = np.diag(r)
+    a = np.diag(np.sqrt(1.0 - r**2) / (1.0 - r))
+    n = s.shape[0]
+    return np.linalg.solve(a.T, (s - gamma) @ np.linalg.solve(np.eye(n) - gamma @ s, a))
+
+
 def _sweep_from_meta(
     freqs: NDArray,
     num_solve_points: int,
@@ -677,15 +922,24 @@ def _sweep_from_meta(
     # ports match. Applied here so the stored matrix is a true S-matrix, which
     # the rational sweep and its passivity check both assume.
     ref_z = meta["ref_impedances"]
+    ref_impedances = [ref_z[str(n)] for n in port_numbers]
     gaps = meta["port_gaps"]
+    mode_setups = {
+        int(n): fem_port_mode.PortModeSetup.from_dict(d)
+        for n, d in meta.get("port_modes", {}).items()
+    }
+
+    def _amp_scale(n: int, k: int) -> float:
+        """Overlap-to-wave-amplitude factor for the S_nk entry."""
+        # A wave port's overlap is already divided by its mode's self-overlap,
+        # so it is a wave amplitude as it stands and needs no rescaling. Only
+        # the lumped ports' field projections do.
+        if n in mode_setups or k in mode_setups:
+            return 1.0
+        return (gaps[str(n)] / gaps[str(k)]) * math.sqrt(ref_z[str(k)] / ref_z[str(n)])
+
     wave_norm = np.array(
-        [
-            [
-                (gaps[str(n)] / gaps[str(k)]) * math.sqrt(ref_z[str(k)] / ref_z[str(n)])
-                for k in port_numbers
-            ]
-            for n in port_numbers
-        ]
+        [[_amp_scale(n, k) for k in port_numbers] for n in port_numbers]
     )
 
     # GetDP appends to these Format Table files (write_problem's xs_file =
@@ -702,6 +956,8 @@ def _sweep_from_meta(
         "Pcond_*.txt",
         "Vdrv_*.txt",
         "Idrv_*.txt",
+        "mode_*.pos",
+        "et_*.pos",
     ]
     for pattern in stale_patterns:
         for stale in outdir.glob(pattern):
@@ -718,17 +974,40 @@ def _sweep_from_meta(
     # appends a row per port to xS_<n>.txt in the resolution's port order.
     def solve_at(freq: float) -> NDArray:
         s = np.zeros((npt, npt), dtype=complex)
+        # Each wave port's mode is re-solved here rather than once for the whole
+        # sweep: a line's effective permittivity disperses, so both the profile
+        # the 3D solve is driven with and the modal index its port term is
+        # scaled by belong to this frequency.
+        setnumbers: dict[str, float] = {"FREQ": freq}
+        modal_z: dict[int, float] = {}
+        for number, setup in sorted(mode_setups.items()):
+            mode = fem_port_mode.solve_port_mode(setup, freq, output_path)
+            setnumbers[f"NEFF_{number}"] = float(mode.n_eff.real)
+            setnumbers[f"ZC_{number}"] = float(mode.zc)
+            modal_z[number] = float(mode.zc)
+            if verbose:
+                console.print(
+                    f"[info]port {number} mode @ {freq / 1e9:.4g} GHz: "
+                    f"eps_eff={mode.eps_eff.real:.4g}, Zc={mode.zc:.4g} ohm[/info]"
+                )
         fem_solver.run_getdp(
             pro_path,
             msh_path,
             output_path,
-            {"FREQ": freq},
+            setnumbers,
             None,  # Analysis runs Get_SParameters itself, once per port
         )
         for n in port_numbers:
             row = fem_solver.read_complex_rows(outdir / f"xS_{n}.txt", npt)
             for active, value in zip(port_numbers, row, strict=True):
                 s[idx[n], idx[active]] = value * wave_norm[idx[n], idx[active]]
+        # A wave port measured against its own mode, so its S is referenced to
+        # that mode's impedance; convert to the impedance the user asked for.
+        if mode_setups:
+            z_solved = np.array(
+                [modal_z.get(n, ref_z[str(n)]) for n in port_numbers], dtype=float
+            )
+            s = _renormalise(s, z_solved, np.array(ref_impedances, dtype=float))
         # V/I of the reference port while it is the driven one.
         v_rows = fem_solver.read_complex_rows(outdir / f"V_{ref_port}.txt", npt)
         i_rows = fem_solver.read_complex_rows(outdir / f"I_{ref_port}.txt", npt)
@@ -758,7 +1037,6 @@ def _sweep_from_meta(
     v_dense = AAA(_zof(vi_freqs), v_samples)(_zof(freqs))
     i_dense = AAA(_zof(vi_freqs), i_samples)(_zof(freqs))
 
-    ref_impedances = [meta["ref_impedances"][str(n)] for n in port_numbers]
     np.savez(
         output_path / _SPARAMS,
         freqs=freqs,
@@ -900,6 +1178,11 @@ def _problem_from_step(
     ports = ports or {}
 
     prob = Problem(step_file=step_file, name="structure", freqs=freqs)
+    # There is no CSXCAD here to read a port kind off, so FEM_port_type is the
+    # default and the per-port dict overrides it.
+    default_kind = (
+        "wave" if (FEM_options or FEMOptions()).port_type == "waveport" else "lumped"
+    )
     seen_ports: set[int] = set()
     for name in fem_geometry.list_solids(step_file):
         # explicit overrides win; otherwise guess the role from the solid name
@@ -927,6 +1210,8 @@ def _problem_from_step(
                 number,
                 float(spec.get("z0", charac_imp)),
                 spec.get("direction", "z"),
+                spec.get("kind", default_kind),
+                spec.get("prop_dir", ""),
             )
         else:
             role = guess_role(name) or "ignore"
@@ -936,7 +1221,14 @@ def _problem_from_step(
                 solid.dielectric = Dielectric()
             prob.solids[name] = solid
             if role == "port":
-                _register_port(prob, seen_ports, name, len(prob.ports) + 1, charac_imp)
+                _register_port(
+                    prob,
+                    seen_ports,
+                    name,
+                    len(prob.ports) + 1,
+                    charac_imp,
+                    kind=default_kind,
+                )
 
     prob.ports.sort(key=lambda p: p.number)
     _apply_FEM_options(prob, FEM_options)
@@ -991,9 +1283,12 @@ def simulate_step_FEM(
     lossy_conductor : dict, optional
         Lossy conductors, as ``{solid_name: sigma}`` with ``sigma`` in S/m.
     ports : dict, optional
-        Ports, as
-        ``{solid_name: {"z0": ..., "direction": "x|y|z", "number": ...}}``.
-        If omitted, solids whose names look like ports are used instead.
+        Ports, as ``{solid_name: {"z0": ..., "direction": "x|y|z",
+        "number": ..., "kind": "lumped|wave", "prop_dir": "x|y|z"}}``. Only
+        ``kind: "wave"`` reads ``prop_dir``, the axis the line runs along; such
+        a port's solid must be the line's cross-section, normal to it. If
+        ``ports`` is omitted, solids whose names look like ports are used
+        instead.
     FEM_boundary : str
         Outer boundary condition: ``"silver_muller"`` (default) or ``"pml"``.
     FEM_symmetry : tuple, optional

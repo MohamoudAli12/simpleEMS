@@ -74,6 +74,15 @@ class PortMesh:
         Width of the port actually present in the mesh, in metres. Differs
         from ``width`` only when a symmetry plane cuts the port. Default
         ``0.0``, meaning the same as ``width``.
+    kind : str
+        ``"lumped"`` (default) for a resistive-sheet port driven by one
+        constant field direction, or ``"wave"`` for a port whose transverse
+        mode is solved on its cross-section by
+        :mod:`~simpleEMS.fem_port_mode`.
+    prop_dir : str
+        For a wave port, the axis the line runs along -- the axis the port
+        face is normal to: ``"x"``, ``"y"``, or ``"z"``. Unused by a lumped
+        port. Default ``"y"``.
     """
 
     number: int
@@ -84,6 +93,13 @@ class PortMesh:
     width: float  # transverse width of the port sheet (m)
     center: tuple[float, float, float]
     width_meshed: float = 0.0  # meshed width; differs under symmetry
+    kind: str = "lumped"  # 'lumped' | 'wave'
+    prop_dir: str = "y"  # propagation axis of a wave port
+
+    @property
+    def is_wave(self) -> bool:
+        """Whether this port's excitation comes from a solved transverse mode."""
+        return self.kind == "wave"
 
     @property
     def ref_impedance(self) -> float:
@@ -110,7 +126,13 @@ class PortMesh:
 
     @property
     def sheet_impedance(self) -> float:
-        """Impedance per square, in ohms, that makes the port present ``z0``."""
+        """Impedance per square, in ohms, that makes the port present ``z0``.
+
+        A lumped-port quantity only. A wave port terminates into its own mode
+        rather than into a resistive sheet, so its boundary term is scaled by
+        the modal index ``beta / k0`` instead -- see
+        :func:`~simpleEMS.fem_port_mode.solve_port_mode`.
+        """
         return self.z0 * self.width / self.gap
 
 
@@ -165,6 +187,10 @@ class Mesh:
     sym_plane : float
         Position of the symmetry plane along ``sym_axis``, in metres; the
         meshed half lies above it. Default ``0.0``.
+    dielectric_bboxes : dict[str, tuple]
+        Extents of each dielectric solid, keyed by solid name. A wave port's
+        mode solve reads these to give each triangle of its cross-section the
+        right permittivity. Default ``{}``.
     """
 
     msh_path: str
@@ -185,6 +211,7 @@ class Mesh:
     sym_kind: str = ""  # 'pec' or 'pmc'
     sym_axis: int = -1  # mirrored axis index, -1 if none
     sym_plane: float = 0.0  # symmetry plane coordinate (m); half kept is >= this
+    dielectric_bboxes: dict = field(default_factory=dict)  # solid name -> bbox
 
 
 # ----------------------------
@@ -263,6 +290,94 @@ def _clip_sheet_to_dielectric(face_tag: int, direction: str, diel_bbox: tuple) -
     )
     faces = [t for d, t in out if d == 2]
     return faces[0] if faces else face_tag
+
+
+# export_cad floors every box dimension at 1e-3 drawing units, so a port solid
+# that was drawn flat is not exactly flat by the time it reaches gmsh.
+_FLAT = 2e-6  # metres; the 1e-3 mm floor with room to spare
+
+
+def _port_prop_axis(bb: tuple, diel_bbox: tuple) -> int:
+    """Work out which axis a port's line runs along.
+
+    The port face is normal to it, so the port solid is flat along it. A lumped
+    port box is flat along exactly one axis -- it spans the trace width and the
+    gap, and nothing along the run -- which settles it outright. A coplanar
+    waveguide port is drawn as one thin box per gap and so is flat along *two*:
+    the run, and the substrate normal. The substrate normal is the thinnest
+    axis of the dielectric, which tells the two apart.
+
+    Parameters
+    ----------
+    bb : tuple
+        Extents of the port, as ``(x0, y0, z0, x1, y1, z1)``.
+    diel_bbox : tuple
+        Extents of the dielectrics, whose thinnest axis is the board normal.
+
+    Returns
+    -------
+    int
+        Axis index ``0``, ``1`` or ``2``.
+
+    Raises
+    ------
+    RuntimeError
+        If the port's extents do not single one out.
+    """
+    span = [bb[i + 3] - bb[i] for i in range(3)]
+    flat = [i for i in range(3) if span[i] <= _FLAT]
+    if len(flat) == 1:
+        return flat[0]
+    if len(flat) == 2:
+        diel_span = [diel_bbox[i + 3] - diel_bbox[i] for i in range(3)]
+        normal = min(range(3), key=lambda i: diel_span[i])
+        remaining = [i for i in flat if i != normal]
+        if len(remaining) == 1:
+            return remaining[0]
+    raise RuntimeError(
+        f"cannot tell which axis this port's line runs along: its extents are "
+        f"{tuple(round(v, 9) for v in span)} m, which leaves {len(flat)} flat "
+        "axis/axes. A wave port has to be a plane cutting across the line. "
+        "Give the axis explicitly with prop_dir on the port."
+    )
+
+
+def _wave_port_sheet(bb: tuple, prop_dir: str) -> int:
+    """Build the cross-section rectangle of a wave port.
+
+    A lumped port's sheet is the footprint of its own solid, pressed against
+    the dielectric. A wave port is not a footprint at all: it is the plane the
+    line's mode lives on, cutting straight across the substrate and the air
+    above it. So the sheet is rebuilt from the solid's extents rather than
+    copied off one of its faces, which keeps it exactly planar and exactly
+    normal to the direction of propagation however the solid was drawn.
+
+    Parameters
+    ----------
+    bb : tuple
+        Extents of the port solid, as ``(x0, y0, z0, x1, y1, z1)``.
+    prop_dir : str
+        Axis the line runs along, which the sheet is normal to.
+
+    Returns
+    -------
+    int
+        Tag of the created surface.
+    """
+    p = {"x": 0, "y": 1, "z": 2}[prop_dir]
+    u, v = (p + 1) % 3, (p + 2) % 3
+    at = 0.5 * (bb[p] + bb[p + 3])
+
+    corners = []
+    for cu, cv in ((0, 0), (1, 0), (1, 1), (0, 1)):
+        xyz = [0.0, 0.0, 0.0]
+        xyz[p] = at
+        xyz[u] = bb[u + 3] if cu else bb[u]
+        xyz[v] = bb[v + 3] if cv else bb[v]
+        corners.append(gmsh.model.occ.addPoint(*xyz))
+    lines = [gmsh.model.occ.addLine(corners[i], corners[(i + 1) % 4]) for i in range(4)]
+    loop = gmsh.model.occ.addCurveLoop(lines)
+    return gmsh.model.occ.addPlaneSurface([loop])
 
 
 def _init() -> None:
@@ -378,6 +493,8 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
     ----------
     problem : Problem
         The FEM problem, supplying each solid's role and each port's direction.
+        A wave port's solids are only measured and removed here; their sheet is
+        built later, by :func:`_build_wave_port_sheets`.
     diel_bbox : tuple
         Extents of the dielectrics, which the sheets are placed against.
     port_geo : dict
@@ -389,7 +506,13 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
     list
         One ``(role, name, face_tag)`` entry per sheet created.
     """
-    port_direction = {p.solid: p.direction for p in problem.ports}
+    port_direction = {}
+    wave_solids: set[str] = set()
+    for pspec in problem.ports:
+        for name in pspec.solids:
+            port_direction[name] = pspec.direction
+            if pspec.kind == "wave":
+                wave_solids.add(name)
     sheets = []  # (role, name, face_tag)
     metal_solids = []
     for dim, tag in gmsh.model.getEntities(3):
@@ -397,6 +520,15 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
         spec = problem.solids.get(short)
         role = spec.role if spec else "ignore"
         if role in ("pec", "lossy_conductor", "port"):
+            if role == "port" and short in wave_solids:
+                # A wave port's sheet has to cut the whole domain at the port
+                # plane, or energy simply passes around it -- but the domain
+                # does not exist yet; the air box is built after this. So only
+                # the plane is recorded here, and _build_wave_port_sheets makes
+                # the sheet once there is a domain to span.
+                port_geo[short] = gmsh.model.getBoundingBox(dim, tag)
+                metal_solids.append((3, tag))
+                continue
             face = _footprint_face(tag, diel_bbox)
             cp = gmsh.model.occ.copy([(2, face)])
             face_tag = cp[0][1]
@@ -412,6 +544,76 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
     # delete the metal/port solids; dielectric solids remain and are fragmented
     if metal_solids:
         gmsh.model.occ.remove(metal_solids, recursive=True)
+    gmsh.model.occ.synchronize()
+    return sheets
+
+
+def _build_wave_port_sheets(
+    problem: Problem,
+    sheets: list,
+    port_geo: dict,
+    diel_bbox: tuple,
+    domain_bbox: tuple,
+) -> list:
+    """Build each wave port's cross-section, once the domain extents are known.
+
+    One sheet per port, not per solid: a coplanar waveguide port is drawn as
+    one box per gap, and the mode lives on the single plane that cuts across
+    both of them together. The sheet spans the whole domain at that plane, so
+    nothing can propagate past the port without going through it.
+
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying the ports and their propagation axes.
+    sheets : list
+        The ``(role, name, face_tag)`` entries so far, appended to.
+    port_geo : dict
+        Extents of each port solid by name; the entry for each port's first
+        solid is replaced with the extents of the sheet built for it.
+    diel_bbox : tuple
+        Extents of the dielectrics, used to find the board normal.
+    domain_bbox : tuple
+        Extents the sheet should span, as ``(x0, y0, z0, x1, y1, z1)``.
+
+    Returns
+    -------
+    list
+        ``sheets``, with one entry added per wave port.
+
+    Raises
+    ------
+    RuntimeError
+        If a port's solids were not measured, or its axis cannot be worked out.
+    """
+    for pspec in problem.ports:
+        if pspec.kind != "wave":
+            continue
+        boxes = [port_geo[n] for n in pspec.solids if n in port_geo]
+        if not boxes:
+            raise RuntimeError(
+                f"port {pspec.number}: none of its solids {pspec.solids} were "
+                "found in the geometry"
+            )
+        # the union of every gap, which is the port as a whole
+        merged = tuple(
+            [min(b[i] for b in boxes) for i in range(3)]
+            + [max(b[i + 3] for b in boxes) for i in range(3)]
+        )
+        axis = (
+            {"x": 0, "y": 1, "z": 2}[pspec.prop_dir]
+            if pspec.prop_dir
+            else _port_prop_axis(merged, diel_bbox)
+        )
+        # span the domain across the plane, but keep the plane where the port
+        # was drawn: that is the reference plane the S-parameters belong to
+        span = list(domain_bbox)
+        span[axis] = merged[axis]
+        span[axis + 3] = merged[axis + 3]
+        face_tag = _wave_port_sheet(tuple(span), "xyz"[axis])
+        gmsh.model.occ.synchronize()
+        port_geo[pspec.solid] = gmsh.model.getBoundingBox(2, face_tag)
+        sheets.append(("port", pspec.solid, face_tag))
     gmsh.model.occ.synchronize()
     return sheets
 
@@ -767,9 +969,16 @@ def _assign_physical_groups(
 
     port_regions: dict[int, PortMesh] = {}
     for pspec in problem.ports:
-        pfaces = faces.port_by_name.get(pspec.solid, set())
+        # every solid of the port, so a coplanar waveguide port's two gaps land
+        # in one region instead of the second going untagged
+        pfaces: set[int] = set()
+        for name in pspec.solids:
+            pfaces |= faces.port_by_name.get(name, set())
         if not pfaces:
-            raise RuntimeError(f"port solid {pspec.solid!r} produced no boundary faces")
+            raise RuntimeError(
+                f"port {pspec.number} ({', '.join(pspec.solids)}) produced no "
+                "boundary faces"
+            )
         rid = port_region(pspec.number)
         gmsh.model.addPhysicalGroup(2, sorted(pfaces), rid)
         gmsh.model.setPhysicalName(2, rid, f"port_{pspec.number}")
@@ -796,6 +1005,19 @@ def _assign_physical_groups(
             width=width,
             center=center,
             width_meshed=width_meshed,
+            kind=pspec.kind,
+            # By now a wave port's sheet is a plain rectangle, so its flat axis
+            # is the propagation axis outright -- no need to re-derive it from
+            # the original solids the way _build_wave_port_sheets had to.
+            prop_dir=(
+                pspec.prop_dir
+                if pspec.prop_dir
+                else (
+                    "xyz"[min(range(3), key=lambda i: extents[i])]
+                    if pspec.kind == "wave"
+                    else ""
+                )
+            ),
         )
 
     if faces.abc:
@@ -953,9 +1175,18 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
     gmsh.model.occ.synchronize()
 
     originals, struct, diel_bbox, port_geo = _snapshot_solids(problem)
+    # kept for the wave-port mode solve, which needs to know which part of a
+    # port's cross-section is substrate and which is air
+    diel_bboxes = {name: bb for role, name, bb, _v in originals if role == "dielectric"}
     sheets = _build_footprint_sheets(problem, diel_bbox, port_geo)
     is_pml, inner_bbox, box_bbox, pml_thick = _build_air_box(
         problem, struct, lambda0_max
+    )
+    # Now the domain exists, so a wave port's cross-section can span it. Under
+    # a PML it spans the inner box only, so the sheet does not cut into the
+    # absorbing shell.
+    sheets = _build_wave_port_sheets(
+        problem, sheets, port_geo, diel_bbox, inner_bbox if is_pml else box_bbox
     )
     sym_axis_i, sym_plane, sheets = _apply_symmetry_cut(
         problem, struct, box_bbox, sheets
@@ -990,6 +1221,7 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
         pec_region=PEC,
         port_regions=port_regions,
         abc_region=ABC,
+        dielectric_bboxes=diel_bboxes,
         boundary=problem.boundary,
         bbox=struct,
         box_bbox=box_bbox,
