@@ -33,6 +33,7 @@ from numpy.typing import NDArray
 from CSXCAD import ContinuousStructure
 from openEMS.openEMS import openEMS
 from openEMS.ports import LumpedPort, Port
+from openEMS.nf2ff import nf2ff
 
 from .console import console
 from .sim_tools import SimData, SimSetup, SimTools
@@ -352,7 +353,7 @@ def simulate_model(
     num_points: int = 1000,
     run: bool = True,
     freqs: NDArray | None = None,
-) -> tuple[SimData, SimSetup, float]:
+) -> tuple[SimData, SimSetup, float, nf2ff]:
     """
     Load a ``structure.xml``, run the simulation and compute network
     parameters.
@@ -413,6 +414,7 @@ def simulate_model(
 
     sim = SimSetup(CSX=CSX, FDTD=FDTD, freqs=freqs)
     SimTools.write_and_show_structure(sim, output_path)
+    nf2ff = SimTools.create_nf2ff(sim)
     ports, charac_imp = reconstruct_ports(CSX)
 
     if not ports:
@@ -428,4 +430,5 @@ def simulate_model(
         sim_data,
         sim,
         charac_imp,
+        nf2ff,
     )
