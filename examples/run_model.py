@@ -11,7 +11,7 @@ field_dump.mkdir(parents=True, exist_ok=True)
 # PATH
 
 # SIMULATE
-sim_data, sim, charac_imp = simulate_model(
+sim_data, sim, charac_imp, nf2ff = simulate_model(
     "structure.xml",
     output_path,
 )
@@ -23,6 +23,7 @@ SimTools.plot_s_param(
     sim_data.s11,
     sim_data.s21,
 )
+SimTools.plot_2d_directivity(nf2ff, sim_data.freqs[0], output_path)
 SimTools.plot_impedance(sim_data.freqs, sim_data.z11)
 SimTools.plot_smith_chart(sim_data.freqs, sim_data.s11)
 SimTools.plot_vswr(sim_data.freqs, sim_data.vswr)
