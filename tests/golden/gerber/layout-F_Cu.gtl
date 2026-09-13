@@ -1,0 +1,26 @@
+G04 gerber RS274X-file exported by simpleEMS*
+%TF.GenerationSoftware,simpleEMS,export_gerber*%
+%TF.SameCoordinates,Original*%
+%TF.FileFunction,Copper,L1,Top*%
+%TF.FilePolarity,Positive*%
+%FSLAX45Y45*%
+%MOMM*%
+G01*
+%LPD*%
+%LNpad*%
+G36*
+X-100000Y-200000D02*
+X100000Y-200000D01*
+X100000Y200000D01*
+X-100000Y200000D01*
+X-100000Y-200000D01*
+G37*
+%LNpoly*%
+G36*
+X0Y0D02*
+X300000Y0D01*
+X300000Y400000D01*
+X0Y400000D01*
+X0Y0D01*
+G37*
+M02*

@@ -713,7 +713,7 @@ class TestRunAllPostProcessing:
     def test_exports_gerber(self, ran):
         out, _sim, _params = ran
 
-        assert list(out.rglob("*.gbr"))
+        assert list(out.rglob("*-F_Cu.gtl"))
 
     def test_exports_stl(self, ran):
         """Regression: this used to be called as ``export_stl(output_path)``,
@@ -723,12 +723,13 @@ class TestRunAllPostProcessing:
 
         assert (out / "stl" / "structure.stl").is_file()
 
-    def test_the_gerber_ignores_the_ground_layer(self, ran):
-        """A ground pour would swamp the fabrication output."""
+    def test_the_gerber_puts_the_ground_on_the_bottom_layer(self, ran):
+        """Layers are inferred from Z, so the ground gets its own file rather
+        than being dropped or drawn over the top copper."""
         out, _sim, _params = ran
 
-        gerber = next(out.rglob("*.gbr")).read_text()
-        assert "ground" not in gerber
+        assert "%LNground*%" in next(out.rglob("*-B_Cu.gbl")).read_text()
+        assert "%LNground*%" not in next(out.rglob("*-F_Cu.gtl")).read_text()
 
     def test_radiation_plots_use_the_main_frequency(self, ran, nf2ff):
         _out, _sim, params = ran
