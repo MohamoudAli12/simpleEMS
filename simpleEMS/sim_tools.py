@@ -1786,9 +1786,10 @@ class SimTools:
         sim: SimSetup,
         output_path: Path | None = None,
         options: dict[str, list] | None = None,
-    ) -> None:
+        prefix: str = "layout",
+    ) -> list[Path]:
         """
-        Export CSXCAD geometry to Gerber format.
+        Export CSXCAD geometry to Gerber format, one file per copper layer.
 
         Parameters
         ----------
@@ -1798,24 +1799,28 @@ class SimTools:
             Directory to save the ``gerber`` subdirectory under. Defaults
             to ``cwd / "Sim_Path"``.
         options : dict[str, list], optional
-            Dictionary of export options. Defaults to
-            ``{"ignore": ["ground"]}``.
+            Dictionary of export options. Supported key ``"ignore"``: a
+            list of property names to skip. Defaults to ``{}``.
+        prefix : str, optional
+            File name prefix. Default ``"layout"``.
 
         Returns
         -------
-        None
-            This method does not return any value.
+        list of Path
+            The Gerber and drill files written.
 
         Notes
         -----
-        The gerber export is currently limited and might not be able
-        to export all geometries.  Layers should be exported separately
-        by specifying ignore options (e.g. to export only the top metal
-        layer, ignore the ground).
+        CSXCAD carries no layer information, so layers are inferred from
+        the Z position of the metal: the highest metal is the top layer
+        (``F_Cu``), the lowest the bottom layer (``B_Cu``), and anything
+        in between an inner layer. Z-axis cylinders (vias) are written to
+        an Excellon drill file and the substrate footprint to the board
+        outline. See :func:`simpleEMS.export_gerber.export_gerber`.
 
         """
         if options is None:
-            options = {"ignore": ["ground"]}
+            options = {}
 
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
@@ -1823,10 +1828,11 @@ class SimTools:
         gerber_path = output_path / "gerber"
         gerber_path.mkdir(parents=True, exist_ok=True)
 
-        export_gerber(
+        return export_gerber(
             CSX=sim.CSX,
             output_path=gerber_path,
             options=options,
+            prefix=prefix,
         )
 
     @staticmethod
@@ -1977,7 +1983,7 @@ class SimTools:
         impedance over the full frequency range; plots 2D/3D radiation
         pattern, directivity, gain, and power at ``params.main_freq``;
         saves and displays all plots; and exports STL, Touchstone, and
-        Gerber (ground layer ignored) files.
+        per-layer Gerber files.
 
         Parameters
         ----------
@@ -2050,7 +2056,7 @@ class SimTools:
             charac_imp=params.charac_imp,
             s21=s21,
         )
-        SimTools.export_gerber(sim, output_path, options={"ignore": ["ground"]})
+        SimTools.export_gerber(sim, output_path)
 
 
 def optimize_s11(
