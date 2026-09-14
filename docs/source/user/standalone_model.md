@@ -59,7 +59,7 @@ xml = add_fdtd_setup(
     FDTD_boundary=["MUR"] * 4 + ["PML_8"] * 2,
     overwrite=True,                        # replace an earlier result
 )
-sim_data, sim, charac_imp = simulate_model(xml)
+sim_data, sim, charac_imp, nf2ff_box = simulate_model(xml)
 ```
 
 `add_fdtd_setup` writes the result to `structure_fdtd.xml`, in the `Sim_Path`
