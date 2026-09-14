@@ -966,6 +966,29 @@ class TestMeshAcrossStructures:
 
         assert len(inside) >= 2
 
+    @staticmethod
+    def substrate_interior_lines(sim, params):
+        z_lines = np.asarray(sim.CSX.GetGrid().GetLines(2))
+        tolerance = 1e-6
+        return z_lines[
+            (z_lines > tolerance)
+            & (z_lines < params.substrate_thickness_mm - tolerance)
+        ]
+
+    def test_auto_mesh_puts_substrate_cells_lines_through_the_substrate(self, built):
+        """``substrate_cells`` counts both faces; the interior lines are evenly
+        spaced whatever the frequency, so a thin substrate at a long wavelength
+        is not collapsed to one midpoint line."""
+        structure, sim, params = built
+
+        structure.create_mesh()
+
+        expected = np.linspace(
+            0.0, params.substrate_thickness_mm, params.substrate_cells
+        )[1:-1]
+        interior_lines = self.substrate_interior_lines(sim, params)
+        assert interior_lines == pytest.approx(expected, abs=1e-3)
+
     @pytest.mark.parametrize("manual", [False, True], ids=["auto", "manual"])
     def test_meshing_twice_is_idempotent(self, built, manual):
         """``create_mesh`` is called once per run, but re-running it must not
@@ -1070,3 +1093,68 @@ class TestUserSimulationBox:
 
         with pytest.raises(ValueError, match="too small"):
             line.create_mesh()
+
+
+# ---------------------------------------------------------------------
+# Substrate z-lines follow substrate_cells
+# ---------------------------------------------------------------------
+class TestSubstrateCells:
+    @staticmethod
+    def substrate_interior_lines(simulation, params):
+        z_lines = np.asarray(simulation.CSX.GetGrid().GetLines(2))
+        tolerance = 1e-6
+        return z_lines[
+            (z_lines > tolerance)
+            & (z_lines < params.substrate_thickness_mm - tolerance)
+        ]
+
+    @pytest.fixture
+    def build_bandpass(self, bandpass_filter_params, sim_for):
+        """Factory building the band-pass filter with a given ``substrate_cells``.
+
+        The band-pass filter is the case the thin-interval collapse used to
+        reduce to one line: its substrate is under ``FDTD_mesh_resolution / 4``.
+        """
+
+        def _build(substrate_cells):
+            params = dataclasses.replace(
+                bandpass_filter_params, substrate_cells=substrate_cells
+            )
+            simulation = sim_for(params)
+            structure = BandPassQuarterWaveFilter(params, simulation)
+            structure.build_band_pass_quarter_wave_filter()
+            return structure, simulation, params
+
+        return _build
+
+    @pytest.mark.parametrize("substrate_cells", [2, 4, 10], ids=["two", "four", "ten"])
+    def test_interior_line_count_follows_the_parameter(
+        self, build_bandpass, substrate_cells
+    ):
+        structure, simulation, params = build_bandpass(substrate_cells)
+
+        structure.create_mesh()
+
+        expected = np.linspace(0.0, params.substrate_thickness_mm, substrate_cells)[
+            1:-1
+        ]
+        assert self.substrate_interior_lines(simulation, params) == pytest.approx(
+            expected, abs=1e-3
+        )
+
+    def test_requested_line_inside_the_substrate_is_kept(self, build_bandpass):
+        """``requested_lines`` still places its line, and the substrate still
+        gets its evenly spaced lines around it."""
+        from simpleEMS.fdtd_mesh import Mesh
+
+        _structure, simulation, params = build_bandpass(7)
+        requested_position = 0.5
+
+        Mesh(simulation.CSX, params, requested_lines=[[], [], [requested_position]])
+
+        expected = np.linspace(0.0, params.substrate_thickness_mm, 7)[1:-1]
+        interior_lines = self.substrate_interior_lines(simulation, params)
+        assert np.min(np.abs(interior_lines - requested_position)) < 1e-6
+        for position in expected:
+            assert np.min(np.abs(interior_lines - position)) < 1e-3
+        assert len(interior_lines) == len(expected) + 1

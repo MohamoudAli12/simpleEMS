@@ -292,6 +292,15 @@ class TestSimulationBox:
         with pytest.raises(ValueError, match="simulation_box"):
             dataclasses.replace(params, simulation_box=simulation_box)
 
+    @pytest.mark.parametrize(
+        "substrate_cells", [1, 0, -3], ids=["one", "zero", "negative"]
+    )
+    def test_substrate_cells_below_two_is_rejected(self, params, substrate_cells):
+        """Both substrate faces are counted, so fewer than two lines cannot
+        describe the substrate at all."""
+        with pytest.raises(ValueError, match="substrate_cells"):
+            dataclasses.replace(params, substrate_cells=substrate_cells)
+
     def test_create_simulation_box_rounds_its_inputs(self, params):
         box = params._create_simulation_box(1.23456789, 2.0, 3.987654321)
 
@@ -339,7 +348,7 @@ class TestDefaults:
     def test_documented_defaults(self, params):
         assert params.unit == 1e-3
         assert params.num_points == 1000
-        assert params.substrate_cells == 4
+        assert params.substrate_cells == 7
         assert params.copper_thickness_mm == 0.035
         assert params.min_trace_width_mm == 0.1
         assert params.min_trace_spacing_mm == 0.089
