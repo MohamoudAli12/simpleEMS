@@ -245,22 +245,52 @@ class TestFEMOptions:
 # Simulation box
 # ---------------------------------------------------------------------
 class TestSimulationBox:
-    def test_box_has_three_dimensions(self, params):
-        assert params.simulation_box.shape == (3,)
+    def test_box_defaults_to_none(self, params):
+        assert params.simulation_box is None
+        assert params.simulation_bounds is None
 
-    def test_box_is_rounded_to_fp_precision(self, params):
-        box = params.simulation_box
+    def test_sizes_box_is_centred_on_the_origin(self, params):
+        sized = dataclasses.replace(params, simulation_box=[80.0, 120.0, 40.0])
 
-        assert box == pytest.approx(np.round(box, params.fp_precision))
+        assert sized.simulation_bounds == pytest.approx(
+            np.array([[-40.0, 40.0], [-60.0, 60.0], [-20.0, 20.0]])
+        )
 
-    def test_box_encloses_the_substrate(self, params):
-        box = params.simulation_box
+    def test_bounds_box_is_returned_unchanged(self, params):
+        bounds = [[-40.0, 30.0], [-50.0, 60.0], [-10.0, 20.0]]
 
-        assert box[0] >= params.substrate_width_mm
-        assert box[1] >= params.substrate_length_mm
+        bounded = dataclasses.replace(params, simulation_box=bounds)
 
-    def test_box_dimensions_are_positive(self, params):
-        assert all(params.simulation_box > 0)
+        assert bounded.simulation_bounds == pytest.approx(np.array(bounds))
+
+    def test_sequence_input_is_stored_as_a_float_array(self, params):
+        sized = dataclasses.replace(params, simulation_box=(80, 120, 40))
+
+        assert isinstance(sized.simulation_box, np.ndarray)
+        assert sized.simulation_box.dtype == float
+
+    @pytest.mark.parametrize(
+        "simulation_box",
+        [
+            [80.0, 120.0],
+            [[80.0, 120.0, 40.0]],
+            [80.0, 0.0, 40.0],
+            [80.0, -120.0, 40.0],
+            [[-40.0, 30.0], [60.0, -50.0], [-10.0, 20.0]],
+            [[-40.0, 30.0], [-50.0, 60.0], [20.0, 20.0]],
+        ],
+        ids=[
+            "two-sizes",
+            "wrong-shape",
+            "zero-size",
+            "negative-size",
+            "min-above-max",
+            "min-equals-max",
+        ],
+    )
+    def test_invalid_box_is_rejected(self, params, simulation_box):
+        with pytest.raises(ValueError, match="simulation_box"):
+            dataclasses.replace(params, simulation_box=simulation_box)
 
     def test_create_simulation_box_rounds_its_inputs(self, params):
         box = params._create_simulation_box(1.23456789, 2.0, 3.987654321)
@@ -277,7 +307,6 @@ class TestAbstractProperties:
         [
             "freq_range",
             "main_freq",
-            "simulation_box",
             "substrate_width_mm",
             "substrate_length_mm",
         ],

@@ -14,6 +14,7 @@ Two things are always stubbed: ``BackgroundPlotter``, which opens a Qt window
 per 3D plot, and ``show_plots``, which blocks until those windows are closed.
 """
 
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -527,6 +528,33 @@ class TestAddFieldDump:
         assert box[1][2] == pytest.approx(
             params.substrate_thickness_mm + params.copper_thickness_mm
         )
+
+    def test_user_simulation_box_sets_the_dump_extent(
+        self, inset_params, sim_for, tmp_path
+    ):
+        bounds = [[-40.0, 30.0], [-50.0, 60.0], [-10.0, 20.0]]
+        params = dataclasses.replace(inset_params, simulation_box=bounds)
+        simulation = sim_for(params)
+
+        SimTools.add_field_dump(simulation, params, tmp_path)
+
+        dump_box = np.array(simulation.CSX.GetAllPrimitives()[-1].GetBoundBox())
+        assert dump_box[0][:2] == pytest.approx([-40.0, -50.0])
+        assert dump_box[1][:2] == pytest.approx([30.0, 60.0])
+
+    def test_dump_matches_the_auto_mesh_box(self, built_inset, tmp_path):
+        """With no user box, the dump spans the same x/y the mesher pads to."""
+        antenna, simulation, params, _port = built_inset
+        antenna.create_mesh()
+        grid = simulation.CSX.GetGrid()
+
+        SimTools.add_field_dump(simulation, params, tmp_path)
+
+        dump_box = np.array(simulation.CSX.GetAllPrimitives()[-1].GetBoundBox())
+        for dimension in (0, 1):
+            grid_lines = grid.GetLines(dimension)
+            assert dump_box[0][dimension] == pytest.approx(grid_lines[0], abs=1e-3)
+            assert dump_box[1][dimension] == pytest.approx(grid_lines[-1], abs=1e-3)
 
     def test_an_empty_structure_falls_back_to_the_simulation_box(
         self, inset_params, sim_for, tmp_path

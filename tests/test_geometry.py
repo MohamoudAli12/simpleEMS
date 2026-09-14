@@ -10,6 +10,8 @@ ends, ground under the substrate).
 Physics is *not* asserted here; that lives in ``test_calc.py``.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -371,7 +373,7 @@ class TestInsetFedPatch:
     def test_geometry_fits_inside_the_simulation_box(self, built_inset):
         _antenna, sim, params, _port = built_inset
 
-        box = params.simulation_box
+        box = params._default_simulation_box
         for primitive in sim.CSX.GetAllPrimitives():
             limits = bbox(primitive)
             assert limits[0][0] >= -box[0] / 2 - 1e-6
@@ -977,3 +979,94 @@ class TestMeshAcrossStructures:
 
         for a, b in zip(first, second, strict=True):
             assert a == pytest.approx(b)
+
+
+# ---------------------------------------------------------------------
+# User-defined simulation box
+# ---------------------------------------------------------------------
+class TestUserSimulationBox:
+    """``create_mesh`` honours ``params.simulation_box`` when it is defined and
+    derives the box from the geometry only when it is ``None``."""
+
+    @pytest.fixture
+    def build_line(self, mline_params, sim_for):
+        """Factory building a microstrip line whose params carry a given box."""
+        from simpleEMS.microstrip_line import MicrostripLine
+
+        def _build(simulation_box):
+            params = dataclasses.replace(mline_params, simulation_box=simulation_box)
+            simulation = sim_for(params)
+            line = MicrostripLine(params, simulation)
+            line.build_microstrip_line()
+            return line, simulation, params
+
+        return _build
+
+    @staticmethod
+    def outer_lines(simulation):
+        grid = simulation.CSX.GetGrid()
+        return np.array(
+            [
+                [grid.GetLines(dimension)[0], grid.GetLines(dimension)[-1]]
+                for dimension in range(3)
+            ]
+        )
+
+    @staticmethod
+    def sizes_around_the_substrate(params):
+        return [
+            params.substrate_width_mm + 40.0,
+            params.substrate_length_mm + 40.0,
+            40.0,
+        ]
+
+    def test_no_box_pads_the_geometry(self, build_line):
+        from simpleEMS.fdtd_mesh import auto_simulation_bounds, geometry_extent
+
+        line, simulation, params = build_line(None)
+        expected = auto_simulation_bounds(
+            geometry_extent(simulation.CSX), params.lambda0
+        )
+
+        line.create_mesh()
+
+        assert self.outer_lines(simulation) == pytest.approx(
+            np.array(expected), abs=1e-3
+        )
+
+    @pytest.mark.parametrize("manual", [False, True], ids=["auto", "manual"])
+    def test_sizes_box_sets_the_outer_grid_lines(
+        self, build_line, mline_params, manual
+    ):
+        box_sizes = self.sizes_around_the_substrate(mline_params)
+        line, simulation, _params = build_line(box_sizes)
+
+        line.create_mesh(manual_mesh=manual)
+
+        half_sizes = np.array(box_sizes) / 2
+        assert self.outer_lines(simulation) == pytest.approx(
+            np.column_stack((-half_sizes, half_sizes)), abs=1e-6
+        )
+
+    @pytest.mark.parametrize("manual", [False, True], ids=["auto", "manual"])
+    def test_off_centre_bounds_set_the_outer_grid_lines(
+        self, build_line, mline_params, manual
+    ):
+        half_width = mline_params.substrate_width_mm / 2
+        half_length = mline_params.substrate_length_mm / 2
+        bounds = [
+            [-half_width - 10.0, half_width + 30.0],
+            [-half_length - 20.0, half_length + 5.0],
+            [-5.0, 25.0],
+        ]
+        line, simulation, _params = build_line(bounds)
+
+        line.create_mesh(manual_mesh=manual)
+
+        assert self.outer_lines(simulation) == pytest.approx(np.array(bounds), abs=1e-6)
+
+    def test_box_smaller_than_the_structure_raises(self, build_line):
+        line, _simulation, _params = build_line([1.0, 1.0, 1.0])
+
+        with pytest.raises(ValueError, match="too small"):
+            line.create_mesh()

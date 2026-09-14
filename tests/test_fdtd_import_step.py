@@ -307,13 +307,10 @@ class TestStepFDTDParams:
         assert params.substrate_width_mm == pytest.approx(20.0)
         assert params.substrate_length_mm == pytest.approx(16.0)
 
-    def test_simulation_box_has_three_dimensions(self, params):
-        assert np.asarray(params.simulation_box).shape[-1] == 3
-
-    def test_simulation_box_encloses_the_structure(self, params):
-        box = np.asarray(params.simulation_box)
-
-        assert box.max() >= params.substrate_width_mm / 2
+    def test_simulation_box_defaults_to_none(self, params):
+        """Left undefined, the mesher derives the box from the imported
+        geometry itself."""
+        assert params.simulation_box is None
 
     def test_permittivity_drives_the_wavelength(self):
         """Left at the air default, lambda0 would be the vacuum wavelength --
