@@ -63,8 +63,9 @@ class SimParams:
     substrate_length_mm : float
         Substrate length in millimeters. Must be provided by subclasses.
     substrate_cells : int, optional
-        Suggested number of mesh cells along the substrate thickness.
-        Default value is ``4``.
+        Number of FDTD mesh lines through the substrate thickness in z,
+        counting both faces, evenly spaced (``substrate_cells - 1`` cells).
+        Must be at least ``2``. Default value is ``7``.
     unit : float, optional
         Unit used in the model. Default value is ``1e-3`` which represents millimeters.
         This value should not be changed.
@@ -206,7 +207,7 @@ class SimParams:
     substrate_thickness_mm: float
     substrate_kappa: float = field(init=False)
 
-    substrate_cells: int = 4
+    substrate_cells: int = 7
 
     unit: float = 1e-3  # mm
     num_points: int = 1000
@@ -366,7 +367,23 @@ class SimParams:
         """Perform common parameter computations after dataclass initialisation."""
         self._validate_backend()
         self._validate_simulation_box()
+        self._validate_substrate_cells()
         self._compute_common()
+
+    def _validate_substrate_cells(self) -> None:
+        """
+        Check that ``substrate_cells`` can place both substrate faces.
+
+        Raises
+        ------
+        ValueError
+            If ``substrate_cells`` is less than ``2``.
+        """
+        if self.substrate_cells < 2:
+            raise ValueError(
+                "substrate_cells counts both substrate faces and must be >= 2, "
+                f"got {self.substrate_cells}"
+            )
 
     def _validate_simulation_box(self) -> None:
         """

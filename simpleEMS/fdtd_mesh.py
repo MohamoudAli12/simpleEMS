@@ -923,9 +923,13 @@ class Mesh:
         CSXCAD structure with primitives already added.
     params : SimParams
         Simulation parameters; reads ``simulation_box``, ``FDTD_mesh_resolution``,
-        ``FDTD_metal_mesh_resolution``, ``unit``, and ``lambda0``. A defined
+        ``FDTD_metal_mesh_resolution``, ``unit``, ``lambda0``,
+        ``substrate_thickness_mm``, and ``substrate_cells``. A defined
         ``simulation_box`` is meshed exactly as given; when it is ``None`` the
         box is derived from the geometry (see :func:`auto_simulation_bounds`).
+        Every dielectric layer ``substrate_thickness_mm`` thick gets exactly
+        ``substrate_cells`` evenly spaced lines through it in z, counting both
+        faces (see :meth:`_gen_substrate_lines`).
     smooth_ratio : float
         Maximum ratio between adjacent cell sizes. Default ``1.5``.
     min_lines : int
@@ -957,6 +961,9 @@ class Mesh:
         self._unit = float(params.unit)
         self._lambda0 = float(params.lambda0)
         self._min_lines = min_lines
+        self._substrate_thickness = float(params.substrate_thickness_mm)
+        self._substrate_cells = int(params.substrate_cells)
+        self.substrate_spans: list[tuple[float, float]] = []
         # Kept apart from self.fixed_lines, which _set_fixed_lines also fills
         # with the zero-thickness primitives' own positions: those are already
         # candidate bounds (a sheet contributes both of its equal bbox edges),
@@ -1000,6 +1007,7 @@ class Mesh:
         for prim in physical_prims:
             prim.Update()
         self._set_fixed_lines(physical_prims)
+        self._set_substrate_spans(physical_prims)
         bounds = _collect_all_bounds(
             physical_prims, self.fixed_lines, min_feature=self._metal_res
         )
@@ -1033,6 +1041,82 @@ class Mesh:
             for pos in dim_lines:
                 self.add_fixed_line(dim, fp_nearest(pos))
             self.fixed_lines[dim] = _remove_dups(self.fixed_lines[dim])
+
+    def _set_substrate_spans(self, primitives: list[CSPrimitives]) -> None:
+        """Record the z-extent of every dielectric primitive that is exactly
+        ``substrate_thickness_mm`` thick into ``self.substrate_spans``.
+
+        The substrate is found from its own primitive rather than from a
+        single bounded interval: requested lines or other primitives' edges
+        inside the substrate split its thickness into several intervals, none
+        of which would then match the substrate thickness on its own.
+        """
+        for primitive in primitives:
+            if not _prim_materialp(primitive):
+                continue
+            z_bounds = _get_prim_bounds(primitive)[2]
+            z_lower, z_upper = float(z_bounds[0]), float(z_bounds[1])
+            if not fp_equalp(z_upper - z_lower, self._substrate_thickness):
+                continue
+            already_recorded = any(
+                fp_equalp(z_lower, span_lower) and fp_equalp(z_upper, span_upper)
+                for span_lower, span_upper in self.substrate_spans
+            )
+            if not already_recorded:
+                self.substrate_spans.append((z_lower, z_upper))
+
+    def _substrate_span_containing(
+        self, dimension: int, bounded_type: BoundedType
+    ) -> tuple[float, float] | None:
+        """Return the substrate span a z-interval lies inside, or ``None``.
+
+        Only a non-degenerate, non-metal interval in z qualifies; a
+        zero-length interval (a fixed line) is left to
+        :meth:`_gen_mesh_in_bounds` so the line it stands for is still placed.
+        """
+        if dimension != 2 or bounded_type.get_type() != Type.nonmetal:
+            return None
+        interval_lower, interval_upper = bounded_type.get_bounds()
+        if fp_equalp(interval_lower, interval_upper):
+            return None
+        for span_lower, span_upper in self.substrate_spans:
+            starts_inside = fp_gep(interval_lower, span_lower)
+            ends_inside = fp_lep(interval_upper, span_upper)
+            if starts_inside and ends_inside:
+                return span_lower, span_upper
+        return None
+
+    def _gen_substrate_lines(
+        self,
+        span_lower: float,
+        span_upper: float,
+        interval_lower: float,
+        interval_upper: float,
+    ) -> None:
+        """Mesh one interval of a substrate with evenly spaced z-lines.
+
+        The substrate gets ``substrate_cells`` lines through its thickness,
+        counting both faces: ``linspace(span_lower, span_upper,
+        substrate_cells)``. Only the interior lines are added here. The faces
+        are metal or air boundaries whose lines come from the neighbouring
+        intervals -- a thin copper layer collapses to its own midline, and
+        adding the face as well would open a sliver cell that shrinks the FDTD
+        timestep. Every interval of a split substrate adds the same positions,
+        which :meth:`_add_lines_to_mesh` de-duplicates, so the result does not
+        depend on how many intervals the substrate was split into. An interval
+        edge inside the substrate that is a fixed line (a requested line, say)
+        is kept as well.
+        """
+        substrate_lines = list(
+            np.linspace(span_lower, span_upper, self._substrate_cells)[1:-1]
+        )
+        for interval_bound in (interval_lower, interval_upper):
+            inside_faces = not fp_equalp(interval_bound, span_lower) and not fp_equalp(
+                interval_bound, span_upper
+            )
+            if inside_faces and self._is_fixed_line(2, interval_bound):
+                substrate_lines.append(interval_bound)
+        self._add_lines_to_mesh(np.array(sorted(substrate_lines)), 2)
 
     def _merge_requested_lines(self, bounds: list[list[float]]) -> list[list[float]]:
         """Fold ``requested_lines`` into the per-dimension candidate bounds.
@@ -1257,18 +1341,24 @@ class Mesh:
 
         Intended to be called with intervals sorted smallest-first (see
         :func:`_sort_bounded_types`) so finer features are meshed before the
-        coarser intervals that reference their neighbors' spacing.
+        coarser intervals that reference their neighbors' spacing. A z-interval
+        inside a substrate is meshed by :meth:`_gen_substrate_lines` instead of
+        :meth:`_gen_mesh_in_bounds`.
         """
         for dim, btypes in enumerate(bounded_types):
             for btype in btypes:
                 lower = btype.get_bounds()[0]
                 upper = btype.get_bounds()[1]
-                is_metal = btype.get_type() == Type.metal
-                _, line_below = self._line_below(dim, lower)
-                _, line_above = self._line_above(dim, upper)
-                self._gen_mesh_in_bounds(
-                    dim, lower, upper, line_below, line_above, is_metal
-                )
+                substrate_span = self._substrate_span_containing(dim, btype)
+                if substrate_span is not None:
+                    self._gen_substrate_lines(*substrate_span, lower, upper)
+                else:
+                    is_metal = btype.get_type() == Type.metal
+                    _, line_below = self._line_below(dim, lower)
+                    _, line_above = self._line_above(dim, upper)
+                    self._gen_mesh_in_bounds(
+                        dim, lower, upper, line_below, line_above, is_metal
+                    )
                 self._add_to_ranges_meshed(dim, lower, upper)
 
     def _scaled_min_lines(self, dist: float, is_metal: bool, dim: int) -> int:
@@ -1398,6 +1488,11 @@ class Mesh:
         is_metal: bool,
     ) -> None:
         """Generate and add mesh lines across one bounded interval.
+
+        A z-interval inside a substrate never reaches this method; it gets
+        ``substrate_cells`` evenly spaced lines from :meth:`_gen_substrate_lines`
+        instead, so a thin substrate is not caught by the thin-interval
+        collapse below.
 
         A degenerate (zero-length) interval gets a single line. An interval
         thinner than a quarter of its target resolution (``FDTD_metal_mesh_resolution``
