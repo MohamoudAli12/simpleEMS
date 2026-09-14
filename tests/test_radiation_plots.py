@@ -1,9 +1,8 @@
 """Tests for the radiation, 3D-visualisation and orchestration parts of SimTools.
 
 ``test_plotting.py`` covers the 2D S-parameter family. This file covers the
-rest: the polar radiation cuts, the PyVista surfaces, the field dump, the
-export wrappers, and ``run_all_post_processing``, which strings them all
-together and is what most example scripts actually call.
+rest: the polar radiation cuts, the PyVista surfaces, the field dump, and the
+export wrappers.
 
 Everything here is driven from a synthetic far field rather than a solve. The
 plots take an ``nf2ff``-shaped object and never look at where it came from, so
@@ -461,7 +460,7 @@ class TestPlot3d:
         self, far_field_3d, tmp_path, no_windows
     ):
         """The consequence of the in-place normalisation above: calling both,
-        as run_all_post_processing does, must not shift the second one."""
+        as a script plotting both does, must not shift the second one."""
         SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
         SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0, tmp_path)
 
@@ -689,77 +688,3 @@ class TestShowPlots:
         SimTools.show_plots()
 
         assert shown == [True]
-
-
-# ---------------------------------------------------------------------
-# run_all_post_processing
-# ---------------------------------------------------------------------
-class TestRunAllPostProcessing:
-    @pytest.fixture
-    def ran(self, built_inset, nf2ff, tmp_path, no_windows, monkeypatch):
-        """Drive the whole pipeline once, with the blocking bits stubbed."""
-        _antenna, sim, params, _port = built_inset
-        monkeypatch.setattr(SimTools, "show_plots", staticmethod(lambda: None))
-
-        freqs = np.linspace(2.2e9, 2.7e9, 21)
-        s11 = 0.2 * np.exp(1j * np.linspace(0, np.pi, 21))
-        vswr = (1 + np.abs(s11)) / (1 - np.abs(s11))
-        z11 = 50 * (1 + s11) / (1 - s11)
-        far_field_3d = SimTools.compute_nf2ff_3d(nf2ff, params.main_freq, tmp_path)
-
-        SimTools.run_all_post_processing(
-            sim,
-            freqs,
-            s11,
-            vswr,
-            z11,
-            1.0,
-            nf2ff,
-            far_field_3d,
-            params,
-            output_path=tmp_path,
-        )
-        return tmp_path, sim, params
-
-    def test_saves_the_two_dimensional_plots(self, ran):
-        out, _sim, _params = ran
-
-        saved = sorted((out / "plots").glob("plot_*.png"))
-        assert len(saved) >= 6  # s-param, smith, vswr, impedance, pattern, directivity
-
-    def test_writes_the_three_dimensional_meshes(self, ran):
-        out, _sim, _params = ran
-
-        for name in ("3D_directivity.vtk", "3D_Gain.vtk", "3D_Power.vtk"):
-            assert (out / "3D_plots" / name).is_file()
-
-    def test_exports_touchstone(self, ran):
-        out, _sim, _params = ran
-
-        assert list((out / "touchstone").glob("*.s1p"))
-
-    def test_exports_gerber(self, ran):
-        out, _sim, _params = ran
-
-        assert list(out.rglob("*-F_Cu.gtl"))
-
-    def test_exports_stl(self, ran):
-        """Regression: this used to be called as ``export_stl(output_path)``,
-        which bound the path to the ``sim`` parameter and raised
-        ``AttributeError: 'PosixPath' object has no attribute 'CSX'``."""
-        out, _sim, _params = ran
-
-        assert (out / "stl" / "structure.stl").is_file()
-
-    def test_the_gerber_puts_the_ground_on_the_bottom_layer(self, ran):
-        """Layers are inferred from Z, so the ground gets its own file rather
-        than being dropped or drawn over the top copper."""
-        out, _sim, _params = ran
-
-        assert "%LNground*%" in next(out.rglob("*-B_Cu.gbl")).read_text()
-        assert "%LNground*%" not in next(out.rglob("*-F_Cu.gtl")).read_text()
-
-    def test_radiation_plots_use_the_main_frequency(self, ran, nf2ff):
-        _out, _sim, params = ran
-
-        assert all(call["freq"] == params.main_freq for call in nf2ff.calls)
