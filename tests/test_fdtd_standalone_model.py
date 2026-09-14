@@ -593,10 +593,10 @@ class TestSimulateModelEndToEnd:
         sim_tools.subprocess.run = lambda cmd, **kw: None
         request.addfinalizer(lambda: setattr(sim_tools.subprocess, "run", original))
 
-        data, loaded, charac_imp = simulate_model(model, output_path=out)
+        data, loaded, charac_imp, _nf2ff_box = simulate_model(model, output_path=out)
         return data, loaded, charac_imp, out, params
 
-    def test_returns_the_documented_triple(self, solved):
+    def test_returns_the_documented_tuple(self, solved):
         data, loaded, charac_imp, _out, _params = solved
 
         assert isinstance(data, SimData)
@@ -647,7 +647,9 @@ class TestSimulateModelEndToEnd:
         """``run=False`` is the post-process-only path: same numbers, no solve."""
         data, _loaded, _charac_imp, out, _params = solved
 
-        again, _sim, _z = simulate_model(out / "model.xml", output_path=out, run=False)
+        again, _sim, _z, _nf2ff_box = simulate_model(
+            out / "model.xml", output_path=out, run=False
+        )
 
         assert again.s11 == pytest.approx(data.s11)
 
@@ -655,7 +657,7 @@ class TestSimulateModelEndToEnd:
         _data, _loaded, _charac_imp, out, _params = solved
         band = np.linspace(2.2e9, 2.6e9, 7)
 
-        data, _sim, _z = simulate_model(
+        data, _sim, _z, _nf2ff_box = simulate_model(
             out / "model.xml", output_path=out, run=False, freqs=band
         )
 
@@ -665,7 +667,7 @@ class TestSimulateModelEndToEnd:
     def test_num_points_controls_the_grid_size(self, solved, no_gui):
         _data, _loaded, _charac_imp, out, _params = solved
 
-        data, _sim, _z = simulate_model(
+        data, _sim, _z, _nf2ff_box = simulate_model(
             out / "model.xml", output_path=out, run=False, num_points=13
         )
 
