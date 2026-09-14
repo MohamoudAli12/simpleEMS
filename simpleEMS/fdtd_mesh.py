@@ -355,6 +355,71 @@ def _physical_prims(prims: list[CSPrimitives]) -> list[CSPrimitives]:
     return physical
 
 
+def geometry_extent(csx: ContinuousStructure) -> list[list[float]]:
+    """Per-dimension ``[min, max]`` of every physical primitive in ``csx``.
+
+    Uses the same primitive filter and transform-aware bounding box as the
+    mesher, so helper primitives (ports, dumps, NF2FF boxes) never widen it.
+
+    Parameters
+    ----------
+    csx : ContinuousStructure
+        Structure to measure.
+
+    Returns
+    -------
+    list[list[float]]
+        ``[[xmin, xmax], [ymin, ymax], [zmin, zmax]]``, or ``[[], [], []]``
+        when the structure has no physical primitives.
+    """
+    physical_primitives = _physical_prims(csx.GetAllPrimitives())
+    if not physical_primitives:
+        return [[], [], []]
+    primitive_bounds = np.array(
+        [_get_prim_bounds(primitive) for primitive in physical_primitives],
+        dtype=float,
+    )
+    return [
+        [
+            float(primitive_bounds[:, dimension, 0].min()),
+            float(primitive_bounds[:, dimension, 1].max()),
+        ]
+        for dimension in range(3)
+    ]
+
+
+def auto_simulation_bounds(
+    geometry_bounds: list[list[float]], lambda0: float
+) -> tuple[tuple[float, float], ...]:
+    """Simulation box derived from the geometry when the user defined none.
+
+    Each dimension pads the geometry's extent by ``max(lambda0, 15% of
+    span)``; a dimension with no geometry spans ``[-lambda0, lambda0]``.
+
+    Parameters
+    ----------
+    geometry_bounds : list[list[float]]
+        Per-dimension positions; only the minimum and maximum are used.
+    lambda0 : float
+        Wavelength in the substrate, in drawing units.
+
+    Returns
+    -------
+    tuple[tuple[float, float], ...]
+        ``((xmin, xmax), (ymin, ymax), (zmin, zmax))``.
+    """
+    simulation_bounds = []
+    for dimension_bounds in geometry_bounds:
+        if not dimension_bounds:
+            simulation_bounds.append((-lambda0, lambda0))
+            continue
+        geometry_min = min(dimension_bounds)
+        geometry_max = max(dimension_bounds)
+        padding = max(lambda0, (geometry_max - geometry_min) * 0.15)
+        simulation_bounds.append((geometry_min - padding, geometry_max + padding))
+    return tuple(simulation_bounds)
+
+
 def _remove_dups(lst: list, fixed: list | None = None) -> list:
     """Collapse near-duplicate consecutive values in a sorted list.
 
@@ -858,12 +923,23 @@ class Mesh:
         CSXCAD structure with primitives already added.
     params : SimParams
         Simulation parameters; reads ``simulation_box``, ``FDTD_mesh_resolution``,
-        ``FDTD_metal_mesh_resolution``, ``unit``, and ``lambda0``.
+        ``FDTD_metal_mesh_resolution``, ``unit``, and ``lambda0``. A defined
+        ``simulation_box`` is meshed exactly as given; when it is ``None`` the
+        box is derived from the geometry (see :func:`auto_simulation_bounds`).
     smooth_ratio : float
         Maximum ratio between adjacent cell sizes. Default ``1.5``.
     min_lines : int
         Minimum number of mesh lines generated across any bounded interval.
         Default ``5``.
+    requested_lines : list[list[float]] | None
+        Per-dimension ``[x, y, z]`` positions the caller needs a mesh line on,
+        registered as fixed lines (see :func:`add_fixed_line`) and added to the
+        candidate bounds so each one becomes an interval boundary in its own
+        right. A structure whose feature the automatic passes cannot see --
+        the two slots of a CPW, narrow enough that the thin-interval collapse
+        in :func:`_gen_mesh_in_bounds` leaves a single line across one -- asks
+        for its edges this way. Default ``None``, which registers nothing and
+        leaves the generated mesh bit-for-bit what it would otherwise be.
     """
 
     def __init__(
@@ -872,6 +948,7 @@ class Mesh:
         params: SimParams,
         smooth_ratio: float = 1.5,
         min_lines: int = 5,
+        requested_lines: list[list[float]] | None = None,
     ) -> None:
         self._csx = csx
         self._mesh_res = float(params.FDTD_mesh_resolution)
@@ -880,8 +957,27 @@ class Mesh:
         self._unit = float(params.unit)
         self._lambda0 = float(params.lambda0)
         self._min_lines = min_lines
-        sb = params.simulation_box
-        self._sim_box = tuple((float(-s / 2), float(s / 2)) for s in sb)
+        # Kept apart from self.fixed_lines, which _set_fixed_lines also fills
+        # with the zero-thickness primitives' own positions: those are already
+        # candidate bounds (a sheet contributes both of its equal bbox edges),
+        # but as fp_nearest-rounded copies, so merging them into the bounds
+        # below would swap a rounded value in for the raw one and shift an
+        # existing line by up to a thousandth of a unit. Only what the caller
+        # asked for is merged.
+        self._requested_lines = (
+            [[], [], []]
+            if requested_lines is None
+            else [[float(pos) for pos in dim_lines] for dim_lines in requested_lines]
+        )
+        user_simulation_bounds = params.simulation_bounds
+        self._user_sim_box = user_simulation_bounds is not None
+        self._sim_box = (
+            None
+            if user_simulation_bounds is None
+            else tuple(
+                (float(lower), float(upper)) for lower, upper in user_simulation_bounds
+            )
+        )
         self.sim_bounds = [[], [], []]
         self.ranges_meshed = [[], [], []]
         self.metal_bounds = [[], [], []]
@@ -907,6 +1003,7 @@ class Mesh:
         bounds = _collect_all_bounds(
             physical_prims, self.fixed_lines, min_feature=self._metal_res
         )
+        bounds = self._merge_requested_lines(bounds)
         self._set_sim_bounds_from_geometry(bounds)
         bounded_types = self._bounded_types(bounds, physical_prims)
         bounded_types = self._set_expanded_bounds(bounded_types)
@@ -921,7 +1018,8 @@ class Mesh:
     def _set_fixed_lines(self, prims: list[CSPrimitives]) -> None:
         """Add a fixed mesh line for every zero-thickness primitive (a
         primitive whose bounding box has zero extent along a dimension,
-        e.g. a flat metal sheet), which must be meshed exactly."""
+        e.g. a flat metal sheet) and for every position the caller asked for
+        via ``requested_lines``, all of which must be meshed exactly."""
         for prim in prims:
             prim_bounds = _get_prim_bounds(prim)
             for dim in range(3):
@@ -929,14 +1027,50 @@ class Mesh:
                     self.add_fixed_line(dim, fp_nearest(prim_bounds[dim][0]))
                 self.fixed_lines[dim].sort()
                 self.fixed_lines[dim] = _remove_dups(self.fixed_lines[dim])
+        for dim, dim_lines in enumerate(self._requested_lines):
+            if not dim_lines:
+                continue
+            for pos in dim_lines:
+                self.add_fixed_line(dim, fp_nearest(pos))
+            self.fixed_lines[dim] = _remove_dups(self.fixed_lines[dim])
+
+    def _merge_requested_lines(self, bounds: list[list[float]]) -> list[list[float]]:
+        """Fold ``requested_lines`` into the per-dimension candidate bounds.
+
+        Registering a position as a fixed line is not on its own enough to put
+        a mesh line there: :func:`_bounded_types` builds its intervals by
+        walking the candidate bounds and only consults ``self.fixed_lines`` to
+        decide whether a bound it is *already* visiting gets an interval of its
+        own. A requested position that is not also a primitive edge -- an
+        interior line across a substrate, say -- would never be visited, and so
+        would be silently dropped. Every dimension the caller left empty is
+        returned untouched, including the list objects themselves.
+        """
+        for dim, dim_lines in enumerate(self._requested_lines):
+            if not dim_lines:
+                continue
+            merged = sorted(set(bounds[dim]) | {fp_nearest(pos) for pos in dim_lines})
+            bounds[dim] = _remove_dups(merged, self.fixed_lines[dim])
+        return bounds
 
     def add_fixed_line(self, dim: int, pos: float) -> None:
         """Register a must-keep mesh line position at ``pos``.
 
         Fixed lines are protected from the deduplication/smoothing passes
-        applied to the rest of the mesh. Must be called before the mesh is
-        generated to have any effect, since ``__init__`` runs mesh
-        generation immediately.
+        applied to the rest of the mesh, and a line lands *exactly* on one: the
+        thirds-rule shrink in :func:`_gen_mesh_in_bounds` is suppressed at an
+        interval edge that is a fixed line, rather than pulling the line a
+        third of a cell inside the metal. That is what makes this the right
+        mechanism for a CPW's slot edges, where openEMS's own port probes, its
+        excitation and its termination are all boxes spanning trace edge to
+        ground edge and need a line on each.
+
+        Must be called before the mesh is generated to have any effect, since
+        ``__init__`` runs mesh generation immediately -- so outside the class
+        this means passing ``requested_lines`` to the constructor. Note that a
+        position which is not also a primitive's own bound has to reach the
+        candidate bounds too (:func:`_merge_requested_lines`) before it is
+        meshed.
 
         Parameters
         ----------
@@ -977,21 +1111,15 @@ class Mesh:
         return bounded_types
 
     def _set_sim_bounds_from_geometry(self, dim_bounds: list[list[float]]) -> None:
-        """Grow ``self._sim_box`` (in place) so every dimension pads the
-        geometry's own extent by at least ``lambda0 / 2`` or 15% of the
-        geometry's span, whichever is larger. Dimensions with no geometry
-        keep the simulation box passed in at construction."""
-        new_sim_box = []
-        for dim in range(3):
-            if not dim_bounds[dim]:
-                new_sim_box.append(self._sim_box[dim])
-                continue
-            geo_min = dim_bounds[dim][0]
-            geo_max = dim_bounds[dim][-1]
-            span = geo_max - geo_min
-            padding = max(self._lambda0, span * 0.15)
-            new_sim_box.append((geo_min - padding, geo_max + padding))
-        self._sim_box = tuple(new_sim_box)
+        """Set ``self._sim_box`` from the geometry unless the user defined one.
+
+        A user-defined ``simulation_box`` is used exactly as given;
+        :meth:`_set_expanded_bounds` raises if the geometry does not fit it.
+        Otherwise see :func:`auto_simulation_bounds`.
+        """
+        if self._user_sim_box:
+            return
+        self._sim_box = auto_simulation_bounds(dim_bounds, self._lambda0)
 
     def _set_expanded_bounds(
         self, bounded_types: list[list[BoundedType]]

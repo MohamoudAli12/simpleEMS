@@ -91,9 +91,6 @@ class InsetFedPatchParams(SimParams):
         Substrate width including margin (lambda0 padding).
     substrate_length_mm : float
         Substrate length including margin (lambda0 padding).
-    simulation_box : NDArray
-        A 1D array of shape (3,) representing the 3D simulation domain
-        size: ``[x_size_mm, y_size_mm, z_size_mm]``.
 
     Raises
     ------
@@ -173,9 +170,9 @@ class InsetFedPatchParams(SimParams):
         return self.patch_width_mm + 2 * self.lambda0
 
     @property
-    def simulation_box(self) -> NDArray:
+    def _default_simulation_box(self) -> NDArray:
         """
-        Return the 3D simulation bounding box dimensions.
+        Return the simulation box the manual mesh uses when none is defined.
 
         Returns
         -------
@@ -541,21 +538,17 @@ class InsetFedPatchAntenna(PatchAntenna):
             mesh = self.CSX.GetGrid()
             mesh.SetDeltaUnit(self.params.unit)
 
-            mesh.AddLine(
-                "x",
-                [-self.params.simulation_box[0] / 2, self.params.simulation_box[0] / 2],
-            )
-            mesh.AddLine(
-                "y",
-                [-self.params.simulation_box[1] / 2, self.params.simulation_box[1] / 2],
-            )
-            mesh.AddLine(
-                "z",
-                [
-                    -self.params.simulation_box[2] / 3,
-                    self.params.simulation_box[2] * 2 / 3,
-                ],
-            )
+            simulation_bounds = self.params.simulation_bounds
+            if simulation_bounds is None:
+                simulation_box = self.params._default_simulation_box
+                simulation_bounds = [
+                    [-simulation_box[0] / 2, simulation_box[0] / 2],
+                    [-simulation_box[1] / 2, simulation_box[1] / 2],
+                    [-simulation_box[2] / 3, simulation_box[2] * 2 / 3],
+                ]
+            mesh.AddLine("x", list(simulation_bounds[0]))
+            mesh.AddLine("y", list(simulation_bounds[1]))
+            mesh.AddLine("z", list(simulation_bounds[2]))
             # Add mesh lines for substrate
             mesh.AddLine(
                 "x",
@@ -665,10 +658,6 @@ class ProbeFedPatchParams(SimParams):
         Substrate width including margin (lambda0 padding).
     substrate_length_mm : float
         Substrate length including margin (lambda0 padding).
-    simulation_box : NDArray
-        3D simulation domain size as:
-            [x_size_mm, y_size_mm, z_size_mm]
-            Includes lambda0 air padding around the antenna structure.
 
     Raises
     ------
@@ -744,9 +733,9 @@ class ProbeFedPatchParams(SimParams):
         return self.patch_width_mm + 2 * self.lambda0
 
     @property
-    def simulation_box(self) -> NDArray:
+    def _default_simulation_box(self) -> NDArray:
         """
-        Return the 3D simulation bounding box dimensions.
+        Return the simulation box the manual mesh uses when none is defined.
 
         Returns
         -------
@@ -920,21 +909,17 @@ class ProbeFedPatchAntenna(PatchAntenna):
                     6,
                 ),
             )
-            mesh.AddLine(
-                "x",
-                [-self.params.simulation_box[0] / 2, self.params.simulation_box[0] / 2],
-            )
-            mesh.AddLine(
-                "y",
-                [-self.params.simulation_box[1] / 2, self.params.simulation_box[1] / 2],
-            )
-            mesh.AddLine(
-                "z",
-                [
-                    -self.params.simulation_box[2] / 3,
-                    self.params.simulation_box[2] * 2 / 3,
-                ],
-            )
+            simulation_bounds = self.params.simulation_bounds
+            if simulation_bounds is None:
+                simulation_box = self.params._default_simulation_box
+                simulation_bounds = [
+                    [-simulation_box[0] / 2, simulation_box[0] / 2],
+                    [-simulation_box[1] / 2, simulation_box[1] / 2],
+                    [-simulation_box[2] / 3, simulation_box[2] * 2 / 3],
+                ]
+            mesh.AddLine("x", list(simulation_bounds[0]))
+            mesh.AddLine("y", list(simulation_bounds[1]))
+            mesh.AddLine("z", list(simulation_bounds[2]))
             mesh.AddLine(
                 "x", -self.params.patch_width_mm / 2 - self.params.FDTD_thirds_rule
             )

@@ -208,9 +208,9 @@ class QuarterWaveFilterParams(SimParams):
         return self.series_line_width_mm + self.line_length_mm
 
     @property
-    def simulation_box(self) -> NDArray:
+    def _default_simulation_box(self) -> NDArray:
         """
-        Return the 3D simulation bounding box dimensions.
+        Return the simulation box the manual mesh uses when none is defined.
 
         Returns
         -------
@@ -698,27 +698,18 @@ class BandStopQuarterWaveFilter(QuarterWaveFilter):
                 self.params.shunt_line_width_mm,
             )
 
-            mesh.AddLine(
-                "x",
-                [
-                    -self.params.simulation_box[0] - self.params.lambda0 / 2,
-                    self.params.simulation_box[0] + self.params.lambda0,
-                ],
-            )
-            mesh.AddLine(
-                "y",
-                [
-                    -self.params.simulation_box[1] - self.params.lambda0 / 2,
-                    self.params.simulation_box[1] + self.params.lambda0,
-                ],
-            )
-            mesh.AddLine(
-                "z",
-                [
-                    -self.params.simulation_box[2] / 3,
-                    self.params.simulation_box[2] * 2 / 3,
-                ],
-            )
+            simulation_bounds = self.params.simulation_bounds
+            if simulation_bounds is None:
+                simulation_box = self.params._default_simulation_box
+                lambda0 = self.params.lambda0
+                simulation_bounds = [
+                    [-simulation_box[0] - lambda0 / 2, simulation_box[0] + lambda0],
+                    [-simulation_box[1] - lambda0 / 2, simulation_box[1] + lambda0],
+                    [-simulation_box[2] / 3, simulation_box[2] * 2 / 3],
+                ]
+            mesh.AddLine("x", list(simulation_bounds[0]))
+            mesh.AddLine("y", list(simulation_bounds[1]))
+            mesh.AddLine("z", list(simulation_bounds[2]))
             # Add mesh lines for substrate
             mesh.AddLine(
                 "x",
@@ -1068,27 +1059,18 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
                 self.params.shunt_line_width_mm,
             )
 
-            mesh.AddLine(
-                "x",
-                [
-                    -self.params.simulation_box[0] - self.params.lambda0 / 2,
-                    self.params.simulation_box[0] + self.params.lambda0,
-                ],
-            )
-            mesh.AddLine(
-                "y",
-                [
-                    -self.params.simulation_box[1] - self.params.lambda0 / 2,
-                    self.params.simulation_box[1] + self.params.lambda0,
-                ],
-            )
-            mesh.AddLine(
-                "z",
-                [
-                    -self.params.simulation_box[2] / 3,
-                    self.params.simulation_box[2] * 2 / 3,
-                ],
-            )
+            simulation_bounds = self.params.simulation_bounds
+            if simulation_bounds is None:
+                simulation_box = self.params._default_simulation_box
+                lambda0 = self.params.lambda0
+                simulation_bounds = [
+                    [-simulation_box[0] - lambda0 / 2, simulation_box[0] + lambda0],
+                    [-simulation_box[1] - lambda0 / 2, simulation_box[1] + lambda0],
+                    [-simulation_box[2] / 3, simulation_box[2] * 2 / 3],
+                ]
+            mesh.AddLine("x", list(simulation_bounds[0]))
+            mesh.AddLine("y", list(simulation_bounds[1]))
+            mesh.AddLine("z", list(simulation_bounds[2]))
             # Add mesh lines for substrate
             mesh.AddLine(
                 "x",

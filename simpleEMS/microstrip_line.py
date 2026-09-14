@@ -135,9 +135,9 @@ class MicrostripLineParams(SimParams):
         return self.microstrip_width_mm + 2 * self.lambda0
 
     @property
-    def simulation_box(self) -> NDArray:
+    def _default_simulation_box(self) -> NDArray:
         """
-        Return the 3D simulation bounding box dimensions.
+        Return the simulation box the manual mesh uses when none is defined.
 
         Returns
         -------
@@ -434,21 +434,17 @@ class MicrostripLine(SimTools):
             mesh = self.CSX.GetGrid()
             mesh.SetDeltaUnit(self.params.unit)
 
-            mesh.AddLine(
-                "x",
-                [-self.params.simulation_box[0] / 2, self.params.simulation_box[0] / 2],
-            )
-            mesh.AddLine(
-                "y",
-                [-self.params.simulation_box[1] / 2, self.params.simulation_box[1] / 2],
-            )
-            mesh.AddLine(
-                "z",
-                [
-                    -self.params.simulation_box[2] / 3,
-                    self.params.simulation_box[2] * 2 / 3,
-                ],
-            )
+            simulation_bounds = self.params.simulation_bounds
+            if simulation_bounds is None:
+                simulation_box = self.params._default_simulation_box
+                simulation_bounds = [
+                    [-simulation_box[0] / 2, simulation_box[0] / 2],
+                    [-simulation_box[1] / 2, simulation_box[1] / 2],
+                    [-simulation_box[2] / 3, simulation_box[2] * 2 / 3],
+                ]
+            mesh.AddLine("x", list(simulation_bounds[0]))
+            mesh.AddLine("y", list(simulation_bounds[1]))
+            mesh.AddLine("z", list(simulation_bounds[2]))
             # Add mesh lines for substrate
             mesh.AddLine(
                 "x",

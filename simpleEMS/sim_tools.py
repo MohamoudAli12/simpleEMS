@@ -64,6 +64,7 @@ from openEMS.nf2ff import nf2ff_results
 from .console import console
 from .export_gerber import export_gerber
 from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
+from .fdtd_mesh import auto_simulation_bounds, geometry_extent
 from .fem_backend import FEMOptions
 from .sim_params import SimParams
 
@@ -1616,28 +1617,31 @@ class SimTools:
         Add a field dump box to the simulation setup.
 
         Configures and attaches a field/current dump of the requested
-        ``dump_type`` to the CSXCAD structure. The dump box spans each
-        transverse (x, y) dimension found from the bounding box of all
-        existing geometry primitives, padded by ``max(lambda0/2, 15%
-        of span)`` (or by half of ``params.simulation_box`` if no geometry
-        is found in that dimension yet), and spans z from 0 to the top of
-        the copper layer (``substrate_thickness_mm + copper_thickness_mm``).
+        ``dump_type`` to the CSXCAD structure. The box follows the simulation
+        box in x and y -- ``params.simulation_box`` when defined, or the same
+        geometry-padded box the FDTD mesher builds when it is ``None`` (see
+        :func:`simpleEMS.fdtd_mesh.auto_simulation_bounds`) -- and spans z
+        from 0 to the top of the copper layer
+        (``substrate_thickness_mm + copper_thickness_mm``).
 
         Parameters
         ----------
         sim : SimSetup
             Simulation setup named tuple returned by ``setup_simulation``.
         params : SimParams
-            Parameter object supplying ``lambda0``, ``simulation_box``,
-            ``substrate_thickness_mm``, and ``copper_thickness_mm``, used
-            to size the dump box.
+            Parameter object supplying ``simulation_box``, ``lambda0``,
+            ``substrate_thickness_mm``, ``copper_thickness_mm`` and
+            ``main_freq``, used to size and configure the dump.
         output_path : Path, optional
             Directory the dump data will be written under (a ``field_dump``
             subdirectory is created). Defaults to ``cwd / "Sim_Path"``.
+        dump_freq : float, optional
+            Frequency of a frequency-domain dump. Defaults to
+            ``params.main_freq``.
         dump_type : DumpType, optional
             Type of field/current dump to add (time-domain or
             frequency-domain E-field, H-field, current, current density, or
-            SAR). Default is ``DumpType.efield_time``.
+            SAR). Default is ``DumpType.efield_frequency``.
 
         Returns
         -------
@@ -1656,37 +1660,12 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
-        def _set_sim_bounds_from_geometry(
-            params: SimParams, dim_bounds: list[list[float]]
-        ) -> NDArray:
-            new_sim_box = []
-            for dim in range(3):
-                if not dim_bounds[dim]:
-                    half = params.simulation_box[dim] / 2.0
-                    new_sim_box.append((-half, half))
-                    continue
-                geo_min = dim_bounds[dim][0]
-                geo_max = dim_bounds[dim][-1]
-                span = geo_max - geo_min
-                padding = max(params.lambda0 / 2, span * 0.15)
-                new_sim_box.append((geo_min - padding, geo_max + padding))
-            return np.array(new_sim_box)
-
-        bounds = [[], [], []]
-        for prim in sim.CSX.GetAllPrimitives():
-            try:
-                bb = prim.GetBoundBox()
-                tr = prim.GetTransform()
-                p0 = np.array(tr.Transform(bb[0]))
-                p1 = np.array(tr.Transform(bb[1]))
-                for dim in range(3):
-                    bounds[dim].append(min(p0[dim], p1[dim]))
-                    bounds[dim].append(max(p0[dim], p1[dim]))
-            except Exception:
-                pass
-
-        dim_bounds = [sorted(set(b)) for b in bounds]
-        sim_box = _set_sim_bounds_from_geometry(params, dim_bounds)
+        simulation_bounds = params.simulation_bounds
+        if simulation_bounds is None:
+            simulation_bounds = auto_simulation_bounds(
+                geometry_extent(sim.CSX), params.lambda0
+            )
+        copper_top = params.substrate_thickness_mm + params.copper_thickness_mm
 
         # TODO Add appropriate dump mode based on openEMS docs
         dump_path = output_path / "field_dump"
@@ -1698,12 +1677,8 @@ class SimTools:
             dump_type=dump_type.value[0],
             dump_mode=0,
         )
-        start = [sim_box[0][0], sim_box[1][0], 0]
-        stop = [
-            sim_box[0][1],
-            sim_box[1][1],
-            params.substrate_thickness_mm + params.copper_thickness_mm,
-        ]
+        start = [simulation_bounds[0][0], simulation_bounds[1][0], 0.0]
+        stop = [simulation_bounds[0][1], simulation_bounds[1][1], copper_top]
         dump.AddBox(start=start, stop=stop)
         if dump_type.value[0] >= 10:
             if dump_freq is None:

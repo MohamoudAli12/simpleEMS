@@ -47,8 +47,7 @@ class SimParams:
     frequency range and inputs provided.
     Subclasses (e.g., InsetFedPatchParams, ProbeFedPatchParams,
     MicrostripLineParams) must define ``freq_range`` and ``main_freq``
-    properties, and are responsible for setting substrate dimensions
-    before calling ``_create_simulation_box()``.
+    properties and the substrate dimensions.
 
     Parameters
     ----------
@@ -82,6 +81,15 @@ class SimParams:
     backend_engine : str, optional
         Solver backend to use: ``"FDTD"`` (openEMS, default) or ``"FEM"``
         (Gmsh + GetDP finite-element frequency-domain solver).
+    simulation_box : array_like, optional
+        FDTD backend only. Extent of the simulation domain in mm, either as
+        ``[x, y, z]`` sizes centred on the origin (shape ``(3,)``) or as
+        ``[[xmin, xmax], [ymin, ymax], [zmin, zmax]]`` bounds (shape
+        ``(3, 2)``). The automatic mesher uses it exactly as given and raises
+        if the structure does not fit inside. Default is ``None``, which pads
+        the structure's own extent by ``max(lambda0, 15% of its span)`` on
+        every side. The FEM backend sizes its air box from ``FEM_air_pad_*``
+        instead.
     FEM_num_solve_points : int, optional
         Number of full FEM solves the adaptive rational-interpolation sweep is
         allowed to perform (must be ``>= 4``). Ignored by the FDTD backend.
@@ -184,9 +192,6 @@ class SimParams:
     lambda0 : float
         Effective wavelength in the substrate, computed as
         ``C0 / (main_freq * sqrt(eps_r) * unit)``.
-    simulation_box : NDArray of shape (3,)
-        Bounding box dimensions [x, y, z] for the FDTD domain in mm,
-        including lambda0 air padding around the structure.
     FDTD_mesh_resolution : float
         Computed global mesh resolution.
     FDTD_metal_mesh_resolution : float
@@ -207,6 +212,7 @@ class SimParams:
     num_points: int = 1000
 
     backend_engine: str = "FDTD"
+    simulation_box: NDArray | None = None
 
     FEM_num_solve_points: int = 10
     FEM_boundary: str = _FEM_DEFAULTS.boundary
@@ -299,23 +305,24 @@ class SimParams:
         raise NotImplementedError("Subclasses must define main_freq")
 
     @property
-    def simulation_box(self) -> NDArray:
+    def simulation_bounds(self) -> NDArray | None:
         """
-        Return the 3D simulation bounding box.
+        Return ``simulation_box`` as per-axis ``[min, max]`` bounds.
 
-        Must be implemented by subclasses.
+        A ``(3,)`` box of sizes is centred on the origin.
 
         Returns
         -------
-        NDArray
-            Array of shape (3,) with [x, y, z] dimensions in mm.
-
-        Raises
-        ------
-        NotImplementedError
-            If the subclass does not define this property.
+        NDArray or None
+            Array of shape (3, 2), ``[[xmin, xmax], [ymin, ymax], [zmin, zmax]]``
+            in mm, or ``None`` when no simulation box is defined.
         """
-        raise NotImplementedError("subclasses must define simulation_box")
+        if self.simulation_box is None:
+            return None
+        simulation_box = np.asarray(self.simulation_box, dtype=float)
+        if simulation_box.shape == (3,):
+            return np.column_stack((-simulation_box / 2, simulation_box / 2))
+        return simulation_box
 
     @property
     def substrate_width_mm(self) -> float:
@@ -358,7 +365,40 @@ class SimParams:
     def __post_init__(self) -> None:
         """Perform common parameter computations after dataclass initialisation."""
         self._validate_backend()
+        self._validate_simulation_box()
         self._compute_common()
+
+    def _validate_simulation_box(self) -> None:
+        """
+        Normalise ``simulation_box`` to a float array and check its shape.
+
+        Raises
+        ------
+        ValueError
+            If the box is neither ``(3,)`` positive sizes nor ``(3, 2)``
+            bounds with ``min < max`` on every axis.
+        """
+        if self.simulation_box is None:
+            return
+        simulation_box = np.asarray(self.simulation_box, dtype=float)
+        if simulation_box.shape == (3,):
+            if np.any(simulation_box <= 0):
+                raise ValueError(
+                    f"simulation_box sizes must be positive, got {simulation_box}"
+                )
+        elif simulation_box.shape == (3, 2):
+            if np.any(simulation_box[:, 0] >= simulation_box[:, 1]):
+                raise ValueError(
+                    "simulation_box bounds need min < max on every axis, "
+                    f"got {simulation_box.tolist()}"
+                )
+        else:
+            raise ValueError(
+                "simulation_box must be [x, y, z] sizes (shape (3,)) or "
+                "[[xmin, xmax], [ymin, ymax], [zmin, zmax]] (shape (3, 2)), "
+                f"got shape {simulation_box.shape}"
+            )
+        self.simulation_box = simulation_box
 
     def _validate_backend(self) -> None:
         """

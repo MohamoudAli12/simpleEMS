@@ -27,7 +27,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from numpy.typing import NDArray
 from openEMS.ports import LumpedPort
 
 from openEMS.physical_constants import C0
@@ -89,9 +88,6 @@ class InvertedFAntennaParams(SimParams):
         Substrate width including margin (lambda0 padding).
     substrate_length_mm : float
         Substrate length including margin (lambda0 padding).
-    simulation_box : NDArray
-        A 1D array of shape (3,) representing the 3D simulation domain
-        size: ``[x_size_mm, y_size_mm, z_size_mm]``.
 
     Notes
     -----
@@ -168,22 +164,6 @@ class InvertedFAntennaParams(SimParams):
             Substrate width in mm.
         """
         return self.rad_tip_length_mm + 2 * self.lambda0
-
-    @property
-    def simulation_box(self) -> NDArray:
-        """
-        Return the 3D simulation bounding box dimensions.
-
-        Returns
-        -------
-        NDArray
-            Array of shape (3,) with [x, y, z] dimensions in mm.
-        """
-        return self._create_simulation_box(
-            self.substrate_width_mm + self.lambda0,
-            self.substrate_length_mm + self.lambda0,
-            self.lambda0 * 2,
-        )
 
     def __post_init__(self) -> None:
         """Perform geometric calculations after dataclass initialisation."""

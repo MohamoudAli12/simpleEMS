@@ -175,15 +175,6 @@ class StepFDTDParams(SimParams):
         """Length of the imported structure, in mm."""
         return self.struct_bbox_mm[3] - self.struct_bbox_mm[2]
 
-    @property
-    def simulation_box(self) -> NDArray:
-        """Extents of the imported structure, which the mesh pads further."""
-        return self._create_simulation_box(
-            self.struct_bbox_mm[1] - self.struct_bbox_mm[0],
-            self.struct_bbox_mm[3] - self.struct_bbox_mm[2],
-            self.struct_bbox_mm[5] - self.struct_bbox_mm[4],
-        )
-
 
 def _load_named_solids(step_file: Path) -> dict[str, cq.Solid]:
     """
