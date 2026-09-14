@@ -380,7 +380,7 @@ def simulate_model(
 
     Returns
     -------
-    tuple[SimData, SimSetup, float]
+    tuple[SimData, SimSetup, float, nf2ff]
         A tuple containing:
 
         - **sim_data** (*SimData*) -- Named tuple with ``freqs``, ``s11``,
@@ -388,6 +388,8 @@ def simulate_model(
         - **sim** (*SimSetup*) -- Named tuple with ``CSX``, ``FDTD``, and ``freqs``.
         - **charac_imp** (*float*) -- Characteristic (reference) impedance in
           ohms, extracted from the loaded model's lumped-port resistance.
+        - **nf2ff_box** (*nf2ff*) -- NF2FF recording box registered on the model,
+          for far-field post-processing after the run.
 
     Raises
     ------
@@ -414,11 +416,12 @@ def simulate_model(
 
     sim = SimSetup(CSX=CSX, FDTD=FDTD, freqs=freqs)
     SimTools.write_and_show_structure(sim, output_path)
-    nf2ff = SimTools.create_nf2ff(sim)
     ports, charac_imp = reconstruct_ports(CSX)
 
     if not ports:
         raise RuntimeError(f"No ports found in {structure_xml_path}")
+
+    nf2ff_box = SimTools.create_nf2ff(sim)
 
     if run:
         FDTD.Run(str(output_path))
@@ -426,9 +429,4 @@ def simulate_model(
     port_arg = ports if len(ports) > 1 else ports[0]
     sim_data = SimTools.compute_sim_data(sim, port_arg, output_path)
 
-    return (
-        sim_data,
-        sim,
-        charac_imp,
-        nf2ff,
-    )
+    return sim_data, sim, charac_imp, nf2ff_box
