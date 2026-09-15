@@ -203,6 +203,7 @@ class TestSelectMode:
         picked = _select_mode(self.CPW_BETAS, self.CPW_K0, math.sqrt(4.4), 0, 2.90)
         assert picked == 2  # index 0 would have been the microstrip-like mode
 
+    @pytest.mark.needs_csxcad
     def test_an_eps_eff_below_one_is_rejected_up_front(self):
         from simpleEMS.fem_backend import FEMOptions
 
@@ -293,12 +294,6 @@ pytest.importorskip("gmsh")
 
 import gmsh  # noqa: E402
 
-from simpleEMS.fem_backend import (  # noqa: E402
-    FEMOptions,
-    PortSpec,
-    Problem,
-    SolidSpec,
-)
 from simpleEMS.fem_geometry import Mesh, PortMesh  # noqa: E402
 from simpleEMS.fem_materials import (  # noqa: E402
     ABC,
@@ -379,6 +374,7 @@ def _rect_section(path, w, h, eps_r=None, walls="all", split_at=None, lc=None):
 def _mode_problem(tmp_path, msh, *, eps_r=None, direction="z", freq=1e9):
     """Write the mode .pro for a hand-built cross-section and pair it with a setup."""
     from simpleEMS import fem_formulation
+    from simpleEMS.fem_backend import FEMOptions, PortSpec, Problem, SolidSpec
 
     solids = {"port_1": SolidSpec("port_1", "port")}
     diel_regions = {}
@@ -424,6 +420,7 @@ def _mode_problem(tmp_path, msh, *, eps_r=None, direction="z", freq=1e9):
 
 
 @pytest.mark.slow
+@pytest.mark.needs_csxcad
 @pytest.mark.needs_getdp_bin
 class TestAgainstClosedForm:
     """The mode solve, checked where the answer is known exactly."""
@@ -526,6 +523,7 @@ class TestAgainstClosedForm:
         assert power == pytest.approx(1.0, rel=1e-6)
 
 
+@pytest.mark.needs_csxcad
 @pytest.mark.needs_getdp_bin
 def test_getdp_is_never_left_waiting_on_stdin(tmp_path):
     """The eigenvalue solver prompts for Arpack settings when it has no
@@ -564,6 +562,7 @@ def test_getdp_is_never_left_waiting_on_stdin(tmp_path):
     assert proc.returncode == 0, proc.stderr[-2000:]
 
 
+@pytest.mark.needs_csxcad
 class TestFEMOptionsValidation:
     def test_a_mode_index_beyond_the_modes_computed_is_rejected_up_front(self):
         from simpleEMS.fem_backend import FEMOptions
@@ -590,6 +589,7 @@ class TestFEMOptionsValidation:
             FEMOptions(**kwargs)
 
 
+@pytest.mark.needs_csxcad
 class TestPortTypeOption:
     def test_the_default_is_the_lumped_port_the_backend_always_had(self):
         from simpleEMS.fem_backend import FEMOptions
@@ -641,6 +641,7 @@ class TestImpedanceOverride:
     def test_none_stays_none(self):
         assert PortModeSetup.from_dict(make_setup().to_dict()).zc_override is None
 
+    @pytest.mark.needs_csxcad
     def test_a_nonpositive_override_is_rejected(self):
         from simpleEMS.fem_backend import FEMOptions
 
@@ -698,6 +699,7 @@ class TestPropagationAxis:
             _port_prop_axis(bb, self.BOARD)
 
 
+@pytest.mark.needs_csxcad
 class TestPortSolidGrouping:
     """A CPW port is drawn as one solid per gap; both belong to one port."""
 
