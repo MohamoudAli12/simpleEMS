@@ -3,7 +3,8 @@
 Three things happen here that every test depends on:
 
 * matplotlib is forced onto the headless Agg backend *before* anything imports
-  ``simpleEMS.sim_tools``, which sets ``plt.rcParams`` at import time. Without
+  ``simpleEMS.sim_tools`` / ``simpleEMS.plot_theme``, which set ``plt.rcParams``
+  at import time. Without
   this, the PyQt6 backend is selected and any ``plot_*`` call blocks on a
   window that never opens in CI.
 * rich is pinned to plain text at a fixed width, so what the CLI prints does
