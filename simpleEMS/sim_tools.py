@@ -39,7 +39,6 @@ from pathlib import Path
 
 # ----------------------------
 import matplotlib.pyplot as plt
-import mplcursors
 import pyvista as pv
 from matplotlib.ticker import EngFormatter
 from PyQt6.QtCore import QCoreApplication
@@ -66,6 +65,7 @@ from .export_gerber import export_gerber
 from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
 from .fdtd_mesh import auto_simulation_bounds, geometry_extent
 from .fem_backend import FEMOptions
+from .plot_theme import HIGHLIGHT, style_background_plotter, themed_cursor
 from .sim_params import SimParams
 
 # ----------------------------
@@ -89,8 +89,6 @@ __all__ = [
 
 freq_formatter = EngFormatter(unit="Hz", places=3)
 time_formatter = EngFormatter(unit="s", places=3)
-plt.rcParams["figure.constrained_layout.use"] = True
-plt.rcParams["savefig.dpi"] = 300
 
 
 class DumpType(Enum):
@@ -303,7 +301,7 @@ class SimTools:
         sim: SimSetup,
         output_path: Path | None = None,
         mesh_style: str = "wireframe",
-        theme: str = "dark",
+        theme: str | None = None,
     ) -> None:
         """
         Display the simulation geometry.
@@ -327,10 +325,11 @@ class SimTools:
             ``"wireframe"`` (default), or ``"points"``. Mesh cells are colored
             by their Gmsh physical-group id (``CellEntityIds``: dielectric,
             PEC, port, absorbing boundary, ...).
-        theme : str
-            FEM mesh only. PyVista plot theme, applied globally via
-            :func:`pyvista.set_plot_theme`: ``"dark"`` (default),
-            ``"default"``, ``"document"``, or ``"paraview"``.
+        theme : str, optional
+            FEM mesh only. ``None`` (default) keeps the active simpleEMS theme
+            (see :func:`simpleEMS.plot_theme.use_dark_theme`). A PyVista theme
+            name -- ``"dark"``, ``"default"``, ``"document"`` or ``"paraview"``
+            -- is applied globally via :func:`pyvista.set_plot_theme`.
 
         Raises
         ------
@@ -344,7 +343,8 @@ class SimTools:
         if sim.backend_engine == "FEM":
             from . import fem_backend
 
-            pv.set_plot_theme(theme)
+            if theme is not None:
+                pv.set_plot_theme(theme)
 
             msh_path = fem_backend.build_mesh(
                 sim.CSX, sim.freqs, output_path, FEM_options=sim.FEM_options
@@ -643,7 +643,7 @@ class SimTools:
 
             s21 = 20 * np.log10(np.abs(s21))
             s21_lines = plt.plot(freqs, s21, label=label_s21)
-            cursor_s21 = mplcursors.cursor(s21_lines, multiple=True)
+            cursor_s21 = themed_cursor(s21_lines)
 
             cursor_s21.connect(
                 "add",
@@ -658,7 +658,7 @@ class SimTools:
 
         s11_lines = plt.plot(freqs, s11, label=label_s11)
 
-        cursor_s11 = mplcursors.cursor(s11_lines, multiple=True)
+        cursor_s11 = themed_cursor(s11_lines)
 
         cursor_s11.connect(
             "add",
@@ -711,7 +711,7 @@ class SimTools:
         """
         plt.figure()
         lines = plt.plot(freqs, vswr, label=label)
-        cursor = mplcursors.cursor(lines, multiple=True)
+        cursor = themed_cursor(lines)
 
         cursor.connect(
             "add",
@@ -762,7 +762,7 @@ class SimTools:
         phase = np.angle(s21, deg=True)
         plt.figure()
         lines_phase = plt.plot(freqs, phase, label="Phase (deg)")
-        cursor_phase = mplcursors.cursor(lines_phase, multiple=True)
+        cursor_phase = themed_cursor(lines_phase)
 
         cursor_phase.connect(
             "add",
@@ -816,7 +816,7 @@ class SimTools:
         group_delay = -delta_phi_df / (2 * np.pi)
         plt.figure()
         lines_group = plt.plot(freqs, group_delay, label="group_delay")
-        cursor_group = mplcursors.cursor(lines_group, multiple=True)
+        cursor_group = themed_cursor(lines_group)
 
         cursor_group.connect(
             "add",
@@ -872,7 +872,7 @@ class SimTools:
         z11_imag = np.imag(z11)
         plt.figure()
         lines_real = plt.plot(freqs, z11_real, label="Real Z11")
-        cursor_real = mplcursors.cursor(lines_real, multiple=True)
+        cursor_real = themed_cursor(lines_real)
 
         cursor_real.connect(
             "add",
@@ -882,7 +882,7 @@ class SimTools:
         )
 
         lines_imag = plt.plot(freqs, z11_imag, label="Imag Z11")
-        cursor_imag = mplcursors.cursor(lines_imag, multiple=True)
+        cursor_imag = themed_cursor(lines_imag)
 
         cursor_imag.connect(
             "add",
@@ -935,6 +935,7 @@ class SimTools:
         pysmithchart is used to render the Smith chart.
         """
         plt.figure()
+        surface_color = plt.rcParams["axes.facecolor"]
         plt.subplot(
             1,
             1,
@@ -946,17 +947,28 @@ class SimTools:
             grid_minor_fancy_threshold=10,
             axes_normalize=True,
             axes_impedance=charac_imp,
+            grid_major_color=plt.rcParams["axes.edgecolor"],
+            grid_minor_color=plt.rcParams["grid.color"],
+            # pysmithchart puts a white box behind each real-axis number; fill it
+            # with the surface colour so only the number shows.
+            axes_xlabel_fancybox={
+                "boxstyle": "round,pad=0.2,rounding_size=0.2",
+                "facecolor": surface_color,
+                "edgecolor": surface_color,
+                "mutation_aspect": 0.75,
+                "alpha": 1,
+            },
         )
         s11_lines = plt.plot(s11, datatype=S_PARAMETER, marker="", label=label)
         tar_idx = len(freqs) // 2
         plt.plot(
             s11[tar_idx],
-            color="black",
+            color=plt.rcParams["text.color"],
             datatype=S_PARAMETER,
             label=(f"S11 is {s11[tar_idx]:.2f} at {freq_formatter(freqs[tar_idx])}"),
         )
 
-        cursor = mplcursors.cursor(s11_lines, multiple=True)
+        cursor = themed_cursor(s11_lines)
         cursor.connect(
             "add",
             lambda sel: sel.annotation.set_text(
@@ -1043,7 +1055,7 @@ class SimTools:
             label="xz-plane",
         )
 
-        cursor = mplcursors.cursor(lines, multiple=True)
+        cursor = themed_cursor(lines)
         cursor.connect(
             "add",
             lambda sel: sel.annotation.set_text(
@@ -1081,7 +1093,7 @@ class SimTools:
             label="xy-plane",
         )
 
-        cursor = mplcursors.cursor(lines, multiple=True)
+        cursor = themed_cursor(lines)
         cursor.connect(
             "add",
             lambda sel: sel.annotation.set_text(
@@ -1204,19 +1216,22 @@ class SimTools:
         ax.plot(
             [np.deg2rad(left_theta), np.deg2rad(left_theta)],
             [r_min, directivity_dbi[left_idx[-1]]],
-            "r--",
+            "--",
+            color=HIGHLIGHT,
             linewidth=1,
         )
         ax.plot(
             [np.deg2rad(right_theta), np.deg2rad(right_theta)],
             [r_min, directivity_dbi[peak_idx + right_idx[0]]],
-            "r--",
+            "--",
+            color=HIGHLIGHT,
             linewidth=1,
         )
         ax.plot(
             [np.deg2rad(peak_theta), np.deg2rad(peak_theta)],
             [r_min, hpbw_level],
-            "r--",
+            "--",
+            color=HIGHLIGHT,
             linewidth=1,
         )
         # HPBW arc
@@ -1224,7 +1239,7 @@ class SimTools:
         ax.plot(
             np.deg2rad(hpbw_arc),
             hpbw_level * np.ones_like(hpbw_arc),
-            "r",
+            color=HIGHLIGHT,
             linewidth=2,
         )
         main_lobe_mag = np.round(np.max(directivity_dbi), 2)
@@ -1236,16 +1251,20 @@ class SimTools:
             f"\nMain Lobe Magnitude = {main_lobe_mag:.2f} dBi",
             transform=ax.transAxes,
             fontsize=12,
-            color="black",
+            color=plt.rcParams["text.color"],
             verticalalignment="top",
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="white"),
+            bbox=dict(
+                boxstyle="round,pad=0.5",
+                facecolor=plt.rcParams["axes.facecolor"],
+                edgecolor=plt.rcParams["axes.edgecolor"],
+            ),
         )
         plt.suptitle(
             f" Directivity at {freq_formatter(freq)}",
             fontsize=14,
         )
 
-        cursor = mplcursors.cursor(lines, multiple=True)
+        cursor = themed_cursor(lines)
         cursor.connect(
             "add",
             lambda sel: sel.annotation.set_text(
@@ -1400,6 +1419,7 @@ class SimTools:
         plotter = BackgroundPlotter(
             title=f"Antenna 3D Pattern - Directivity (dBi) at {freq_formatter(freq)} "
         )
+        style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
             scalars="Directivity (dBi)",
@@ -1483,6 +1503,7 @@ class SimTools:
         plotter = BackgroundPlotter(
             title=f"Antenna 3D Pattern - Gain (dBi) at {freq_formatter(freq)} "
         )
+        style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
             scalars="Gain (dBi)",
@@ -1554,6 +1575,7 @@ class SimTools:
         plotter = BackgroundPlotter(
             title=f"Antenna 3D Pattern - Power (dB) at {freq_formatter(freq)} "
         )
+        style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
             scalars="Power (dB)",
