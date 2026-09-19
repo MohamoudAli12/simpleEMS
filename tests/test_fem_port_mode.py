@@ -588,6 +588,39 @@ class TestFEMOptionsValidation:
         with pytest.raises(ValueError):
             FEMOptions(**kwargs)
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"waveport_width_mm": 0.0},
+            {"waveport_width_mm": -1.0},
+            {"waveport_height_mm": 0.0},
+            {"waveport_height_mm": -1.0},
+        ],
+        ids=["zero-width", "negative-width", "zero-height", "negative-height"],
+    )
+    def test_a_nonpositive_waveport_size_is_rejected(self, kwargs):
+        from simpleEMS.fem_backend import FEMOptions
+
+        with pytest.raises(ValueError, match="must be positive"):
+            FEMOptions(**kwargs)
+
+    def test_the_waveport_size_reaches_the_options_from_the_params(self):
+        from simpleEMS.components import GenericParams
+
+        params = GenericParams(
+            freq_range=(2e9, 3e9),
+            main_freq=2.45e9,
+            substrate_eps_r=4.4,
+            substrate_tand=0.001,
+            substrate_thickness_mm=1.6,
+            substrate_width_mm=20.0,
+            substrate_length_mm=30.0,
+            FEM_waveport_width_mm=12.0,
+            FEM_waveport_height_mm=8.0,
+        )
+        assert params.fem_options.waveport_width_mm == 12.0
+        assert params.fem_options.waveport_height_mm == 8.0
+
 
 @pytest.mark.needs_csxcad
 class TestPortTypeOption:
@@ -697,6 +730,85 @@ class TestPropagationAxis:
         bb = (0.001, 0.002, 0.0, 0.001, 0.002, 0.0016)
         with pytest.raises(RuntimeError, match="which axis this port's line"):
             _port_prop_axis(bb, self.BOARD)
+
+
+class TestWavePortSpan:
+    """A wave port's cross-section, sized around the line it terminates."""
+
+    # a 1.6 mm board in the xy plane, the line running along y
+    BOARD = (-0.012, -0.015, 0.0, 0.012, 0.015, 0.0016)
+    DOMAIN = (-0.03, -0.035, -0.02, 0.03, 0.035, 0.02)
+    PLANE = -0.015
+
+    def port(self, width, x_centre=0.0):
+        # a microstrip lumped port: the trace width in x, the gap in z
+        return (
+            x_centre - width / 2,
+            self.PLANE,
+            0.0,
+            x_centre + width / 2,
+            self.PLANE,
+            0.0016,
+        )
+
+    def span(self, port_bbox, **kwargs):
+        from simpleEMS.fem_geometry import _wave_port_span
+
+        return _wave_port_span(port_bbox, 1, self.BOARD, self.DOMAIN, **kwargs)
+
+    @pytest.mark.parametrize(
+        ("trace_width", "port_width"),
+        [(0.001, 0.010), (0.003, 0.015)],
+        ids=["narrow-trace-ten-widths", "wide-trace-five-widths"],
+    )
+    def test_the_default_width_follows_the_trace(self, trace_width, port_width):
+        span = self.span(self.port(trace_width))
+        assert span[3] - span[0] == pytest.approx(port_width)
+        assert 0.5 * (span[0] + span[3]) == pytest.approx(0.0)
+
+    def test_the_default_height_is_six_substrates_from_the_ground(self):
+        span = self.span(self.port(0.003))
+        assert span[2] == pytest.approx(0.0)
+        assert span[5] == pytest.approx(6 * 0.0016)
+
+    def test_explicit_sizes_win_over_the_defaults(self):
+        span = self.span(self.port(0.003), width_mm=12.0, height_mm=5.0)
+        assert span[3] - span[0] == pytest.approx(0.012)
+        assert span[5] - span[2] == pytest.approx(0.005)
+
+    def test_an_oversized_port_is_clipped_to_the_domain(self):
+        span = self.span(self.port(0.003), width_mm=500.0, height_mm=500.0)
+        assert (span[0], span[3]) == pytest.approx((self.DOMAIN[0], self.DOMAIN[3]))
+        assert span[5] == pytest.approx(self.DOMAIN[5])
+        # still standing on the ground, not reaching into the air below it
+        assert span[2] == pytest.approx(0.0)
+
+    def test_the_plane_stays_where_the_port_was_drawn(self):
+        span = self.span(self.port(0.003))
+        assert (span[1], span[4]) == (self.PLANE, self.PLANE)
+
+    def test_the_port_centres_on_a_line_off_the_board_centre(self):
+        span = self.span(self.port(0.003, x_centre=0.004))
+        assert 0.5 * (span[0] + span[3]) == pytest.approx(0.004)
+
+    def test_a_cpw_port_is_sized_from_both_gaps_together(self):
+        # two gap boxes, merged, span trace plus gaps: 3 mm here, on the surface
+        merged = (-0.0015, self.PLANE, 0.0016, 0.0015, self.PLANE, 0.0016)
+        span = self.span(merged)
+        assert span[3] - span[0] == pytest.approx(0.015)
+        assert span[2] == pytest.approx(0.0)
+
+    def test_a_trace_under_the_substrate_grows_the_port_downwards(self):
+        port_bbox = (-0.0015, self.PLANE, 0.0, 0.0015, self.PLANE, 0.0)
+        span = self.span(port_bbox)
+        assert span[5] == pytest.approx(0.0016)
+        assert span[2] == pytest.approx(0.0016 - 6 * 0.0016)
+
+    def test_a_line_along_the_board_normal_is_refused(self):
+        from simpleEMS.fem_geometry import _wave_port_span
+
+        with pytest.raises(RuntimeError, match="board normal"):
+            _wave_port_span(self.port(0.003), 2, self.BOARD, self.DOMAIN)
 
 
 @pytest.mark.needs_csxcad
