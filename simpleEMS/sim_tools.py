@@ -50,7 +50,6 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize
 from scipy.optimize import OptimizeResult
-from skrf import Network
 
 # ----------------------------
 from CSXCAD import AppCSXCAD_BIN, ContinuousStructure
@@ -63,6 +62,7 @@ from openEMS.nf2ff import nf2ff_results
 from .console import console
 from .export_gerber import export_gerber
 from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
+from .export_touchstone import write_touchstone
 from .fdtd_mesh import auto_simulation_bounds, geometry_extent
 from .fem_backend import FEMOptions
 from .plot_theme import HIGHLIGHT, style_background_plotter, themed_cursor
@@ -1710,30 +1710,38 @@ class SimTools:
     @staticmethod
     def export_touchstone(
         freqs: NDArray,
-        s11: NDArray,
+        s11: NDArray | None = None,
         *,
         s21: NDArray | None = None,
+        s_matrix: NDArray | None = None,
         charac_imp: float = 50.0,
         output_path: Path | None = None,
         filename: str = "s_param",
-    ) -> None:
+    ) -> Path:
         """
-        Export S-parameters to a Touchstone file (``.s1p`` for single-port,
-        ``.s2p`` for two-port).
+        Export S-parameters to a Touchstone ``.sNp`` file.
 
         Writes the provided S-parameter data to ``output_path / "touchstone"``
-        via :mod:`skrf`.
+        in Touchstone version 1 format. Pass either ``s11`` (plus ``s21`` for
+        a two-port) or the full ``s_matrix``; the port count sets the file
+        extension.
 
         Parameters
         ----------
         freqs : NDArray
             Frequency points (in Hz) to export.
-        s11 : NDArray
-            Complex S11 values across the frequency range.
+        s11 : NDArray, optional
+            Complex S11 values across the frequency range. Required unless
+            ``s_matrix`` is given.
         s21 : NDArray, optional
             Complex S21 values across the frequency range. If provided, a
             two-port (``.s2p``) network is written; otherwise a single-port
             (``.s1p``) network is written. Default is ``None``.
+        s_matrix : NDArray, optional
+            Complex S-parameters of shape ``(F, P, P)``, with
+            ``s_matrix[:, i, j]`` holding S(i+1)(j+1). Writes every
+            S-parameter of a ``P``-port network. Cannot be combined with
+            ``s11`` or ``s21``. Default is ``None``.
         charac_imp : float, optional
             Reference impedance (in ohms) recorded in the Touchstone file.
             Default is ``50.0``.
@@ -1746,37 +1754,45 @@ class SimTools:
 
         Returns
         -------
-        None
-            Does not return a value.
+        Path
+            Path of the written Touchstone file.
+
+        Raises
+        ------
+        ValueError
+            If neither ``s11`` nor ``s_matrix`` is given, or if ``s_matrix``
+            is combined with ``s11`` / ``s21``.
 
         Notes
         -----
-        In the two-port case only S11 and S21 are populated from the given
-        data; S12 and S22 are written as zero (the reverse-direction
-        parameters are not measured/simulated).
+        With ``s11`` and ``s21``, only S11 and S21 are populated; S12 and
+        S22 are written as zero (the reverse-direction parameters are not
+        simulated). Pass ``s_matrix`` to export all of them.
         """
         console.print("-------------------------------------------", style="info")
         console.print("Exporting S-Parameters to Touchstone file", style="info")
         console.print("-------------------------------------------", style="info")
 
+        if s_matrix is None:
+            if s11 is None:
+                raise ValueError("Pass either s11 (and optionally s21) or s_matrix.")
+            port_count = 1 if s21 is None else 2
+            s_matrix = np.zeros((len(s11), port_count, port_count), dtype=complex)
+            s_matrix[:, 0, 0] = s11
+            if s21 is not None:
+                s_matrix[:, 1, 0] = s21
+        elif s11 is not None or s21 is not None:
+            raise ValueError("Pass s_matrix or s11/s21, not both.")
+
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
-        touchstone_path = output_path / "touchstone"
-        touchstone_path.mkdir(parents=True, exist_ok=True)
-
-        if s21 is None:  # 1 port structure
-            ntwk = Network(frequency=freqs, s=s11, z0=charac_imp)
-            ntwk.write_touchstone(filename=filename, dir=touchstone_path)
-
-        elif s21 is not None:  # 2port structure
-            s_params = np.zeros((len(s11), 2, 2), dtype=complex)
-            s_params[:, 0, 0] = s11
-            s_params[:, 1, 0] = s21
-            # s_params[:, 0, 1] = s21
-            # s_params[:, 1, 1] = s11
-            ntwk = Network(frequency=freqs, s=s_params, z0=charac_imp)
-            ntwk.write_touchstone(filename=filename, dir=touchstone_path)
+        return write_touchstone(
+            output_path / "touchstone" / filename,
+            freqs,
+            s_matrix,
+            ref_impedance=charac_imp,
+        )
 
     @staticmethod
     def export_gerber(
