@@ -150,8 +150,8 @@ class TestDependencyChecks:
             pytest.skip("simpleEMS is not installed as a distribution")
 
         mapping = dict((pip, imp) for imp, pip in checks)
-        if "scikit-rf" in mapping:
-            assert mapping["scikit-rf"] != "scikit-rf"
+        if "pyqt6" in mapping:
+            assert mapping["pyqt6"] == "PyQt6"
 
     def test_missing_distribution_returns_empty(self, monkeypatch):
         import importlib.metadata

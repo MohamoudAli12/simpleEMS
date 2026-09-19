@@ -180,17 +180,17 @@ class TestFdtdPipeline:
         assert_well_formed(data, params.num_points, two_port=False)
 
     def test_touchstone_export_of_real_results(self, solved, tmp_path):
-        import skrf
+        from simpleEMS.export_touchstone import read_touchstone
 
         _sim, _params, _ports, _out, data = solved
 
         SimTools.export_touchstone(
             data.freqs, data.s11, s21=data.s21, output_path=tmp_path
         )
-        network = skrf.Network(str(tmp_path / "touchstone" / "s_param.s2p"))
+        network = read_touchstone(tmp_path / "touchstone" / "s_param.s2p")
 
-        assert network.nports == 2
-        assert network.s[:, 0, 0] == pytest.approx(data.s11, abs=1e-9)
+        assert network.s_matrix.shape[1] == 2
+        assert network.s_matrix[:, 0, 0] == pytest.approx(data.s11, abs=1e-9)
 
     def test_relative_output_path_is_accepted(self, fr4, tmp_path, monkeypatch):
         """``output_path`` is resolved before it reaches ``FDTD.Run``.
