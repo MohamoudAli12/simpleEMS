@@ -147,6 +147,15 @@ class FEMOptions:
         waveguide is the common case -- carries more than one quasi-TEM mode,
         and the one with the largest ``beta`` need not be the one the line is
         meant to run in. See :mod:`~simpleEMS.fem_port_mode`.
+    waveport_width_mm : float, optional
+        Width of each wave port's cross-section in millimetres, centred on the
+        line. Default ``None``: ``10 * w`` for a trace narrower than the
+        substrate is thick, ``5 * w`` otherwise, where ``w`` is the port's
+        width across the line.
+    waveport_height_mm : float, optional
+        Height of each wave port's cross-section in millimetres, measured from
+        the ground side of the substrate. Default ``None``: six substrate
+        thicknesses.
     """
 
     boundary: str = "silver_muller"
@@ -170,6 +179,8 @@ class FEMOptions:
     port_mode_index: int = 0
     port_mode_zc: float | None = None
     port_mode_eps_eff: float | None = None
+    waveport_width_mm: float | None = None
+    waveport_height_mm: float | None = None
 
     def __post_init__(self) -> None:
         """
@@ -217,6 +228,10 @@ class FEMOptions:
                 f"port_mode_modes {self.port_mode_modes}; compute at least "
                 f"{self.port_mode_index + 1} eigenpairs to select that mode"
             )
+        for name in ("waveport_width_mm", "waveport_height_mm"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive, got {value}")
 
 
 _FEM_DEFAULTS = (
@@ -429,6 +444,16 @@ class Problem:
     def port_mode_zc(self) -> float | None:
         """Wave-port reference impedance override, in ohms, or ``None``."""
         return self.options.port_mode_zc
+
+    @property
+    def waveport_width_mm(self) -> float | None:
+        """Wave-port cross-section width in mm, or ``None`` for the default."""
+        return self.options.waveport_width_mm
+
+    @property
+    def waveport_height_mm(self) -> float | None:
+        """Wave-port cross-section height in mm, or ``None`` for the default."""
+        return self.options.waveport_height_mm
 
 
 # ----------------------------

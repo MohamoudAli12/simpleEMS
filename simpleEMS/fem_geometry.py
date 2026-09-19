@@ -342,6 +342,96 @@ def _port_prop_axis(bb: tuple, diel_bbox: tuple) -> int:
     )
 
 
+# Ansys' microstrip wave-port guidance: wide enough and tall enough that the
+# fringing field has died away before it reaches the port's PEC outline.
+_WAVEPORT_WIDTH_NARROW = 10.0  # port widths per trace width, trace narrower than h
+_WAVEPORT_WIDTH_WIDE = 5.0  # port widths per trace width, otherwise
+_WAVEPORT_HEIGHT = 6.0  # port heights per substrate thickness
+
+
+def _wave_port_span(
+    port_bbox: tuple,
+    axis: int,
+    diel_bbox: tuple,
+    domain_bbox: tuple,
+    width_mm: float | None = None,
+    height_mm: float | None = None,
+) -> tuple:
+    """Size a wave port's cross-section around the line it terminates.
+
+    Parameters
+    ----------
+    port_bbox : tuple
+        Extents of the port, all its solids together, as
+        ``(x0, y0, z0, x1, y1, z1)`` in metres.
+    axis : int
+        Axis the line runs along, which the cross-section is normal to.
+    diel_bbox : tuple
+        Extents of the dielectrics; their thinnest axis is the board normal
+        and their span along it the substrate height.
+    domain_bbox : tuple
+        Extents of the domain, which the cross-section is clipped to.
+    width_mm : float, optional
+        Width across the line in millimetres, centred on the port. ``None``
+        derives it from the trace width.
+    height_mm : float, optional
+        Height along the board normal in millimetres, from the ground side of
+        the substrate. ``None`` derives it from the substrate height.
+
+    Returns
+    -------
+    tuple
+        Extents of the cross-section, flat along ``axis`` at the port plane.
+
+    Raises
+    ------
+    RuntimeError
+        If the line runs along the board normal, so no cross-section fits.
+    """
+    diel_span = [diel_bbox[i + 3] - diel_bbox[i] for i in range(3)]
+    normal = min(range(3), key=lambda i: diel_span[i])
+    if normal == axis:
+        raise RuntimeError(
+            "a wave port's line cannot run along the board normal; give the "
+            "axis explicitly with prop_dir on the port"
+        )
+    across = 3 - axis - normal
+    trace_width = port_bbox[across + 3] - port_bbox[across]
+    substrate_height = diel_span[normal]
+
+    if width_mm is not None:
+        width = width_mm * 1e-3
+    elif trace_width < substrate_height:
+        width = _WAVEPORT_WIDTH_NARROW * trace_width
+    else:
+        width = _WAVEPORT_WIDTH_WIDE * trace_width
+    height = (
+        height_mm * 1e-3
+        if height_mm is not None
+        else _WAVEPORT_HEIGHT * substrate_height
+    )
+
+    span = list(domain_bbox)
+    # keep the plane where the port was drawn: the S-parameters' reference plane
+    span[axis] = port_bbox[axis]
+    span[axis + 3] = port_bbox[axis + 3]
+
+    centre = 0.5 * (port_bbox[across] + port_bbox[across + 3])
+    span[across] = max(domain_bbox[across], centre - width / 2)
+    span[across + 3] = min(domain_bbox[across + 3], centre + width / 2)
+
+    # the ground sits on the substrate face farther from the trace
+    line_level = 0.5 * (port_bbox[normal] + port_bbox[normal + 3])
+    diel_mid = 0.5 * (diel_bbox[normal] + diel_bbox[normal + 3])
+    if line_level >= diel_mid:
+        span[normal] = diel_bbox[normal]
+        span[normal + 3] = min(domain_bbox[normal + 3], diel_bbox[normal] + height)
+    else:
+        span[normal + 3] = diel_bbox[normal + 3]
+        span[normal] = max(domain_bbox[normal], diel_bbox[normal + 3] - height)
+    return tuple(span)
+
+
 def _wave_port_sheet(bb: tuple, prop_dir: str) -> int:
     """Build the cross-section rectangle of a wave port.
 
@@ -559,22 +649,27 @@ def _build_wave_port_sheets(
 
     One sheet per port, not per solid: a coplanar waveguide port is drawn as
     one box per gap, and the mode lives on the single plane that cuts across
-    both of them together. The sheet spans the whole domain at that plane, so
-    nothing can propagate past the port without going through it.
+    both of them together. The sheet is a rectangle on that plane, centred on
+    the line and standing on the ground side of the substrate. Its size comes
+    from ``problem.waveport_width_mm`` and ``problem.waveport_height_mm``, or
+    from the trace width and substrate height when those are ``None``, and is
+    clipped to the domain.
 
     Parameters
     ----------
     problem : Problem
-        The FEM problem, supplying the ports and their propagation axes.
+        The FEM problem, supplying the ports, their propagation axes, and the
+        wave-port size.
     sheets : list
         The ``(role, name, face_tag)`` entries so far, appended to.
     port_geo : dict
         Extents of each port solid by name; the entry for each port's first
         solid is replaced with the extents of the sheet built for it.
     diel_bbox : tuple
-        Extents of the dielectrics, used to find the board normal.
+        Extents of the dielectrics, used to find the board normal and the
+        substrate height.
     domain_bbox : tuple
-        Extents the sheet should span, as ``(x0, y0, z0, x1, y1, z1)``.
+        Extents the sheet is clipped to, as ``(x0, y0, z0, x1, y1, z1)``.
 
     Returns
     -------
@@ -605,12 +700,15 @@ def _build_wave_port_sheets(
             if pspec.prop_dir
             else _port_prop_axis(merged, diel_bbox)
         )
-        # span the domain across the plane, but keep the plane where the port
-        # was drawn: that is the reference plane the S-parameters belong to
-        span = list(domain_bbox)
-        span[axis] = merged[axis]
-        span[axis + 3] = merged[axis + 3]
-        face_tag = _wave_port_sheet(tuple(span), "xyz"[axis])
+        span = _wave_port_span(
+            merged,
+            axis,
+            diel_bbox,
+            domain_bbox,
+            problem.waveport_width_mm,
+            problem.waveport_height_mm,
+        )
+        face_tag = _wave_port_sheet(span, "xyz"[axis])
         gmsh.model.occ.synchronize()
         port_geo[pspec.solid] = gmsh.model.getBoundingBox(2, face_tag)
         sheets.append(("port", pspec.solid, face_tag))
@@ -1182,9 +1280,9 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
     is_pml, inner_bbox, box_bbox, pml_thick = _build_air_box(
         problem, struct, lambda0_max
     )
-    # Now the domain exists, so a wave port's cross-section can span it. Under
-    # a PML it spans the inner box only, so the sheet does not cut into the
-    # absorbing shell.
+    # Now the domain exists, so a wave port's cross-section can be clipped to
+    # it. Under a PML it is clipped to the inner box, so the sheet does not cut
+    # into the absorbing shell.
     sheets = _build_wave_port_sheets(
         problem, sheets, port_geo, diel_bbox, inner_bbox if is_pml else box_bbox
     )

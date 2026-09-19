@@ -165,6 +165,15 @@ class SimParams:
         the voltage is integrated along, so on a coplanar waveguide it is
         better to state the impedance the line was designed for. Default is
         ``None`` (use the measured value).
+    FEM_waveport_width_mm : float, optional
+        FEM backend only. Width of each wave port's cross-section in
+        millimetres, centred on the line. Default is ``None``: ``10 * w`` for
+        a trace narrower than the substrate is thick, ``5 * w`` otherwise,
+        where ``w`` is the port's width across the line.
+    FEM_waveport_height_mm : float, optional
+        FEM backend only. Height of each wave port's cross-section in
+        millimetres, measured from the ground side of the substrate. Default
+        is ``None``: six substrate thicknesses.
     FEM_min_layers : int, optional
         FEM backend only. Element layers through the dielectric thickness.
         Default is ``3``.
@@ -229,6 +238,8 @@ class SimParams:
     FEM_port_mode_index: int = _FEM_DEFAULTS.port_mode_index
     FEM_port_mode_zc: float | None = _FEM_DEFAULTS.port_mode_zc
     FEM_port_mode_eps_eff: float | None = _FEM_DEFAULTS.port_mode_eps_eff
+    FEM_waveport_width_mm: float | None = _FEM_DEFAULTS.waveport_width_mm
+    FEM_waveport_height_mm: float | None = _FEM_DEFAULTS.waveport_height_mm
 
     FDTD_timestep: int = 90000000
     FDTD_end_criteria: float = 1e-4
@@ -263,6 +274,8 @@ class SimParams:
             port_mode_index=self.FEM_port_mode_index,
             port_mode_zc=self.FEM_port_mode_zc,
             port_mode_eps_eff=self.FEM_port_mode_eps_eff,
+            waveport_width_mm=self.FEM_waveport_width_mm,
+            waveport_height_mm=self.FEM_waveport_height_mm,
         )
 
     @property
