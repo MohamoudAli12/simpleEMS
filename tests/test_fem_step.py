@@ -428,6 +428,20 @@ class TestMeshing:
 
         assert meta["port_numbers"] == [1]
 
+    @pytest.mark.slow
+    def test_padding_can_differ_per_face(self, named_step, tmp_path):
+        """A radiator wants a deep air column on the side it radiates into and
+        nothing like it on the other five faces."""
+        meta = self.mesh_only(
+            named_step, tmp_path / "pad", FEM_air_pad_mm=((3, 3), (3, 3), (2, 6))
+        )
+
+        bbox, domain = meta["bbox"], meta["domain_bbox"]
+
+        assert domain[0] == pytest.approx(bbox[0] - 3e-3, abs=1e-6)
+        assert domain[2] == pytest.approx(bbox[2] - 2e-3, abs=1e-6)
+        assert domain[5] == pytest.approx(bbox[5] + 6e-3, abs=1e-6)
+
     def test_no_symmetry_is_recorded_by_default(self, named_step, tmp_path):
         meta = self.mesh_only(named_step, tmp_path / "out")
 

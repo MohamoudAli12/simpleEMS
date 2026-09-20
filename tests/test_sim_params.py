@@ -242,6 +242,100 @@ class TestFEMOptions:
 
 
 # ---------------------------------------------------------------------
+# FEM air padding
+# ---------------------------------------------------------------------
+class TestFEMAirPad:
+    """The air box pads each of its six faces independently.
+
+    ``air_pad_mm`` is kept exactly as the caller gave it -- the round-trip
+    test above compares every ``FEMOptions`` field against its ``FEM_*`` twin
+    by equality -- and ``air_pad_faces_mm`` expands it on demand.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (3.0, ((3.0, 3.0), (3.0, 3.0), (3.0, 3.0))),
+            (3, ((3.0, 3.0), (3.0, 3.0), (3.0, 3.0))),
+            ((5, 5, 20), ((5.0, 5.0), (5.0, 5.0), (20.0, 20.0))),
+            ([5, 5, 20], ((5.0, 5.0), (5.0, 5.0), (20.0, 20.0))),
+            (((5, 5), (5, 5), (2, 30)), ((5.0, 5.0), (5.0, 5.0), (2.0, 30.0))),
+            ([[8, 8], [8, 8], [2, 30]], ((8.0, 8.0), (8.0, 8.0), (2.0, 30.0))),
+        ],
+        ids=["scalar", "int", "per-axis", "per-axis-list", "per-face", "per-face-list"],
+    )
+    def test_every_accepted_shape_expands_to_six_faces(self, value, expected):
+        assert FEMOptions(air_pad_mm=value).air_pad_faces_mm == expected
+
+    def test_no_padding_means_no_faces(self):
+        """``None`` hands the sizing back to the wavelength formula."""
+        assert FEMOptions().air_pad_faces_mm is None
+
+    def test_the_raw_value_is_kept_as_given(self):
+        """Normalising in place would break the round-trip against
+        ``SimParams.FEM_air_pad_mm``."""
+        assert FEMOptions(air_pad_mm=3.0).air_pad_mm == 3.0
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            (5, 5),
+            (5, 5, 5, 5),
+            ((5, 5), (5, 5)),
+            ((5, 5, 5), (5, 5, 5), (5, 5, 5)),
+            "wide",
+            -3.0,
+            (5, 5, -1),
+            ((5, 5), (5, 5), (2, -1)),
+        ],
+        ids=[
+            "two-values",
+            "four-values",
+            "two-pairs",
+            "triples",
+            "string",
+            "negative",
+            "negative-on-one-axis",
+            "negative-on-one-face",
+        ],
+    )
+    def test_a_bad_shape_or_value_is_rejected(self, value):
+        with pytest.raises(ValueError, match="air_pad_mm"):
+            FEMOptions(air_pad_mm=value)
+
+    def test_the_rejection_names_the_offending_face(self):
+        with pytest.raises(ValueError, match=r"z- face"):
+            FEMOptions(air_pad_mm=((4, 4), (4, 3), (-1, 4)))
+
+    @pytest.mark.parametrize(
+        "value",
+        [0, ((4, 4), (4, 3), (0, 4))],
+        ids=["scalar", "one-face"],
+    )
+    def test_zero_padding_is_allowed(self, value):
+        """Zero puts the domain boundary flush on that face of the structure,
+        which is a fair model for a ground-backed board and meshes."""
+        assert FEMOptions(air_pad_mm=value).air_pad_faces_mm is not None
+
+    def test_per_face_padding_reaches_the_bundled_options(self, fr4):
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        result = InsetFedPatchParams(
+            resonant_freq=2.45e9,
+            span_freq=0.5e9,
+            backend_engine="FEM",
+            FEM_air_pad_mm=((5, 5), (5, 5), (2, 30)),
+            **fr4,
+        )
+
+        assert result.fem_options.air_pad_faces_mm == (
+            (5.0, 5.0),
+            (5.0, 5.0),
+            (2.0, 30.0),
+        )
+
+
+# ---------------------------------------------------------------------
 # Simulation box
 # ---------------------------------------------------------------------
 class TestSimulationBox:
