@@ -63,6 +63,23 @@ def named_step(tmp_path_factory):
     return path
 
 
+@pytest.fixture(scope="module")
+def edge_port_step(tmp_path_factory):
+    """A STEP file whose trace and port run right to the board edge.
+
+    An edge-launch feed is drawn this way, and it leaves the port sheet
+    coplanar with the dielectric's end face.
+    """
+    asm = cq.Assembly(name="model")
+    asm.add(box_at(-10, -10, -1.6, 20, 20, 1.6), name="substrate")
+    asm.add(box_at(-10, -10, -1.7, 20, 20, 0.1), name="ground")
+    asm.add(box_at(-1.5, -10, 0, 3, 20, 0.1), name="trace")
+    asm.add(box_at(-1.5, -10, -1.6, 3, 0.1, 1.6), name="port_1")
+    path = tmp_path_factory.mktemp("fem_step_edge") / "edge.step"
+    asm.save(str(path))
+    return path
+
+
 def build(named_step, **overrides):
     kwargs = dict(
         step_file=str(named_step),
@@ -402,6 +419,14 @@ class TestMeshing:
 
         assert meta["port_numbers"] == [1]
         assert meta["ref_impedances"]["1"] == pytest.approx(50.0)
+
+    def test_a_port_on_the_board_edge_still_meshes(self, edge_port_step, tmp_path):
+        """A feed drawn to the board edge leaves the port sheet coplanar with
+        the dielectric's end face. Fragmenting the two produced coincident
+        surfaces and gmsh rejected the whole mesh."""
+        meta = self.mesh_only(edge_port_step, tmp_path / "edge")
+
+        assert meta["port_numbers"] == [1]
 
     def test_no_symmetry_is_recorded_by_default(self, named_step, tmp_path):
         meta = self.mesh_only(named_step, tmp_path / "out")

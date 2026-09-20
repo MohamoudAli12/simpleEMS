@@ -570,6 +570,18 @@ class TestMicrostripLine:
         assert ports[0].start[1] == pytest.approx(trace[0][1], abs=1e-6)
         assert ports[1].start[1] == pytest.approx(trace[1][1], abs=1e-6)
 
+    def test_ports_sit_on_the_board_edges(self, built_mline):
+        """The trace runs edge to edge, so both connectors land on the board
+        edges rather than in the middle of a dielectric apron."""
+        _line, _sim, params, ports = built_mline
+
+        assert ports[0].start[1] == pytest.approx(
+            -params.substrate_length_mm / 2, abs=1e-6
+        )
+        assert ports[1].start[1] == pytest.approx(
+            params.substrate_length_mm / 2, abs=1e-6
+        )
+
     def test_ports_are_separated_by_the_trace_length(self, built_mline):
         _line, _sim, params, ports = built_mline
 
@@ -582,12 +594,15 @@ class TestMicrostripLine:
         assert mline_params.elec_length_deg == 90
         assert mline_params.microstrip_length_mm > 0
 
-    def test_substrate_pads_the_trace_by_a_wavelength(self, mline_params):
+    def test_substrate_width_pads_the_trace_by_six_thicknesses(self, mline_params):
         assert mline_params.substrate_width_mm == pytest.approx(
-            mline_params.microstrip_width_mm + 2 * mline_params.lambda0
+            mline_params.microstrip_width_mm + 12 * mline_params.substrate_thickness_mm
         )
+
+    def test_substrate_length_is_the_trace_length(self, mline_params):
+        """The trace runs edge to edge, so both ports land on board edges."""
         assert mline_params.substrate_length_mm == pytest.approx(
-            mline_params.microstrip_length_mm + 2 * mline_params.lambda0
+            mline_params.microstrip_length_mm
         )
 
     def test_too_narrow_a_trace_is_rejected(self, fr4):
