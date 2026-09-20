@@ -296,6 +296,11 @@ def _clip_sheet_to_dielectric(face_tag: int, direction: str, diel_bbox: tuple) -
 # that was drawn flat is not exactly flat by the time it reaches gmsh.
 _FLAT = 2e-6  # metres; the 1e-3 mm floor with room to spare
 
+# A feed drawn all the way to the board edge leaves the port sheet exactly on
+# the dielectric's own end face. The two fragment into coincident surfaces and
+# gmsh rejects the result as overlapping facets, so the sheet is stepped inside.
+_PORT_EDGE_STEP = 1e-5  # metres; 8e-5 wavelengths at 2.45 GHz
+
 
 def _port_prop_axis(bb: tuple, diel_bbox: tuple) -> int:
     """Work out which axis a port's line runs along.
@@ -340,6 +345,38 @@ def _port_prop_axis(bb: tuple, diel_bbox: tuple) -> int:
         "axis/axes. A wave port has to be a plane cutting across the line. "
         "Give the axis explicitly with prop_dir on the port."
     )
+
+
+def _step_sheet_off_the_dielectric_edge(face_tag: int, diel_bbox: tuple) -> None:
+    """Move a port sheet that lies on the dielectric's end face inside it.
+
+    A feed drawn to the board edge -- an edge-launch connector -- leaves the
+    sheet coplanar with that face, which fragments into coincident surfaces.
+    The sheet is stepped inside along the axis it is flat in, the axis the line
+    runs along, which moves the reference plane by well under a thousandth of a
+    wavelength. A sheet that already sits inside the board is left alone.
+
+    Parameters
+    ----------
+    face_tag : int
+        The port sheet to place.
+    diel_bbox : tuple
+        Extents of the dielectrics, as ``(x0, y0, z0, x1, y1, z1)``.
+
+    Returns
+    -------
+    None
+    """
+    sheet_bbox = gmsh.model.getBoundingBox(2, face_tag)
+    axis = _port_prop_axis(sheet_bbox, diel_bbox)
+    position = sheet_bbox[axis]
+    for face, inward in ((diel_bbox[axis], 1.0), (diel_bbox[axis + 3], -1.0)):
+        if abs(position - face) < _FLAT:
+            step = [0.0, 0.0, 0.0]
+            step[axis] = inward * _PORT_EDGE_STEP
+            gmsh.model.occ.translate([(2, face_tag)], *step)
+            gmsh.model.occ.synchronize()
+            return
 
 
 # Ansys' microstrip wave-port guidance: wide enough and tall enough that the
@@ -628,6 +665,7 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
                     face_tag, port_direction.get(short, "z"), diel_bbox
                 )
                 gmsh.model.occ.synchronize()
+                _step_sheet_off_the_dielectric_edge(face_tag, diel_bbox)
                 port_geo[short] = gmsh.model.getBoundingBox(2, face_tag)
             sheets.append((role, short, face_tag))
             metal_solids.append((3, tag))

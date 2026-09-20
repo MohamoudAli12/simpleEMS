@@ -73,9 +73,9 @@ class MicrostripLineParams(SimParams):
     microstrip_length_mm : float
         Computed length of the microstrip trace in millimeters.
     substrate_width_mm : float
-        Substrate width including margin (lambda0 padding).
+        Substrate width including a 6 x thickness edge margin.
     substrate_length_mm : float
-        Substrate length including margin (lambda0 padding).
+        Substrate length, equal to the trace length.
     """
 
     min_freq: float
@@ -113,26 +113,32 @@ class MicrostripLineParams(SimParams):
     @property
     def substrate_length_mm(self) -> float:
         """
-        Return the substrate length including lambda0 padding.
+        Return the substrate length, which the trace spans end to end.
+
+        Both ports sit on the trace ends, so the board stops there and the
+        connectors land on its edges.
 
         Returns
         -------
         float
             Substrate length in mm.
         """
-        return self.microstrip_length_mm + 2 * self.lambda0
+        return self.microstrip_length_mm
 
     @property
     def substrate_width_mm(self) -> float:
         """
-        Return the substrate width including lambda0 padding.
+        Return the substrate width including the board-edge margin.
+
+        The board extends 6 substrate thicknesses beyond each edge of the
+        trace, far enough to contain the fringing fields.
 
         Returns
         -------
         float
             Substrate width in mm.
         """
-        return self.microstrip_width_mm + 2 * self.lambda0
+        return self.microstrip_width_mm + 12 * self.substrate_thickness_mm
 
     @property
     def _default_simulation_box(self) -> NDArray:
