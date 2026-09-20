@@ -297,5 +297,33 @@ class TestRationalSweep:
 
         out = capsys.readouterr().out
 
-        assert "FEM solved" in out
+        assert "FEM sweep" in out
         assert "GHz" in out
+
+    def test_each_solve_gets_one_line_saying_how_far_along_it_is(
+        self, counting_solver, capsys
+    ):
+        """Six solves, six lines between the two rules -- a second line per
+        solve is what made this unreadable at 10+ solves."""
+        rational_sweep(FGRID, [1], counting_solver, 6, verbose=True)
+
+        lines = [ln for ln in capsys.readouterr().out.splitlines() if "elapsed" in ln]
+
+        assert len(lines) == 6
+        assert "1/6" in lines[0]
+        assert "6/6" in lines[-1]
+
+    def test_the_remaining_time_is_estimated_while_solves_are_left(
+        self, counting_solver, capsys
+    ):
+        rational_sweep(FGRID, [1], counting_solver, 6, verbose=True)
+
+        lines = [ln for ln in capsys.readouterr().out.splitlines() if "elapsed" in ln]
+
+        assert "left" in lines[0]
+        assert "left" not in lines[-1]  # nothing is left to estimate
+
+    def test_the_summary_totals_the_sweep(self, counting_solver, capsys):
+        rational_sweep(FGRID, [1], counting_solver, 6, verbose=True)
+
+        assert "6 solves in" in capsys.readouterr().out

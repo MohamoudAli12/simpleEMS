@@ -20,8 +20,15 @@ import pytest
 from simpleEMS import fem_solver
 from simpleEMS.fem_solver import (
     _conductor_loss,
+    _parse_resources,
     _read_power_value,
+    _stages,
+    SolveInfo,
+    describe_solve,
     find_getdp,
+    format_duration,
+    format_memory,
+    last_solve,
     read_complex,
     read_complex_rows,
     run_getdp,
@@ -42,17 +49,39 @@ def fake_getdp(monkeypatch):
     return "/usr/bin/getdp"
 
 
+class FakeProcess:
+    """A finished ``getdp`` whose output ``run_getdp`` reads line by line."""
+
+    def __init__(self, args, returncode=0, output=""):
+        self.args = args
+        self.returncode = returncode
+        self.stdout = iter(output.splitlines(keepends=True))
+
+    def wait(self):
+        return self.returncode
+
+
 @pytest.fixture
-def spy_run(monkeypatch):
+def fake_popen(monkeypatch):
+    """Stub the solver launch; the test says what it "printed" and returned."""
+
+    def install(returncode=0, output=""):
+        calls = []
+
+        def popen(args, **kwargs):
+            calls.append((args, kwargs))
+            return FakeProcess(args, returncode, output)
+
+        monkeypatch.setattr(fem_solver.subprocess, "Popen", popen)
+        return calls
+
+    return install
+
+
+@pytest.fixture
+def spy_run(fake_popen):
     """Capture the command line ``run_getdp`` builds, and fake a clean exit."""
-    calls = []
-
-    def fake_run(args, **kwargs):
-        calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args, returncode=0, stdout=None, stderr=None)
-
-    monkeypatch.setattr(fem_solver.subprocess, "run", fake_run)
-    return calls
+    return fake_popen()
 
 
 # ---------------------------------------------------------------------
@@ -251,9 +280,9 @@ class TestRunGetdp:
         i = args.index("-pos")
         assert args[i + 1 : i + 3] == ["Get_Fields", "Get_Power"]
 
-    def test_verbosity_is_pinned(self, tmp_path, fake_getdp, spy_run):
-        """-v2 shows progress without per-iteration spam; the sweep prints a
-        lot of solves and the default level buries it."""
+    def test_the_gmsh_output_flag_is_pinned(self, tmp_path, fake_getdp, spy_run):
+        """-v2 is an output-format flag, not a verbosity one: it asks for
+        mesh-based Gmsh output wherever the .pro does not pin a format."""
         run_getdp("p.pro", "m.msh", tmp_path, {}, None)
 
         assert "-v2" in self.call(spy_run)
@@ -279,55 +308,192 @@ class TestRunGetdp:
         assert isinstance(result, subprocess.CompletedProcess)
         assert result.returncode == 0
 
-    def test_a_failing_solve_raises(self, tmp_path, fake_getdp, monkeypatch):
-        monkeypatch.setattr(
-            fem_solver.subprocess,
-            "run",
-            lambda args, **kw: subprocess.CompletedProcess(args, 1, None, None),
-        )
+    def test_a_failing_solve_raises(self, tmp_path, fake_getdp, fake_popen):
+        fake_popen(returncode=1)
 
         with pytest.raises(RuntimeError, match=r"getdp failed \(1\)"):
             run_getdp("p.pro", "m.msh", tmp_path, {}, None)
 
     def test_the_failure_message_includes_the_command(
-        self, tmp_path, fake_getdp, monkeypatch
+        self, tmp_path, fake_getdp, fake_popen
     ):
-        monkeypatch.setattr(
-            fem_solver.subprocess,
-            "run",
-            lambda args, **kw: subprocess.CompletedProcess(args, 1, None, None),
-        )
+        fake_popen(returncode=1)
 
         with pytest.raises(RuntimeError, match="-solve Analysis"):
             run_getdp("p.pro", "m.msh", tmp_path, {}, None)
 
-    def test_uncaptured_streams_do_not_mask_the_failure(
-        self, tmp_path, fake_getdp, monkeypatch
+    def test_the_failure_message_says_how_long_it_ran(
+        self, tmp_path, fake_getdp, fake_popen
     ):
-        """Output is streamed, so stdout/stderr come back None. Indexing them
-        used to raise TypeError and hide the real error."""
-        monkeypatch.setattr(
-            fem_solver.subprocess,
-            "run",
-            lambda args, **kw: subprocess.CompletedProcess(args, 2, None, None),
-        )
+        """A solve that dies after an hour and one that dies on startup want
+        very different debugging, so the duration goes in the message."""
+        fake_popen(returncode=1)
+
+        with pytest.raises(RuntimeError, match=r"after [\d.]+ s running"):
+            run_getdp("p.pro", "m.msh", tmp_path, {}, None)
+
+    def test_a_silent_failure_does_not_mask_itself(
+        self, tmp_path, fake_getdp, fake_popen
+    ):
+        """A solver that printed nothing leaves an empty tail; appending it
+        would bury the exit status under a blank line."""
+        fake_popen(returncode=2, output="")
 
         with pytest.raises(RuntimeError, match="see the output above"):
             run_getdp("p.pro", "m.msh", tmp_path, {}, None)
 
-    def test_captured_streams_are_tailed_into_the_message(
-        self, tmp_path, fake_getdp, monkeypatch
+    def test_the_output_is_tailed_into_the_message(
+        self, tmp_path, fake_getdp, fake_popen
     ):
-        monkeypatch.setattr(
-            fem_solver.subprocess,
-            "run",
-            lambda args, **kw: subprocess.CompletedProcess(
-                args, 1, "stdout detail", "stderr detail"
-            ),
+        fake_popen(returncode=1, output="Error : something went wrong\n")
+
+        with pytest.raises(RuntimeError, match="something went wrong"):
+            run_getdp("p.pro", "m.msh", tmp_path, {}, None)
+
+    def test_the_output_comes_back_on_the_result(
+        self, tmp_path, fake_getdp, fake_popen
+    ):
+        """Streaming used to discard it; callers and the error tail both read
+        it off the returned process."""
+        fake_popen(output="Info    : Solving system {A}\n")
+
+        result = run_getdp("p.pro", "m.msh", tmp_path, {}, None)
+
+        assert "Solving system" in result.stdout
+
+
+# ---------------------------------------------------------------------
+# progress reporting
+# ---------------------------------------------------------------------
+class TestProgressReporting:
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (0.42, "0.4 s"),
+            (4.25, "4.2 s"),
+            (59.9, "59.9 s"),
+            (60.0, "1m 00s"),
+            (185.0, "3m 05s"),
+            (4350.0, "1h 12m 30s"),
+        ],
+        ids=[
+            "sub-second",
+            "seconds",
+            "just-under-a-minute",
+            "a-minute",
+            "minutes",
+            "hours",
+        ],
+    )
+    def test_durations_read_the_way_a_person_says_them(self, seconds, expected):
+        assert format_duration(seconds) == expected
+
+    def test_the_problem_size_is_scraped_out_of_the_output(self):
+        """Verbatim from getdp 4.0.0."""
+        assert _parse_resources("Info    : System 1/1: 412033 Dofs\n")[0] == 412033
+
+    def test_the_peak_memory_is_scraped_out_of_the_output(self):
+        """Verbatim from getdp 4.0.0 -- note the ``=``, which an earlier
+        pattern missed, leaving the memory silently unreported."""
+        output = (
+            "Info    : Stopped (Sun Sep 20 22:55:39 2026, Wall = 0.204s, "
+            "CPU = 1.07s, Mem = 2100.5Mb)\n"
         )
 
-        with pytest.raises(RuntimeError, match="stderr detail"):
-            run_getdp("p.pro", "m.msh", tmp_path, {}, None)
+        assert _parse_resources(output)[1] == pytest.approx(2100.5)
+
+    def test_the_largest_report_wins(self):
+        """getdp reports its resources at every stage; the peak is the useful
+        one, and it is not the last line printed."""
+        output = "Info : Mem = 100Mb\nInfo : Mem = 2100Mb\nInfo : Mem = 900Mb\n"
+
+        assert _parse_resources(output)[1] == pytest.approx(2100)
+
+    @pytest.mark.parametrize(
+        ("megabytes", "expected"),
+        [(70.8359, "71 MB"), (999.4, "999 MB"), (1150.0, "1.15 GB")],
+        ids=["a-port-mode-solve", "just-under-a-gigabyte", "a-3d-solve"],
+    )
+    def test_memory_is_reported_at_a_readable_scale(self, megabytes, expected):
+        """A port-mode solve peaks around 70 Mb; "0.07 GB" reads as noise."""
+        assert format_memory(megabytes) == expected
+
+    def test_a_solve_is_described_by_size_and_memory(self):
+        info = SolveInfo(elapsed=1.0, dofs=9539, peak_mb=1150.0)
+
+        assert describe_solve(info) == "9,539 DOF, peak 1.15 GB"
+
+    def test_half_a_description_is_better_than_none(self):
+        """getdp builds differ in what they report; whichever half arrived is
+        still worth saying."""
+        assert describe_solve(SolveInfo(1.0, 9539, None)) == "9,539 DOF"
+
+    def test_the_stage_is_read_off_an_info_line(self):
+        assert _stages("Info    : Post-processing (Compute)\n") == [
+            "Post-processing (Compute)"
+        ]
+
+    def test_carriage_returns_carry_several_stages(self):
+        """getdp overwrites its progress indicator in place, so a whole
+        pre-processing run arrives as one newline-delimited line."""
+        line = " 20%    : Pre-processing\r 90%    : Pre-processing\rInfo    : Solving\n"
+
+        assert _stages(line)[-1] == "Solving"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "Info    :   1 KSP Residual norm 8.760107442077e-16",
+            "Info    : Stopped (Sun Sep 20 22:55:30 2026, Wall = 0.26s, Mem = 70Mb)",
+            "Info    : (Wall = 0.259939s, CPU = 1.01271s, Mem = 70.8984Mb)",
+            "Info    : Eigenvalue 001: w^2 = 2.503984033690e+04",
+        ],
+        ids=["residual", "timestamp", "resources", "eigenvalue"],
+    )
+    def test_per_iteration_chatter_is_not_a_stage(self, line):
+        """None of it says where the solve has got to, and a half-truncated
+        timestamp on the progress line reads as a glitch."""
+        assert _stages(line + "\n") == []
+
+    def test_output_without_either_gets_no_detail(self):
+        """A getdp build that reports neither still gets its duration; a
+        separator with nothing after it would just be noise."""
+        dofs, peak_mb = _parse_resources("Info    : Started\nInfo    : Stopped\n")
+
+        assert (dofs, peak_mb) == (None, None)
+        assert describe_solve(SolveInfo(1.0, None, None)) == ""
+
+    def test_a_finished_solve_reports_its_duration(
+        self, tmp_path, fake_getdp, spy_run, capsys
+    ):
+        run_getdp("p.pro", "m.msh", tmp_path, {}, None, label="S-params @ 2.45 GHz")
+
+        out = capsys.readouterr().out
+        assert "S-params @ 2.45 GHz: 0.0 s" in out
+
+    def test_an_unlabelled_solve_names_the_resolution(
+        self, tmp_path, fake_getdp, spy_run, capsys
+    ):
+        run_getdp("p.pro", "m.msh", tmp_path, {}, None, resolution="ModeAnalysis")
+
+        assert "ModeAnalysis (p)" in capsys.readouterr().out
+
+    def test_quiet_solves_print_nothing(self, tmp_path, fake_getdp, spy_run, capsys):
+        """optimise/sweep callers thread their own verbose flag through."""
+        run_getdp("p.pro", "m.msh", tmp_path, {}, None, verbose=False)
+
+        assert capsys.readouterr().out == ""
+
+    def test_the_last_solve_is_remembered(self, tmp_path, fake_getdp, fake_popen):
+        """The sweep summarises the problem it solved without the solver's
+        output having to travel back through every caller."""
+        fake_popen(output="Info : System 1/1: 9539 Dofs\nInfo : Mem = 1150Mb\n")
+
+        run_getdp("p.pro", "m.msh", tmp_path, {}, None, verbose=False)
+
+        info = last_solve()
+        assert (info.dofs, info.peak_mb) == (9539, pytest.approx(1150))
+        assert info.elapsed > 0
 
 
 # ---------------------------------------------------------------------
