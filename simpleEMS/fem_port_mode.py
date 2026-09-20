@@ -950,6 +950,7 @@ def solve_port_mode(
     workdir: str | Path,
     *,
     nmodes: int | None = None,
+    verbose: bool = True,
 ) -> PortMode:
     """
     Solve one wave port's transverse mode at one frequency.
@@ -976,6 +977,10 @@ def solve_port_mode(
     nmodes : int, optional
         Number of eigenpairs to compute, overriding ``setup.nmodes``. Default
         ``None`` (use the setup's).
+    verbose : bool
+        Report the solve's progress and how long it took. Default ``True``;
+        a sweep passes ``False``, having its own line for the frequency this
+        mode belongs to.
 
     Returns
     -------
@@ -1016,6 +1021,8 @@ def solve_port_mode(
         {"FREQ": freq, "NMODES": nmodes, "SHIFT_RE": shift},
         "Get_Mode",
         resolution="ModeAnalysis",
+        label=f"port {setup.number} mode @ {freq / 1e9:.4g} GHz",
+        verbose=verbose,
     )
 
     betas = read_eigenvalues(res_path)

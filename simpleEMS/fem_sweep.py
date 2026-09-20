@@ -25,6 +25,7 @@ fastest; typically 8-15 of them reproduce a 200-point sweep.
 
 from __future__ import annotations
 
+import time
 import warnings
 from collections.abc import Callable
 
@@ -33,6 +34,7 @@ from numpy.typing import NDArray
 from scipy.interpolate import AAA
 
 from .console import console
+from .fem_solver import describe_solve, format_duration, last_solve
 
 # Each S_ij is fitted with a barycentric rational approximant by the AAA
 # algorithm (Nakatsukasa, Sete & Trefethen 2018), via scipy.interpolate.AAA.
@@ -166,11 +168,45 @@ def rational_sweep(
     # A single-point grid has nothing to spread across: np.linspace(f, f, 5)
     # would solve the same frequency five times and discard four of them.
     solved: dict[float, NDArray] = {}
+    started = time.perf_counter()
+
+    # One line per solve, columns lined up: how far along, which frequency,
+    # what that solve cost, and how long the whole sweep still has to run.
+    # Everything constant across the sweep -- problem size, peak memory --
+    # waits for the closing summary rather than repeating on every line.
+    def report(freq: float, seconds: float, change: float | None = None) -> None:
+        """Print one solve's line."""
+        elapsed = time.perf_counter() - started
+        left = max(num_solves - len(solved), 0) * elapsed / len(solved)
+        # Fixed-width fields, so the columns hold still as the durations grow
+        # and the last line's fit figure does not jump left when the estimate
+        # of what is left drops out.
+        elapsed_text = f"elapsed {format_duration(elapsed)}"
+        left_text = f"~{format_duration(left)} left" if left > 0 else ""
+        line = (
+            f"{len(solved):>3}/{num_solves}  {freq / 1e9:8.4f} GHz  "
+            f"{format_duration(seconds):>7}  {elapsed_text:<18}{left_text:<17}"
+        )
+        if change is not None:
+            line += f"Δfit {change:.0e}"
+        console.print(f"[info]{line.rstrip()}[/info]")
+
+    def timed(freq: float) -> tuple[NDArray, float]:
+        """Solve at ``freq``, and say how long it took."""
+        start = time.perf_counter()
+        return solve_at(freq), time.perf_counter() - start
+
+    if verbose:
+        console.rule(
+            f"[info]FEM sweep · {fmin / 1e9:.3f}-{fmax / 1e9:.3f} GHz · "
+            f"up to {num_solves} solves[/info]"
+        )
+
     n_init = min(5, num_solves) if fgrid.size >= 2 else 1
     for f in np.linspace(fmin, fmax, n_init):
-        solved[float(f)] = solve_at(float(f))
+        solved[float(f)], seconds = timed(float(f))
         if verbose:
-            console.print(f"[info]FEM solved {f / 1e9:.4f} GHz ({len(solved)})[/info]")
+            report(float(f), seconds)
 
     # Fit one rational approximant per S_ij over the solved points and evaluate
     # it on the dense output grid -> the current best model of S(f).
@@ -216,17 +252,23 @@ def rational_sweep(
         fnext = pick_next(prev)
         if fnext in solved:
             break
-        solved[fnext] = solve_at(fnext)
+        solved[fnext], seconds = timed(fnext)
         cur = build_model()
         change = float(np.max(np.abs(cur - prev)))
         if verbose:
-            console.print(
-                f"[info]FEM added {fnext / 1e9:.4f} GHz -> model change "
-                f"{change:.2e} ({len(solved)} solves)[/info]"
-            )
+            report(fnext, seconds, change)
         prev = cur
         if tol > 0 and change < tol:
             break
+
+    if verbose:
+        # The problem the solves shared, reported once instead of per line.
+        size = describe_solve(last_solve())
+        console.rule(
+            f"[info]{len(solved)} solves in "
+            f"{format_duration(time.perf_counter() - started)}"
+            f"{f' · {size}' if size else ''}[/info]"
+        )
 
     # Final guard on the model actually handed back: if no fit order came out
     # passive, say so rather than silently returning a curve with a fake

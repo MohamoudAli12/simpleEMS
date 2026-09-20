@@ -24,11 +24,56 @@ the near fields and the power radiated and lost.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+from .console import console
+
+# What getdp prints, verbatim:
+#   "Info    : System 1/1: 763 Dofs"
+#   "Info    : Stopped (..., Wall = 0.2s, CPU = 1.07s, Mem = 70.8633Mb)"
+#   " 20%    : Pre-processing"      <- carriage-return separated, many per line
+# so the stage pattern takes the percentage lines too, and the resource scrapes
+# stay best-effort: a build that prints neither still reports its duration.
+_STAGE = re.compile(r"^(?:Info|\d+%)\s*:\s*(\S.*?)$")
+
+# Per-iteration residuals, eigenvalue dumps and resource/timestamp lines say
+# nothing about where the solve has got to, and a half-truncated timestamp on
+# the progress line reads as a glitch.
+_STAGE_NOISE = re.compile(r"^(?:\(|Started|Stopped|\d+ KSP|Eigenvalue|[wf] =)", re.I)
+_MEMORY = re.compile(r"Mem\s*=?\s*([\d.]+)\s*([kMG])b", re.IGNORECASE)
+_DOFS = re.compile(r"(\d+)\s+Dofs?\b", re.IGNORECASE)
+
+
+class SolveInfo(NamedTuple):
+    """
+    What one getdp run cost.
+
+    Attributes
+    ----------
+    elapsed : float
+        Wall seconds the run took.
+    dofs : int | None
+        Unknowns in the solved system, or ``None`` if getdp did not say.
+    peak_mb : float | None
+        Peak memory in megabytes, or ``None`` if getdp did not say.
+    """
+
+    elapsed: float
+    dofs: int | None
+    peak_mb: float | None
+
+
+# The last run's cost, so a sweep can summarise the problem it just solved
+# without threading the solver's output back through every caller.
+_last: SolveInfo | None = None
 
 
 def find_getdp() -> str:
@@ -53,6 +98,199 @@ def find_getdp() -> str:
         "getdp binary not found. Run `simpleems install getdp`, or install "
         "GetDP yourself (https://getdp.info) and put it on your PATH."
     )
+
+
+def last_solve() -> SolveInfo | None:
+    """
+    What the most recent getdp run cost.
+
+    Returns
+    -------
+    SolveInfo | None
+        The duration, problem size and peak memory of the last run, or
+        ``None`` if none has finished in this process yet.
+    """
+    return _last
+
+
+def format_duration(seconds: float) -> str:
+    """
+    Render a duration the way a person reads one.
+
+    Parameters
+    ----------
+    seconds : float
+        A duration in seconds.
+
+    Returns
+    -------
+    str
+        ``"4.2 s"``, ``"3m 05s"`` or ``"1h 12m 30s"``.
+    """
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    minutes, whole_seconds = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {whole_seconds:02d}s"
+    return f"{minutes}m {whole_seconds:02d}s"
+
+
+def format_memory(megabytes: float) -> str:
+    """
+    Render a memory figure at a readable scale.
+
+    Parameters
+    ----------
+    megabytes : float
+        An amount of memory, in megabytes.
+
+    Returns
+    -------
+    str
+        ``"71 MB"`` below a gigabyte, ``"2.10 GB"`` above it.
+    """
+    if megabytes >= 1e3:
+        return f"{megabytes / 1e3:.2f} GB"
+    return f"{megabytes:.0f} MB"
+
+
+def _parse_resources(output: str) -> tuple[int | None, float | None]:
+    """
+    Problem size and peak memory, scraped out of what getdp printed.
+
+    Parameters
+    ----------
+    output : str
+        Everything the solver wrote during one run.
+
+    Returns
+    -------
+    tuple[int | None, float | None]
+        ``(dofs, peak_mb)``, each ``None`` where getdp reported nothing.
+        getdp reports its resources at every stage, so the peak is the
+        interesting one and it is not the last figure printed.
+    """
+    dofs = [int(match.group(1)) for match in _DOFS.finditer(output)]
+    scale = {"k": 1e-3, "m": 1.0, "g": 1e3}  # to megabytes
+    memories = [
+        float(match.group(1)) * scale[match.group(2).lower()]
+        for match in _MEMORY.finditer(output)
+    ]
+    return (max(dofs) if dofs else None, max(memories) if memories else None)
+
+
+def describe_solve(info: SolveInfo | None) -> str:
+    """
+    Name the size of a solve, for a progress or summary line.
+
+    Parameters
+    ----------
+    info : SolveInfo | None
+        What a run cost, as :func:`last_solve` reports it.
+
+    Returns
+    -------
+    str
+        ``"9,539 DOF, peak 1.15 GB"``, whichever half getdp reported, or an
+        empty string when it reported neither.
+    """
+    if info is None:
+        return ""
+    parts = []
+    if info.dofs is not None:
+        parts.append(f"{info.dofs:,} DOF")
+    if info.peak_mb is not None:
+        parts.append(f"peak {format_memory(info.peak_mb)}")
+    return ", ".join(parts)
+
+
+def _stages(line: str) -> list[str]:
+    """
+    The stages getdp announced on one line of output.
+
+    getdp overwrites its progress indicator with carriage returns, so one
+    newline-delimited line can carry a dozen of them.
+
+    Parameters
+    ----------
+    line : str
+        One line as read from the solver.
+
+    Returns
+    -------
+    list[str]
+        The stage names in the order printed, without the per-iteration
+        residuals and resource lines. The last one is where the solve has
+        got to.
+    """
+    return [
+        match.group(1)
+        for chunk in line.replace("\r", "\n").splitlines()
+        if (match := _STAGE.match(chunk.strip()))
+        and not _STAGE_NOISE.match(match.group(1))
+    ]
+
+
+def _stream(
+    args: list[str], workdir: str | Path, description: str | None
+) -> tuple[int, str]:
+    """
+    Run ``args``, showing getdp's current stage on one self-updating line.
+
+    Parameters
+    ----------
+    args : list[str]
+        The command line to run.
+    workdir : str | Path
+        Working directory for the run.
+    description : str | None
+        What to call this run in the progress line, or ``None`` to stay quiet.
+
+    Returns
+    -------
+    tuple[int, str]
+        The exit status, and everything the process wrote with stdout and
+        stderr interleaved.
+    """
+    # stdin is closed, not inherited: getdp's eigenvalue solver prompts for
+    # ARPACK settings when it has no eigen.par to read, and an inherited stdin
+    # that never delivers a line hangs the whole sweep with no output.
+    process = subprocess.Popen(
+        args,
+        cwd=workdir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        bufsize=1,
+    )
+    # The live line only makes sense on a terminal; a log file or a CI run
+    # would collect one copy of it per refresh, so fall back to a plain
+    # start line there.
+    live = description is not None and console.is_terminal
+    if description is not None and not live:
+        console.print(f"[info]getdp {description}: solving...[/info]")
+    lines: list[str] = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[info]{task.description}[/info]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+        disable=not live,
+    ) as progress:
+        task = progress.add_task(f"getdp {description}", total=None)
+        for line in process.stdout or []:
+            lines.append(line)
+            if not live:
+                continue
+            stages = _stages(line)
+            if stages:
+                progress.update(
+                    task, description=f"getdp {description} · {stages[-1][:60]}"
+                )
+    return process.wait(), "".join(lines)
 
 
 def read_complex(path: str | Path) -> complex:
@@ -129,6 +367,8 @@ def run_getdp(
     postop: str | list[str] | None,
     resolution: str = "Analysis",
     extra_args: list[str] | None = None,
+    label: str | None = None,
+    verbose: bool = True,
 ) -> subprocess.CompletedProcess:
     """
     Run the solver once.
@@ -153,11 +393,18 @@ def run_getdp(
         ``"Analysis"``, which drives every port in turn.
     extra_args : list[str] | None
         Extra flags to pass to the solver, e.g. iterative solver options.
+    label : str | None
+        What to call this run when reporting progress, e.g.
+        ``"S-params @ 2.4500 GHz"``. Defaults to the resolution and the
+        problem file's name.
+    verbose : bool
+        Report the solver's progress and how long it took. Default ``True``.
 
     Returns
     -------
     subprocess.CompletedProcess
-        The finished solver process.
+        The finished solver process. Its ``stdout`` holds everything the
+        solver wrote, stderr interleaved.
 
     Raises
     ------
@@ -174,31 +421,33 @@ def run_getdp(
     if postop:  # omit for the internal sweep (its Resolution calls PostOperation)
         postops = [postop] if isinstance(postop, str) else list(postop)
         args += ["-pos", *postops]
-    args += ["-v2"]  # verbosity level 2 (progress but not per-iteration spam)
+    # Not a verbosity flag, despite the name: getdp -help lists -v2 under
+    # output options as "create mesh-based Gmsh output files when possible".
+    # Verbosity is -v <num>. Inert while the .pro files pin Format GmshParsed.
+    args += ["-v2"]
     if extra_args:  # passthrough getdp/PETSc flags
         args += list(extra_args)
-    # Output is streamed rather than captured, so getdp's progress is visible;
-    # that leaves stdout/stderr as None here, hence the guard (indexing them
-    # raised TypeError and hid the actual failure).
-    # stdin is closed, not inherited: getdp's eigenvalue solver prompts for
-    # ARPACK settings when it has no eigen.par to read, and an inherited stdin
-    # that never delivers a line hangs the whole sweep with no output.
-    res = subprocess.run(
-        args,
-        cwd=workdir,
-        capture_output=False,
-        text=True,
-        stdin=subprocess.DEVNULL,
-    )
-    if res.returncode != 0:
-        tail = "\n".join(
-            stream[-2000:] for stream in (res.stdout, res.stderr) if stream
-        )
+
+    label = label or f"{resolution} ({Path(str(pro_path)).stem})"
+    start = time.perf_counter()
+    returncode, output = _stream(args, workdir, label if verbose else None)
+    elapsed = time.perf_counter() - start
+    global _last
+    _last = SolveInfo(elapsed, *_parse_resources(output))
+
+    if returncode != 0:
         raise RuntimeError(
-            f"getdp failed ({res.returncode}) running {' '.join(args)}"
-            + (f":\n{tail}" if tail else "; see the output above.")
+            f"getdp failed ({returncode}) after {format_duration(elapsed)} "
+            f"running {' '.join(args)}"
+            + (f":\n{output[-2000:]}" if output.strip() else "; see the output above.")
         )
-    return res
+    if verbose:
+        size = describe_solve(_last)
+        console.print(
+            f"[info]getdp {label}: {format_duration(elapsed)}"
+            f"{f' · {size}' if size else ''}[/info]"
+        )
+    return subprocess.CompletedProcess(args, returncode, output, "")
 
 
 def _read_power_value(outdir: str | Path, fname: str) -> float:
@@ -256,6 +505,7 @@ def solve_fields_and_power(
         {"FREQ": freq, "ACTIVE_PORT": active},
         ["Get_Fields", "Get_Power"],
         resolution="AnalysisSinglePort",
+        label=f"fields @ {freq / 1e9:.4f} GHz",
     )
     outdir = Path(workdir).absolute() / "output"
 

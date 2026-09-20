@@ -1085,7 +1085,11 @@ def _sweep_from_meta(
         setnumbers: dict[str, float] = {"FREQ": freq}
         modal_z: dict[int, float] = {}
         for number, setup in sorted(mode_setups.items()):
-            mode = fem_port_mode.solve_port_mode(setup, freq, output_path)
+            # Quiet: the mode solve is a step inside this frequency's solve,
+            # not a solve of its own, and the line below reports what it found.
+            mode = fem_port_mode.solve_port_mode(
+                setup, freq, output_path, verbose=False
+            )
             setnumbers[f"NEFF_{number}"] = float(mode.n_eff.real)
             setnumbers[f"ZC_{number}"] = float(mode.zc)
             modal_z[number] = float(mode.zc)
@@ -1100,6 +1104,8 @@ def _sweep_from_meta(
             output_path,
             setnumbers,
             None,  # Analysis runs Get_SParameters itself, once per port
+            label=f"S-params @ {freq / 1e9:.4f} GHz",
+            verbose=False,  # the sweep reports this solve on its own line
         )
         for n in port_numbers:
             row = fem_solver.read_complex_rows(outdir / f"xS_{n}.txt", npt)
