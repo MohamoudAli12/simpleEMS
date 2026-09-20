@@ -72,6 +72,48 @@ _MESH_META = "fem_mesh.json"
 _SPARAMS = "fem_sparams.npz"
 
 
+def _air_pad_faces_mm(air_pad_mm: float | tuple) -> tuple[tuple[float, float], ...]:
+    """
+    Expand an air-pad setting into one value per box face.
+
+    Parameters
+    ----------
+    air_pad_mm : float or tuple
+        One value for every face, three values for the three axes, or three
+        ``(low, high)`` pairs.
+
+    Returns
+    -------
+    tuple[tuple[float, float], ...]
+        ``((x_lo, x_hi), (y_lo, y_hi), (z_lo, z_hi))``, in millimetres.
+
+    Raises
+    ------
+    ValueError
+        If the value is neither a single number, nor three numbers, nor three
+        ``(low, high)`` pairs.
+    """
+    if isinstance(air_pad_mm, (int, float)):
+        return ((float(air_pad_mm), float(air_pad_mm)),) * 3
+    try:
+        values = tuple(air_pad_mm)
+    except TypeError:
+        values = ()
+    if len(values) == 3:
+        if all(isinstance(value, (int, float)) for value in values):
+            return tuple((float(value), float(value)) for value in values)
+        if all(
+            not isinstance(value, (int, float)) and len(tuple(value)) == 2
+            for value in values
+        ):
+            return tuple((float(low), float(high)) for low, high in values)
+    raise ValueError(
+        "air_pad_mm must be one value, three values [x, y, z], or three "
+        "[low, high] pairs [[xlo, xhi], [ylo, yhi], [zlo, zhi]], got "
+        f"{air_pad_mm!r}"
+    )
+
+
 @dataclass
 class FEMOptions:
     """
@@ -98,9 +140,13 @@ class FEMOptions:
         Air padding around the structure, as a fraction of the longest
         wavelength in the sweep. Default ``0.25``. Ignored when ``air_pad_mm``
         is set.
-    air_pad_mm : float, optional
+    air_pad_mm : float or tuple, optional
         Air padding around the structure in millimetres, used in place of
-        ``air_pad_frac``. Default ``None`` (pad by ``air_pad_frac``).
+        ``air_pad_frac``. Either one value for all six faces, three values
+        ``[x, y, z]`` padding each axis symmetrically, or three
+        ``[low, high]`` pairs padding every face on its own -- so an antenna
+        can carry deep air above the patch and little below the ground plane.
+        Default ``None`` (pad by ``air_pad_frac``).
     elems_per_wavelength : float
         Target number of mesh elements per wavelength, applied separately in
         each material. Default ``16.0``.
@@ -168,8 +214,10 @@ class FEMOptions:
     air_pad_frac: float = 0.25
     # for non-radiating structures (e.g. filters) whose box shouldn't scale
     # with a wide sweep's lowest frequency; FEMNF2FF.CalcNF2FF raises if this
-    # is later too small for a far-field transform at the requested frequency
-    air_pad_mm: float | None = None
+    # is later too small for a far-field transform at the requested frequency.
+    # Kept exactly as given -- air_pad_faces_mm expands it -- because SimParams
+    # round-trips every field of this class by equality.
+    air_pad_mm: float | tuple | None = None
     elems_per_wavelength: float = 16.0
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
@@ -232,6 +280,32 @@ class FEMOptions:
             value = getattr(self, name)
             if value is not None and value <= 0:
                 raise ValueError(f"{name} must be positive, got {value}")
+        if self.air_pad_mm is not None:
+            faces = _air_pad_faces_mm(self.air_pad_mm)
+            for axis, (low, high) in zip("xyz", faces, strict=True):
+                for pad, sign in ((low, "-"), (high, "+")):
+                    if pad < 0:
+                        raise ValueError(
+                            f"air_pad_mm cannot be negative: {pad} on the "
+                            f"{axis}{sign} face of {self.air_pad_mm!r}. Zero is "
+                            "allowed and puts the domain boundary on that face "
+                            "of the structure."
+                        )
+
+    @property
+    def air_pad_faces_mm(self) -> tuple[tuple[float, float], ...] | None:
+        """
+        Return the air padding per face, or ``None`` to use ``air_pad_frac``.
+
+        Returns
+        -------
+        tuple[tuple[float, float], ...] or None
+            ``((x_lo, x_hi), (y_lo, y_hi), (z_lo, z_hi))`` in millimetres,
+            or ``None`` when no explicit padding is set.
+        """
+        if self.air_pad_mm is None:
+            return None
+        return _air_pad_faces_mm(self.air_pad_mm)
 
 
 _FEM_DEFAULTS = (
@@ -396,9 +470,14 @@ class Problem:
         return self.options.air_pad_frac
 
     @property
-    def air_pad_mm(self) -> float | None:
+    def air_pad_mm(self) -> float | tuple | None:
         """Air padding in millimetres, or ``None`` to use ``air_pad_frac``."""
         return self.options.air_pad_mm
+
+    @property
+    def air_pad_faces_mm(self) -> tuple[tuple[float, float], ...] | None:
+        """Air padding per face in mm, or ``None`` to use ``air_pad_frac``."""
+        return self.options.air_pad_faces_mm
 
     @property
     def elems_per_wavelength(self) -> float:
@@ -1273,7 +1352,7 @@ def simulate_step_FEM(
     FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry,
     FEM_fe_order: int = _FEM_DEFAULTS.fe_order,
     FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac,
-    FEM_air_pad_mm: float | None = _FEM_DEFAULTS.air_pad_mm,
+    FEM_air_pad_mm: float | tuple | None = _FEM_DEFAULTS.air_pad_mm,
     FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength,
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale,
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers,
@@ -1324,9 +1403,11 @@ def simulate_step_FEM(
     FEM_air_pad_frac : float
         Air padding around the structure, as a fraction of the longest
         wavelength. Default ``0.25``. Ignored when ``FEM_air_pad_mm`` is set.
-    FEM_air_pad_mm : float, optional
+    FEM_air_pad_mm : float or tuple, optional
         Air padding around the structure in millimetres, used in place of
-        ``FEM_air_pad_frac``. Default ``None``.
+        ``FEM_air_pad_frac``. Either one value for all six faces, three
+        values ``[x, y, z]``, or three ``[low, high]`` pairs. Default
+        ``None``.
     FEM_elems_per_wavelength : float
         Target number of mesh elements per wavelength. Default ``16.0``.
     FEM_mesh_fine_scale : float

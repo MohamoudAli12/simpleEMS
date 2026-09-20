@@ -108,16 +108,21 @@ class SimParams:
         FEM backend only. Air padding as a fraction of the longest
         wavelength. Defaults to :attr:`FEMOptions.air_pad_frac`. Ignored
         when ``FEM_air_pad_mm`` is set.
-    FEM_air_pad_mm : float, optional
-        FEM backend only. Explicit air padding in millimetres, added to
-        every face of the structure's bounding box in place of the
-        ``FEM_air_pad_frac`` wavelength formula. Use this for non-radiating
-        structures (e.g. filters) whose box shouldn't scale with a wide
-        S-parameter sweep's lowest frequency. If a far-field pattern is
-        later requested and this padding is too small for an accurate
-        near-to-far-field transform at the requested frequency,
-        ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the minimum
-        padding needed. Default is ``None`` (auto, via ``FEM_air_pad_frac``).
+    FEM_air_pad_mm : float or tuple, optional
+        FEM backend only. Explicit air padding in millimetres, added to the
+        structure's bounding box in place of the ``FEM_air_pad_frac``
+        wavelength formula. Give one value for all six faces, three values
+        ``[x, y, z]`` to pad each axis symmetrically, or three
+        ``[low, high]`` pairs to set every face on its own -- for example
+        ``[[8, 8], [8, 8], [2, 30]]`` for a patch, which needs a deep air
+        column above it but almost none below its ground plane. Use this for
+        non-radiating structures (e.g. filters) whose box shouldn't scale
+        with a wide S-parameter sweep's lowest frequency. If a far-field
+        pattern is later requested and this padding is too small for an
+        accurate near-to-far-field transform at the requested frequency,
+        ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the face that is
+        short and the padding needed. Default is ``None`` (auto, via
+        ``FEM_air_pad_frac``).
     FEM_elems_per_wavelength : float, optional
         FEM backend only. Target coarse mesh density, applied per material
         against that material's own wavelength. Default is ``16.0``; see
@@ -229,7 +234,7 @@ class SimParams:
     FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry
     FEM_fe_order: int = _FEM_DEFAULTS.fe_order
     FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac
-    FEM_air_pad_mm: float | None = _FEM_DEFAULTS.air_pad_mm
+    FEM_air_pad_mm: float | tuple | None = _FEM_DEFAULTS.air_pad_mm
     FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers

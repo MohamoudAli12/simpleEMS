@@ -759,6 +759,10 @@ def _build_air_box(
 ) -> tuple[bool, tuple, tuple, float]:
     """Wrap the structure in an air box, plus an outer PML shell if requested.
 
+    Each of the six faces stands off the structure by its own padding, so a
+    radiator can carry a deep air column on the side it radiates into without
+    paying for it on the other five.
+
     Parameters
     ----------
     problem : Problem
@@ -777,17 +781,23 @@ def _build_air_box(
         and the PML thickness in metres.
     """
     is_pml = problem.boundary == "pml"
-    if problem.air_pad_mm is not None:
-        pad = problem.air_pad_mm * 1e-3
+    faces_mm = problem.air_pad_faces_mm
+    if faces_mm is None:
+        auto = max(problem.air_pad_frac * lambda0_max, 3.0 * (struct[5] - struct[2]))
+        faces = ((auto, auto),) * 3
     else:
-        pad = max(problem.air_pad_frac * lambda0_max, 3.0 * (struct[5] - struct[2]))
-    ax0, ay0, az0 = struct[0] - pad, struct[1] - pad, struct[2] - pad  # inner box
-    ax1, ay1, az1 = struct[3] + pad, struct[4] + pad, struct[5] + pad
+        faces = tuple((low * 1e-3, high * 1e-3) for low, high in faces_mm)
+    # inner box: each face stands off the structure by its own padding
+    ax0, ay0, az0 = (struct[axis] - faces[axis][0] for axis in range(3))
+    ax1, ay1, az1 = (struct[3 + axis] + faces[axis][1] for axis in range(3))
     inner_bbox = (ax0, ay0, az0, ax1, ay1, az1)
     gmsh.model.occ.addBox(ax0, ay0, az0, ax1 - ax0, ay1 - ay0, az1 - az0)
     pml_thick = 0.0
     if is_pml:
-        pml_thick = max(0.2 * lambda0_max, 2.0 * pad / 3.0)
+        # one uniform shell, sized off the tightest face so it never outgrows
+        # the smallest air gap; the .pro template carries a single PmlDelta
+        tightest_pad = min(pad for face in faces for pad in face)
+        pml_thick = max(0.2 * lambda0_max, 2.0 * tightest_pad / 3.0)
         ox0, oy0, oz0 = ax0 - pml_thick, ay0 - pml_thick, az0 - pml_thick
         ox1, oy1, oz1 = ax1 + pml_thick, ay1 + pml_thick, az1 + pml_thick
         gmsh.model.occ.addBox(ox0, oy0, oz0, ox1 - ox0, oy1 - oy0, oz1 - oz0)

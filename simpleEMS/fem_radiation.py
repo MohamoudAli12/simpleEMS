@@ -484,9 +484,10 @@ def _check_farfield_margin(
             f"{face} face is {gap * 1e3:.2f} mm, but at least {min_gap * 1e3:.2f} mm "
             f"(a quarter-wavelength, lambda/4 = c / (4 * f)) is needed for the "
             f"near-to-far-field transform to be valid. Re-run setup_simulation/"
-            f"build_mesh with FEM_air_pad_mm >= {min_gap * 1e3:.2f}, or drop "
-            f"FEM_air_pad_mm entirely to fall back to the automatic "
-            f"lambda/4-based padding."
+            f"build_mesh with at least {min_gap * 1e3:.2f} mm on the {face} face "
+            f"-- FEM_air_pad_mm takes three [low, high] pairs, so that face can "
+            f"be widened on its own -- or drop FEM_air_pad_mm entirely to fall "
+            f"back to the automatic lambda/4-based padding."
         )
 
 
