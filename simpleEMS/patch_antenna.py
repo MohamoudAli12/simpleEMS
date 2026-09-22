@@ -514,6 +514,32 @@ class InsetFedPatchAntenna(PatchAntenna):
         )
         return port
 
+    def _inset_slot_mesh_lines(self) -> list[list[float]]:
+        """
+        Return the mesh lines the inset slots need, per dimension.
+
+        Each slot is ``inset_width_mm / 2`` wide -- 0.77 mm on 1.6 mm FR-4 at
+        2.45 GHz, against a metal mesh resolution of 1.46 mm. The automatic
+        mesher's passes place lines near a gap that narrow but never on it, and
+        openEMS renders a conductor out to the nearest line, so the slot comes
+        out up to 22% narrower than it is drawn. The inset depth the feed sees
+        moves with that width and the input resistance moves with the depth, so
+        the rendered width alone is the difference between 24 ohm and 52 ohm at
+        the port. Asking for the slot's own edges pins them.
+
+        A coplanar waveguide's slots ask for their edges the same way, via
+        :meth:`simpleEMS.components.GenericStructure._request_mesh_lines`.
+
+        Returns
+        -------
+        list of list of float
+            ``[x, y, z]`` positions for :class:`simpleEMS.fdtd_mesh.Mesh`'s
+            ``requested_lines``; only x is populated.
+        """
+        feed_edge = self.params.feed_width_mm / 2
+        notch_edge = feed_edge + self.params.inset_width_mm / 2
+        return [[-notch_edge, -feed_edge, feed_edge, notch_edge], [], []]
+
     def create_mesh(self, manual_mesh: bool = False) -> None:
         """
         Generate an FDTD mesh for the simulation domain.
@@ -603,7 +629,11 @@ class InsetFedPatchAntenna(PatchAntenna):
 
             mesh.SmoothMeshLines("all", self.params.FDTD_mesh_resolution, 1.5)
         else:
-            Mesh(self.CSX, self.params)
+            Mesh(
+                self.CSX,
+                self.params,
+                requested_lines=self._inset_slot_mesh_lines(),
+            )
 
     def build_inset_fed_patch_antenna(self) -> LumpedPort:
         """
@@ -620,10 +650,10 @@ class InsetFedPatchAntenna(PatchAntenna):
             The created lumped port object, used to retrieve S-parameter
             and impedance results after the simulation.
         """
-        self.create_patch_with_inset()
-        self.create_feed()
         self.create_substrate()
         self.create_ground()
+        self.create_patch_with_inset()
+        self.create_feed()
         port = self.create_port()
         return port
 

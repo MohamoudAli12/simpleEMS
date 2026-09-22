@@ -1408,6 +1408,30 @@ class Mesh:
         :func:`_scaled_min_lines` mesh lines across a distance of ``dist``."""
         return dist / (self._scaled_min_lines(dist, is_metal, dim) - 1)
 
+    def _min_cell(self, dim: int) -> float:
+        """Return the smallest cell size to aim for in dimension ``dim``.
+
+        A gap narrower than ``FDTD_metal_mesh_resolution`` still has to be
+        meshed, but there is no reason to spend cells a quarter of that
+        resolution on it. The FDTD timestep follows the smallest cell in the
+        entire grid, so one sub-millimetre slot otherwise shrinks the timestep
+        of every cell in the model -- the 0.77 mm inset slot of a patch
+        antenna takes four lines at 0.198 mm and halves the timestep of the
+        whole simulation.
+
+        This floors the *target* spacing, not the generated cells:
+        :func:`_gen_lines_in_bounds` still rounds its line count up, so an
+        interval that does not divide evenly lands a little under the floor
+        (0.255 mm against a 0.365 mm floor, on that patch). That is the
+        intent -- the floor exists to stop a runaway, not to override the
+        grid's own arithmetic.
+
+        ``dim == 2`` is exempt for the same reason :func:`_scaled_min_lines`
+        exempts it: z is the layer stackup, and a thin substrate is not a
+        "small feature" that deserves fewer cells.
+        """
+        return 0.0 if dim == 2 else self._metal_res / 4.0
+
     def _lower_spacing(
         self,
         dim: int,
@@ -1423,7 +1447,9 @@ class Mesh:
         has already been meshed, further caps it by the thirds rule against
         the neighboring cell's spacing (a factor of 1.5 across a metal/
         non-metal boundary, 3.0 otherwise) so the new interval doesn't open
-        with an abrupt jump in cell size.
+        with an abrupt jump in cell size. The result is floored at
+        :func:`_min_cell`, which is where both caps are kept from running away
+        on a sub-resolution feature.
 
         Parameters
         ----------
@@ -1454,7 +1480,7 @@ class Mesh:
             lower_spacing = np.min([lower_spacing, spacing])
             if dim == 2:
                 lower_spacing = np.max([lower_spacing, self._mesh_res / 5])
-        return lower_spacing
+        return float(np.max([lower_spacing, self._min_cell(dim)]))
 
     def _upper_spacing(
         self,
@@ -1476,7 +1502,7 @@ class Mesh:
             upper_spacing = np.min([upper_spacing, spacing])
             if dim == 2:
                 upper_spacing = np.max([upper_spacing, self._mesh_res / 5])
-        return upper_spacing
+        return float(np.max([upper_spacing, self._min_cell(dim)]))
 
     def _gen_mesh_in_bounds(
         self,
@@ -1560,7 +1586,17 @@ class Mesh:
                 or above_type is None
                 or above_type == Type.air
             )
-            max_spacing = self._mesh_res if touches_air else self._metal_res
+            # A conductor far wider than its own edge resolution needs that
+            # resolution only at its edges; its interior carries no more field
+            # detail than the space around it, so let the geometric series
+            # grade up to the global resolution in the middle. Without this the
+            # test above almost never fires on a real board: Type.air is only
+            # ever assigned outside the geometry's own extent (see
+            # _set_expanded_bounds), so a full ground plane makes every metal
+            # interval report metal on both sides, and a patch is filled edge
+            # to edge at the metal resolution -- most of its lateral lines.
+            wide = dim in (0, 1) and (upper - lower) > 2.0 * self._metal_res
+            max_spacing = self._mesh_res if (touches_air or wide) else self._metal_res
         else:
             max_spacing = self._mesh_res
 
