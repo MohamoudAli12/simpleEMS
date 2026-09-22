@@ -105,6 +105,10 @@ class QuarterWaveFilterParams(SimParams):
     elec_length_deg : int, optional
         Electrical length, in degrees, of the series line section and of
         each shunt stub. Default is 90 (quarter-wave).
+    via_diameter_mm : float, optional
+        Finished outer diameter of the vias that ground each band-pass shunt
+        stub, in millimeters. Must not exceed the narrowest stub; wider stubs
+        get more vias. Ignored for band-stop. Default 0.6.
 
     Attributes
     ----------
@@ -145,6 +149,7 @@ class QuarterWaveFilterParams(SimParams):
     filter_order: int
     ripple_db: float | None = None
     elec_length_deg: int = 90
+    via_diameter_mm: float = 0.6
     frac_bandwidth: float = field(init=False)
     series_line_width_mm: float = field(init=False)
     shunt_line_width_mm: list[float] = field(init=False)
@@ -785,8 +790,8 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
 
     Extends `QuarterWaveFilter` with the series transmission line sections,
     short-circuited shunt stubs, excitation ports, and FDTD mesh needed for
-    a band-pass response. Each shunt stub is grounded at its far end via a
-    vertical strap (see `create_shunt_line_short`), which presents a high
+    a band-pass response. Each shunt stub is grounded at its far end by a
+    row of plated vias (see `create_shunt_line_short`), which presents a high
     impedance at the junction near `centre_freq` and lets that band through
     while attenuating frequencies further away. Use
     `build_band_pass_quarter_wave_filter` to construct the full geometry, or
@@ -894,59 +899,70 @@ class BandPassQuarterWaveFilter(QuarterWaveFilter):
 
     def create_shunt_line_short(self) -> None:
         """
-        Create the grounding shorts at the open end of each shunt stub.
+        Create the row of grounding vias at the open end of each shunt stub.
 
-        Adds a vertical metal box at the far end of each shunt stub,
-        spanning from the ground plane (z=0) up through the substrate to
-        the stub's top copper layer, shorting it to ground. This turns
-        each shunt stub into a short-circuited quarter-wave stub, which is
-        required for the band-pass response.
+        Adds plated vias, each drawn as a solid copper cylinder of diameter
+        `via_diameter_mm`, in a row across the far end of each shunt stub.
+        The row holds as many vias as fit with at least one via diameter of
+        copper between neighbouring barrels, so a wider stub gets more vias.
+        The outer barrels sit flush with the stub's side edges (a single via
+        sits in the middle), every barrel sits flush with the stub end, and
+        each spans from the bottom of the ground plane to the top of the stub.
+        The vias short each stub to ground, which turns it into a
+        short-circuited quarter-wave stub, as the band-pass response needs.
 
         Returns
         -------
         None
-        """
-        first_shunt_line_short = self.CSX.AddMetal("shunt_line_short_1")
-        first_shunt_line_short.SetColor("#B87333", 255)
-        f_short_start = [
-            self.params.line_length_mm,
-            self.params.shunt_line_length_mm[0] + self.params.series_line_width_mm,
-            0,
-        ]
-        f_short_stop = [
-            self.params.line_length_mm + self.params.shunt_line_width_mm[0],
-            self.params.shunt_line_length_mm[0] + self.params.series_line_width_mm,
-            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
-        ]
-        first_shunt_line_short.AddBox(
-            priority=1,
-            start=f_short_start,
-            stop=f_short_stop,
-        )
 
-        for i in range(self.params.filter_order - 1):
-            shunt_line_short = self.CSX.AddMetal(f"shunt_line_short_{i + 2}")
-            shunt_line_short.SetColor("#B87333", 255)
-            line_start = [
-                (i + 2) * self.params.line_length_mm
-                + sum(self.params.shunt_line_width_mm[: i + 1]),
-                self.params.series_line_width_mm
-                + self.params.shunt_line_length_mm[i + 1],
-                0,
-            ]
-            line_stop = [
-                (i + 2) * self.params.line_length_mm
-                + sum(self.params.shunt_line_width_mm[: i + 1])
-                + self.params.shunt_line_width_mm[i + 1],
-                self.params.series_line_width_mm
-                + self.params.shunt_line_length_mm[i + 1],
-                self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
-            ]
-            shunt_line_short.AddBox(
-                priority=1,
-                start=line_start,
-                stop=line_stop,
+        Raises
+        ------
+        ValueError
+            If the via is wider than any shunt stub it has to land on.
+        """
+        params = self.params
+        via_diameter_mm = params.via_diameter_mm
+        via_radius_mm = via_diameter_mm / 2
+        narrowest_stub_mm = min(params.shunt_line_width_mm[: params.filter_order])
+        if not 0 < via_diameter_mm <= narrowest_stub_mm:
+            raise ValueError(
+                f"via_diameter_mm must be in (0, {narrowest_stub_mm}] to land on "
+                f"every shunt stub, got {via_diameter_mm}"
             )
+        for stub_index in range(params.filter_order):
+            stub_width_mm = params.shunt_line_width_mm[stub_index]
+            stub_left_mm = (stub_index + 1) * params.line_length_mm + sum(
+                params.shunt_line_width_mm[:stub_index]
+            )
+            # n barrels plus a one-diameter gap between each pair must fit the
+            # width: n * d + (n - 1) * d <= w.
+            via_count = int((stub_width_mm + via_diameter_mm) // (2 * via_diameter_mm))
+            if via_count == 1:
+                x_centres = [stub_left_mm + stub_width_mm / 2]
+            else:
+                x_centres = np.linspace(
+                    stub_left_mm + via_radius_mm,
+                    stub_left_mm + stub_width_mm - via_radius_mm,
+                    via_count,
+                )
+            y_centre = (
+                params.series_line_width_mm
+                + params.shunt_line_length_mm[stub_index]
+                - via_radius_mm
+            )
+            shunt_line_short = self.CSX.AddMetal(f"shunt_line_short_{stub_index + 1}")
+            shunt_line_short.SetColor("#B87333", 255)
+            for x_centre in x_centres:
+                shunt_line_short.AddCylinder(
+                    priority=6,
+                    start=[x_centre, y_centre, -params.copper_thickness_mm],
+                    stop=[
+                        x_centre,
+                        y_centre,
+                        params.substrate_thickness_mm + params.copper_thickness_mm,
+                    ],
+                    radius=via_radius_mm,
+                )
 
     def create_ports(self) -> list[LumpedPort]:
         """
