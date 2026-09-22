@@ -1518,6 +1518,24 @@ class Mesh:
         instead nudged inward by two-thirds of a cell at that edge and
         rebuilt.
 
+        A metal interval in z collapses on the full metal resolution rather
+        than a quarter of it. A z metal interval is a copper layer of the
+        stackup, and one line through its thickness is all it ever needs --
+        the layer carries a surface current, not a field varying across the
+        foil. ``FDTD_metal_mesh_resolution`` scales with the wavelength while
+        ``copper_thickness_mm`` does not, so the quarter-resolution cutoff
+        collapses the copper at low frequencies and, once the metal
+        resolution falls under four foil thicknesses -- 0.14 mm, reached
+        around 25-30 GHz on a typical board -- stops: the layer suddenly takes
+        ``min_lines`` lines across 35 um, a spacing several times finer than
+        anything else in the grid, which costs cells and (since the FDTD
+        timestep follows the smallest cell) timesteps -- 2.3x the total work
+        in ``examples/InsetFedPatch_60GHz.py``. ``_scaled_min_lines`` does not
+        soften this, since it deliberately exempts z. Non-metal z keeps the
+        quarter-resolution cutoff: an air or dielectric interval that thin is
+        a genuine gap between features, and the field really does vary across
+        it.
+
         Parameters
         ----------
         dim : int
@@ -1546,7 +1564,13 @@ class Mesh:
         else:
             max_spacing = self._mesh_res
 
-        thin_threshold = (self._metal_res if is_metal else self._mesh_res) / 4.0
+        if is_metal and dim == 2:
+            # A copper layer of the stackup: one line through the foil is
+            # enough at any frequency, so collapse on the full metal
+            # resolution rather than a quarter of it. See the docstring.
+            thin_threshold = self._metal_res
+        else:
+            thin_threshold = (self._metal_res if is_metal else self._mesh_res) / 4.0
         # Deliberately much smaller than thin_threshold above, and not
         # scaled off either resolution: this one only guards the
         # post-thirds-rule-shrink regeneration below against the shrink
