@@ -70,6 +70,7 @@ templates_path = ["_templates"]
 html_static_path = ["_static"]
 
 html_theme = "pydata_sphinx_theme"
+html_logo = "../../images/logo/simpleems-logo.svg"
 html_theme_options = {
     "navigation_depth": 3,
     "show_toc_level": 2,
