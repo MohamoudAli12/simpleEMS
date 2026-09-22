@@ -59,6 +59,9 @@ class InvertedFAntennaParams(SimParams):
     span_freq : float
         Frequency span used to compute the simulation range around
         the resonant frequency in Hz.
+    via_diameter_mm : float, optional
+        Finished outer diameter of the shorting via, in millimeters. Must fit
+        inside the shorting leg's overlap with the ground plane. Default 0.6.
 
     Attributes
     ----------
@@ -103,6 +106,7 @@ class InvertedFAntennaParams(SimParams):
 
     resonant_freq: float
     span_freq: float
+    via_diameter_mm: float = 0.6
     rad_tip_length_mm: float = field(init=False)
     rad_tip_width_mm: float = field(init=False)
     short_tip_length_mm: float = field(init=False)
@@ -373,26 +377,43 @@ class InvertedFAntenna(SimTools):
         """
         Create the via that shorts the antenna arm to ground.
 
-        Adds a metal box through the substrate thickness at the base of the
-        shorting leg, connecting it to the ground plane.
+        Adds a plated via, drawn as a solid copper cylinder of diameter
+        `via_diameter_mm`, centred in the part of the shorting leg that runs
+        over the ground plane. The barrel spans from the bottom of the ground
+        plane to the top of the leg.
 
         Returns
         -------
         None
+
+        Raises
+        ------
+        ValueError
+            If the via does not fit inside the leg's overlap with the ground
+            plane.
         """
+        via_diameter_mm = self.params.via_diameter_mm
+        # The leg runs 1 mm past the ground edge (y = -1 to 0); the via sits there.
+        landing_mm = min(self.params.short_tip_width_mm, 1.0)
+        if not 0 < via_diameter_mm <= landing_mm:
+            raise ValueError(
+                f"via_diameter_mm must be in (0, {landing_mm}] to land on the "
+                f"shorting leg, got {via_diameter_mm}"
+            )
         short_via = self.CSX.AddMetal("short_via")
         short_via.SetColor("#B87333", 255)
-        via_start = [
-            0,
-            -1,
-            0,
-        ]
-        via_stop = [
-            self.params.short_tip_width_mm,
-            0,
-            self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
-        ]
-        short_via.AddBox(priority=6, start=via_start, stop=via_stop)
+        x_centre = self.params.short_tip_width_mm / 2
+        y_centre = -0.5
+        short_via.AddCylinder(
+            priority=6,
+            start=[x_centre, y_centre, -self.params.copper_thickness_mm],
+            stop=[
+                x_centre,
+                y_centre,
+                self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
+            ],
+            radius=via_diameter_mm / 2,
+        )
 
     def create_excite_line(self) -> None:
         """
