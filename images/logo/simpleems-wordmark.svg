@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="328 26 1224 248" width="1224" height="248">
+  <defs>
+    <linearGradient id="wordGradient" gradientUnits="userSpaceOnUse" x1="1010" y1="0" x2="1540" y2="0">
+      <stop offset="0" stop-color="#3987e5"/><stop offset="1" stop-color="#d95926"/>
+    </linearGradient>
+  </defs>
+  <text x="330" y="215" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="246" letter-spacing="-3.7">
+    <tspan fill="#898781" font-weight="300">simple</tspan><tspan fill="url(#wordGradient)" font-weight="700">EMS</tspan>
+  </text>
+</svg>

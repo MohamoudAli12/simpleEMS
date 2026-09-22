@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="26 26 1540 248" width="1540" height="248">
+  <defs>
+    <linearGradient id="wordGradient" gradientUnits="userSpaceOnUse" x1="1010" y1="0" x2="1540" y2="0">
+      <stop offset="0" stop-color="#3987e5"/><stop offset="1" stop-color="#d95926"/>
+    </linearGradient>
+    <linearGradient id="ringGradient" gradientUnits="userSpaceOnUse" x1="30" y1="0" x2="270" y2="0">
+      <stop offset="0" stop-color="#3987e5"/><stop offset="1" stop-color="#d95926"/>
+    </linearGradient>
+    <clipPath id="circleClip"><circle cx="150" cy="150" r="120"/></clipPath>
+    <clipPath id="tileLeft"><rect x="30" y="30" width="120" height="240"/></clipPath>
+    <clipPath id="tileRight"><rect x="150" y="30" width="120" height="240"/></clipPath>
+    <clipPath id="tileShape"><rect x="30" y="30" width="240" height="240" rx="52"/></clipPath>
+  </defs>
+  <rect x="30" y="30" width="120" height="240" fill="#6aa8f0" fill-opacity="0.12" clip-path="url(#tileShape)"/>
+  <rect x="150" y="30" width="120" height="240" fill="#f0875a" fill-opacity="0.12" clip-path="url(#tileShape)"/>
+  <g clip-path="url(#tileShape)">
+    <g clip-path="url(#tileLeft)">
+      <path d="M6 0V300M30 0V300M54 0V300M78 0V300M102 0V300M126 0V300M0 6H300M0 30H300M0 54H300M0 78H300M0 102H300M0 126H300M0 150H300M0 174H300M0 198H300M0 222H300M0 246H300M0 270H300M0 294H300" stroke="#6aa8f0" stroke-width="1.5" stroke-opacity="0.75" fill="none"/>
+      <rect x="126" y="126" width="24" height="24" fill="#6aa8f0"/>
+    </g>
+    <g clip-path="url(#tileRight)">
+      <path d="M0 -186H300M0 -162H300M0 -138H300M0 -114H300M0 -90H300M0 -66H300M0 -42H300M0 -18H300M0 6H300M0 30H300M0 54H300M0 78H300M0 102H300M0 126H300M0 150H300M0 174H300M0 198H300M0 222H300M0 246H300M0 270H300M0 294H300M0 318H300M0 342H300M0 366H300M0 390H300M0 414H300M0 438H300M0 462H300M0 486H300M-466.6 -150L-120.2 450M-120.2 -150L-466.6 450M-438.9 -150L-92.5 450M-92.5 -150L-438.9 450M-411.2 -150L-64.8 450M-64.8 -150L-411.2 450M-383.5 -150L-37.1 450M-37.1 -150L-383.5 450M-355.8 -150L-9.3 450M-9.3 -150L-355.8 450M-328 -150L18.4 450M18.4 -150L-328 450M-300.3 -150L46.1 450M46.1 -150L-300.3 450M-272.6 -150L73.8 450M73.8 -150L-272.6 450M-244.9 -150L101.5 450M101.5 -150L-244.9 450M-217.2 -150L129.2 450M129.2 -150L-217.2 450M-189.5 -150L156.9 450M156.9 -150L-189.5 450M-161.8 -150L184.6 450M184.6 -150L-161.8 450M-134.1 -150L212.4 450M212.4 -150L-134.1 450M-106.3 -150L240.1 450M240.1 -150L-106.3 450M-78.6 -150L267.8 450M267.8 -150L-78.6 450M-50.9 -150L295.5 450M295.5 -150L-50.9 450M-23.2 -150L323.2 450M323.2 -150L-23.2 450M4.5 -150L350.9 450M350.9 -150L4.5 450M32.2 -150L378.6 450M378.6 -150L32.2 450M59.9 -150L406.3 450M406.3 -150L59.9 450M87.6 -150L434.1 450M434.1 -150L87.6 450M115.4 -150L461.8 450M461.8 -150L115.4 450M143.1 -150L489.5 450M489.5 -150L143.1 450M170.8 -150L517.2 450M517.2 -150L170.8 450M198.5 -150L544.9 450M544.9 -150L198.5 450M226.2 -150L572.6 450M572.6 -150L226.2 450M253.9 -150L600.3 450M600.3 -150L253.9 450M281.6 -150L628 450M628 -150L281.6 450M309.3 -150L655.8 450M655.8 -150L309.3 450M337.1 -150L683.5 450M683.5 -150L337.1 450M364.8 -150L711.2 450M711.2 -150L364.8 450M392.5 -150L738.9 450M738.9 -150L392.5 450M420.2 -150L766.6 450M766.6 -150L420.2 450" stroke="#f0875a" stroke-width="1.5" stroke-opacity="0.75" fill="none"/>
+      <polygon points="150,150 177.7,150 163.9,126" fill="#f0875a"/>
+    </g>
+  </g>
+  <line x1="150" y1="30" x2="150" y2="270" stroke="#c3c2b7" stroke-width="2"/>
+  <rect x="30" y="30" width="240" height="240" rx="52" fill="none" stroke="url(#ringGradient)" stroke-width="4"/>
+  <text x="330" y="215" font-family="Inter, 'Helvetica Neue', Arial, sans-serif" font-size="246" letter-spacing="-3.7">
+    <tspan fill="#898781" font-weight="300">simple</tspan><tspan fill="url(#wordGradient)" font-weight="700">EMS</tspan>
+  </text>
+</svg>
