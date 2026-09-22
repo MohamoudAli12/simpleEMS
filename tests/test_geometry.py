@@ -23,6 +23,10 @@ pytestmark = pytest.mark.needs_csxcad
 pytest.importorskip("CSXCAD")
 pytest.importorskip("openEMS")
 
+from simpleEMS.ifa_antenna import (  # noqa: E402
+    InvertedFAntenna,
+    InvertedFAntennaParams,
+)
 from simpleEMS.microstrip_line import MicrostripLineParams  # noqa: E402
 from simpleEMS.patch_antenna import (  # noqa: E402
     InsetFedPatchAntenna,
@@ -1226,3 +1230,59 @@ class TestCopperLayerZLines:
         assert len(trace) == 1
         assert ground[0] == pytest.approx(-copper / 2, abs=1e-6)
         assert trace[0] == pytest.approx(height + copper / 2, abs=1e-6)
+
+
+@pytest.mark.needs_csxcad
+class TestShortingVias:
+    def test_each_bandpass_stub_is_grounded_by_cylinders(self, built_bandpass):
+        _structure, simulation, params, _ports = built_bandpass
+        for stub_number in range(1, params.filter_order + 1):
+            vias = primitives_named(simulation.CSX, f"shunt_line_short_{stub_number}")
+            assert vias
+            for via in vias:
+                assert via.GetTypeName() == "Cylinder"
+                assert via.GetRadius() == pytest.approx(params.via_diameter_mm / 2)
+
+    @pytest.mark.parametrize(
+        ("width_mm", "expected_count"),
+        [(0.6, 1), (1.79, 1), (1.8, 2), (3.0, 3), (4.2, 4)],
+        ids=["exactly-one", "just-short-of-two", "two", "three", "four"],
+    )
+    def test_a_wider_stub_gets_more_vias_all_on_the_trace(
+        self, bandpass_filter_params, sim_for, width_mm, expected_count
+    ):
+        params = bandpass_filter_params
+        params.via_diameter_mm = 0.6
+        params.shunt_line_width_mm = [width_mm] * params.filter_order
+        simulation = sim_for(params)
+        BandPassQuarterWaveFilter(params, simulation).create_shunt_line_short()
+
+        stub_left = params.line_length_mm
+        stub_end = params.series_line_width_mm + params.shunt_line_length_mm[0]
+        vias = primitives_named(simulation.CSX, "shunt_line_short_1")
+        assert len(vias) == expected_count
+        boxes = sorted((bbox(via) for via in vias), key=lambda box: box[0][0])
+        for box in boxes:
+            assert box[0][0] >= stub_left - 1e-9
+            assert box[1][0] <= stub_left + width_mm + 1e-9
+            assert box[1][1] <= stub_end + 1e-9
+        for left, right in zip(boxes, boxes[1:], strict=False):
+            assert right[0][0] - left[1][0] >= params.via_diameter_mm - 1e-9
+
+    def test_a_via_wider_than_a_stub_is_rejected(self, bandpass_filter_params, sim_for):
+        bandpass_filter_params.via_diameter_mm = 2 * max(
+            bandpass_filter_params.shunt_line_width_mm
+        )
+        structure = BandPassQuarterWaveFilter(
+            bandpass_filter_params, sim_for(bandpass_filter_params)
+        )
+        with pytest.raises(ValueError, match="via_diameter_mm"):
+            structure.create_shunt_line_short()
+
+    def test_the_ifa_short_is_a_cylinder_over_the_ground(self, fr4, sim_for):
+        params = InvertedFAntennaParams(resonant_freq=2.45e9, span_freq=1e9, **fr4)
+        simulation = sim_for(params)
+        InvertedFAntenna(params, simulation).create_short_via()
+        (via,) = primitives_named(simulation.CSX, "short_via")
+        assert via.GetTypeName() == "Cylinder"
+        assert via.GetStart()[1] < 0  # sits over the ground half (y < 0)
