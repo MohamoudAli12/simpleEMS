@@ -563,7 +563,6 @@ def test_getdp_is_never_left_waiting_on_stdin(tmp_path):
 
 
 @pytest.mark.needs_csxcad
-@pytest.mark.needs_csxcad
 class TestLossTangentRoundTrip:
     """kappa is fixed at one frequency; reading it back elsewhere scales loss."""
 
@@ -634,6 +633,7 @@ class TestModeAttenuation:
         assert self._mode(93.77 + 1e-9j).alpha_db_per_m == 0.0
 
 
+@pytest.mark.needs_csxcad
 class TestFEMOptionsValidation:
     @pytest.mark.parametrize(
         "boundary", ["silver_muller", "pml", "pec"], ids=["abc", "pml", "pec"]
@@ -1031,6 +1031,7 @@ class TestWavePortFaces:
         assert planes == {}
 
 
+@pytest.mark.needs_csxcad
 class TestPortSolidGrouping:
     """A CPW port is drawn as one solid per gap; both belong to one port."""
 
