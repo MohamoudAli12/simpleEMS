@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/logo/simpleems-logo.svg" alt="simpleEMS logo" width="420">
+</p>
+
 # simpleEMS
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL_v3_or_later-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![PyPI Version](https://img.shields.io/pypi/v/simpleEMS)](https://pypi.org/project/simpleEMS/)
