@@ -563,7 +563,92 @@ def test_getdp_is_never_left_waiting_on_stdin(tmp_path):
 
 
 @pytest.mark.needs_csxcad
+@pytest.mark.needs_csxcad
+class TestLossTangentRoundTrip:
+    """kappa is fixed at one frequency; reading it back elsewhere scales loss."""
+
+    @staticmethod
+    def _csx(kappa: float):
+        CSXCAD = pytest.importorskip("CSXCAD")
+        csx = CSXCAD.ContinuousStructure()
+        sub = csx.AddMaterial("substrate")
+        sub.SetMaterialProperty(epsilon=4.4, kappa=kappa)
+        sub.AddBox([-10, -15, 0], [10, 15, 1.6])
+        return csx
+
+    @staticmethod
+    def _kappa(tand, freq, eps_r=4.4):
+        from simpleEMS.fem_materials import EPS0
+
+        return tand * 2 * math.pi * freq * EPS0 * eps_r
+
+    def test_the_defining_frequency_recovers_the_loss_tangent(self):
+        from simpleEMS.fem_backend import _csx_roles
+
+        design = 2.45e9
+        csx = self._csx(self._kappa(0.001, design))
+
+        _roles, diels, _ports, _sigma = _csx_roles(csx, design)
+
+        assert diels["substrate"].tan_d == pytest.approx(0.001, rel=1e-9)
+
+    def test_another_frequency_scales_it_by_the_ratio(self):
+        """This is what a sweep's band centre used to do to a 2.45 GHz board."""
+        from simpleEMS.fem_backend import _csx_roles
+
+        csx = self._csx(self._kappa(0.001, 2.45e9))
+
+        _roles, diels, _ports, _sigma = _csx_roles(csx, 2.0e9)
+
+        assert diels["substrate"].tan_d == pytest.approx(0.001 * 2.45 / 2.0, rel=1e-9)
+
+    def test_a_lossless_board_stays_lossless(self):
+        from simpleEMS.fem_backend import _csx_roles
+
+        _roles, diels, _ports, _sigma = _csx_roles(self._csx(0.0), 2.45e9)
+
+        assert diels["substrate"].tan_d == 0.0
+
+
+class TestModeAttenuation:
+    """A lossy mode's beta is complex; its imaginary part is the attenuation."""
+
+    @staticmethod
+    def _mode(beta):
+        return fem_port_mode.PortMode(
+            number=1, freq=2.45e9, beta=beta, n_eff=1.0, zc=50.0, pos_path=""
+        )
+
+    def test_a_lossless_mode_reports_no_attenuation(self):
+        assert self._mode(93.77 + 0j).alpha_db_per_m == 0.0
+
+    def test_a_lossy_mode_reports_its_attenuation(self):
+        """FR-4 at 2.45 GHz: Hammerstad-Jensen gives about 0.37 dB/m."""
+        mode = self._mode(93.4719 - 0.042867j)
+
+        assert mode.alpha_np_per_m == pytest.approx(0.042867)
+        assert mode.alpha_db_per_m == pytest.approx(0.3723, abs=5e-4)
+
+    def test_a_growing_mode_is_not_reported_as_gain(self):
+        """Numerical noise can put a small positive imaginary part on beta."""
+        assert self._mode(93.77 + 1e-9j).alpha_db_per_m == 0.0
+
+
 class TestFEMOptionsValidation:
+    @pytest.mark.parametrize(
+        "boundary", ["silver_muller", "pml", "pec"], ids=["abc", "pml", "pec"]
+    )
+    def test_every_outer_boundary_is_accepted(self, boundary):
+        from simpleEMS.fem_backend import FEMOptions
+
+        assert FEMOptions(boundary=boundary).boundary == boundary
+
+    def test_an_unknown_outer_boundary_is_rejected_by_name(self):
+        from simpleEMS.fem_backend import FEMOptions
+
+        with pytest.raises(ValueError, match="'silver_muller', 'pml' or 'pec'"):
+            FEMOptions(boundary="absorbing")
+
     def test_a_mode_index_beyond_the_modes_computed_is_rejected_up_front(self):
         from simpleEMS.fem_backend import FEMOptions
 
@@ -812,6 +897,140 @@ class TestWavePortSpan:
 
 
 @pytest.mark.needs_csxcad
+class TestWavePortFaces:
+    """A wave port stands on an end of the structure, and names that face.
+
+    A wave port terminates the simulation domain, so the air box must not pad
+    the face it sits on. These cover which face each port is found on, and the
+    snap that absorbs the fraction of a millimetre openEMS's grid moves a CPW
+    port's reference plane by.
+    """
+
+    # a 1.6 mm board in the xy plane, the line running along y
+    BOARD = (-0.012, -0.015, 0.0, 0.012, 0.015, 0.0016)
+    # FR-4 at 3 GHz: 47.6 mm, so ports may be snapped by up to 0.476 mm
+    LAMBDA_MIN = 0.0476
+
+    def sheet(self, at, width=0.003, x_centre=0.0):
+        """A port sheet flat in y at ``at``, spanning the substrate in z."""
+        return (x_centre - width / 2, at, 0.0, x_centre + width / 2, at, 0.001635)
+
+    # (role, name, bbox, bbox_volume) as _snapshot_solids records them: the
+    # board and its ground, plus a port solid the exporter gave a micron of
+    # thickness, so it reaches half a micron past the board
+    ORIGINALS = [
+        ("dielectric", "substrate", (-0.012, -0.015, 0.0, 0.012, 0.015, 0.0016), 1.0),
+        ("pec", "ground", (-0.012, -0.015, -3.5e-5, 0.012, 0.015, 0.0), 1.0),
+        ("port", "p1", (-0.0015, -0.0150005, 0.0, 0.0015, -0.0149995, 0.001635), 0.0),
+    ]
+
+    def faces(self, port_geo, ports, originals=None):
+        from simpleEMS.fem_backend import Problem
+        from simpleEMS.fem_geometry import _wave_port_faces
+
+        prob = Problem(step_file="s.step")
+        prob.ports = ports
+        return _wave_port_faces(
+            prob,
+            port_geo,
+            self.ORIGINALS if originals is None else originals,
+            self.BOARD,
+            self.LAMBDA_MIN,
+        )
+
+    def wave_port(self, number, solids, prop_dir=""):
+        from simpleEMS.fem_backend import PortSpec
+
+        return PortSpec(
+            solids[0],
+            number,
+            kind="wave",
+            direction="z",
+            prop_dir=prop_dir,
+            solids=list(solids),
+        )
+
+    @pytest.mark.parametrize(
+        ("at", "face"),
+        [(-0.015, (1, 0)), (0.015, (1, 1))],
+        ids=["low", "high"],
+    )
+    def test_a_flush_port_names_the_face_it_stands_on(self, at, face):
+        faces, planes = self.faces({"p1": self.sheet(at)}, [self.wave_port(1, ["p1"])])
+
+        assert set(faces) == {face}
+        assert faces[face] == pytest.approx(at)
+        assert planes == {1: pytest.approx(at)}
+
+    def test_both_ports_of_a_line_terminate_their_own_face(self):
+        faces, planes = self.faces(
+            {"p1": self.sheet(-0.015), "p2": self.sheet(0.015)},
+            [self.wave_port(1, ["p1"]), self.wave_port(2, ["p2"])],
+        )
+
+        assert faces == {
+            (1, 0): pytest.approx(-0.015),
+            (1, 1): pytest.approx(0.015),
+        }
+        assert planes == {1: pytest.approx(-0.015), 2: pytest.approx(0.015)}
+
+    def test_a_port_snapped_off_the_end_by_the_grid_is_pulled_back(self):
+        """openEMS puts a CPW port's reference plane on an FDTD grid line,
+        which lands it a fraction of a millimetre inside the board."""
+        faces, planes = self.faces(
+            {"p1": self.sheet(-0.0149333)}, [self.wave_port(1, ["p1"])]
+        )
+
+        assert set(faces) == {(1, 0)}
+        assert planes[1] == pytest.approx(-0.015)
+
+    def test_a_port_in_the_middle_of_the_board_is_refused(self):
+        with pytest.raises(RuntimeError, match="wave port 1 sits"):
+            self.faces({"p1": self.sheet(0.0)}, [self.wave_port(1, ["p1"])])
+
+    def test_the_refusal_names_both_ends_and_the_way_out(self):
+        with pytest.raises(RuntimeError) as excinfo:
+            self.faces({"p1": self.sheet(0.0)}, [self.wave_port(1, ["p1"])])
+
+        message = str(excinfo.value)
+        assert "-15.0000" in message and "15.0000" in message
+        assert "lumpedport" in message
+
+    def test_a_cpw_port_is_one_face_from_both_its_gap_solids(self):
+        """Both slots are drawn as separate solids on the same plane."""
+        faces, planes = self.faces(
+            {
+                "g1": self.sheet(-0.015, width=0.0005, x_centre=-0.0012),
+                "g2": self.sheet(-0.015, width=0.0005, x_centre=0.0012),
+            },
+            [self.wave_port(1, ["g1", "g2"])],
+        )
+
+        assert set(faces) == {(1, 0)}
+        assert planes == {1: pytest.approx(-0.015)}
+
+    def test_an_explicit_prop_dir_is_honoured(self):
+        """The line runs along x here, so the port terminates an x face."""
+        port = (-0.012, -0.004, 0.0, -0.012, 0.004, 0.001635)
+        faces, planes = self.faces(
+            {"p1": port}, [self.wave_port(1, ["p1"], prop_dir="x")]
+        )
+
+        assert set(faces) == {(0, 0)}
+        assert planes == {1: pytest.approx(-0.012)}
+
+    def test_a_lumped_port_terminates_nothing(self):
+        from simpleEMS.fem_backend import PortSpec
+
+        faces, planes = self.faces(
+            {"p1": self.sheet(0.0)},
+            [PortSpec("p1", 1, direction="z")],
+        )
+
+        assert faces == {}
+        assert planes == {}
+
+
 class TestPortSolidGrouping:
     """A CPW port is drawn as one solid per gap; both belong to one port."""
 

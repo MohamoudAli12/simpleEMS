@@ -401,6 +401,63 @@ class TestOptions:
 
         assert "Region[210]" in content
 
+    def wave_mesh(self):
+        """The same mesh, with its port read as a wave port."""
+        return make_mesh(
+            port_regions={
+                1: PortMesh(
+                    number=1,
+                    region=port_region(1),
+                    direction="z",
+                    z0=50.0,
+                    gap=1.6e-3,
+                    width=3.0e-3,
+                    center=(0.0, 0.0, 0.0008),
+                    kind="wave",
+                    prop_dir="y",
+                )
+            }
+        )
+
+    def test_a_wave_port_admittance_is_complex(self, tmp_path):
+        """A lossy line's modal admittance beta/k0 is complex, and GetDP's
+        -setnumber only carries reals, so it arrives as a pair."""
+        content = write(make_problem(), self.wave_mesh(), tmp_path)
+
+        assert "NEFF_RE_1" in content
+        assert "NEFF_IM_1" in content
+        assert "Yrel_1[] = Complex[NEFF_RE_1, NEFF_IM_1];" in content
+
+    def test_a_lumped_port_admittance_stays_a_real_sheet(self, tmp_path):
+        """Only a wave port terminates into a mode; a lumped port is a sheet."""
+        content = write(make_problem(), make_mesh(), tmp_path)
+
+        assert "NEFF_RE_1" not in content
+        assert "Yrel_1[] = eta0 /" in content
+
+    def test_a_pec_boundary_shorts_the_outer_box(self, tmp_path):
+        """A shielded enclosure: the outer faces join BndPEC and there is no
+        absorbing term left to emit."""
+        content = write(make_problem(), make_mesh(boundary="pec"), tmp_path)
+
+        assert "BndPEC = Region[{Pec, Abc}]" in content
+        assert "Silver-Muller" not in content
+        assert "In Abc ;" not in content
+
+    def test_a_pec_boundary_still_declares_the_region(self, tmp_path):
+        """The mesh tags those faces 500 either way; only their treatment
+        changes, so the group has to stay for BndPEC to name it."""
+        content = write(make_problem(), make_mesh(boundary="pec"), tmp_path)
+
+        assert "Abc  = Region[500];" in content
+
+    def test_the_other_boundaries_leave_the_outer_box_free(self, tmp_path):
+        for boundary in ("silver_muller", "pml"):
+            content = write(make_problem(), make_mesh(boundary=boundary), tmp_path)
+
+            assert "BndPEC = Region[{Pec}]" in content
+            assert "In Abc ;" in content
+
     @pytest.mark.parametrize("order", [1, 2])
     def test_element_order_is_written_as_the_feorder_constant(self, tmp_path, order):
         """The second-order basis functions are always present in the file but

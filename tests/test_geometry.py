@@ -1173,3 +1173,56 @@ class TestSubstrateCells:
         for position in expected:
             assert np.min(np.abs(interior_lines - position)) < 1e-3
         assert len(interior_lines) == len(expected) + 1
+
+
+# ---------------------------------------------------------------------
+# Copper layers get one z-line whatever the frequency
+# ---------------------------------------------------------------------
+class TestCopperLayerZLines:
+    """A copper layer is one line thick in z at any design frequency.
+
+    ``FDTD_metal_mesh_resolution`` shrinks with the wavelength while
+    ``copper_thickness_mm`` stays at 35 um, so above roughly 40 GHz the foil
+    stops being thin relative to the metal resolution. The thin-interval
+    collapse in ``_gen_mesh_in_bounds`` has to keep collapsing it anyway --
+    otherwise the layer takes ``min_lines`` lines across 35 um, a spacing far
+    finer than anything else in the grid, and the FDTD timestep follows the
+    smallest cell.
+    """
+
+    @staticmethod
+    def lines_within(simulation, lower, upper):
+        z_lines = np.asarray(simulation.CSX.GetGrid().GetLines(2))
+        return z_lines[(z_lines >= lower - 1e-9) & (z_lines <= upper + 1e-9)]
+
+    @pytest.mark.parametrize(
+        ("resonant_freq", "substrate_thickness_mm"),
+        [(2.45e9, 1.6), (24e9, 0.254), (60e9, 0.125)],
+        ids=["2.45GHz", "24GHz", "60GHz"],
+    )
+    def test_each_copper_layer_gets_a_single_line(
+        self, sim_for, resonant_freq, substrate_thickness_mm
+    ):
+        params = InsetFedPatchParams(
+            resonant_freq=resonant_freq,
+            span_freq=resonant_freq / 20,
+            substrate_thickness_mm=substrate_thickness_mm,
+            substrate_eps_r=3.0,
+            substrate_tand=0.001,
+            charac_imp=50.0,
+            min_trace_spacing_mm=0.05,
+        )
+        simulation = sim_for(params)
+        patch = InsetFedPatchAntenna(params, simulation)
+        patch.build_inset_fed_patch_antenna()
+
+        patch.create_mesh()
+
+        copper = params.copper_thickness_mm
+        height = params.substrate_thickness_mm
+        ground = self.lines_within(simulation, -copper, 0.0)
+        trace = self.lines_within(simulation, height, height + copper)
+        assert len(ground) == 1
+        assert len(trace) == 1
+        assert ground[0] == pytest.approx(-copper / 2, abs=1e-6)
+        assert trace[0] == pytest.approx(height + copper / 2, abs=1e-6)

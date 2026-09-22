@@ -442,6 +442,47 @@ class TestMeshing:
         assert domain[2] == pytest.approx(bbox[2] - 2e-3, abs=1e-6)
         assert domain[5] == pytest.approx(bbox[5] + 6e-3, abs=1e-6)
 
+    @pytest.mark.slow
+    def test_a_wave_port_terminates_the_domain(self, edge_port_step, tmp_path):
+        """A wave port is the domain wall, not a sheet floating in the air.
+
+        Left inside the domain it has air behind it, so energy passes around
+        its outline and the matched modal sheet is applied to a face the mesh
+        continues through on both sides.
+        """
+        meta = self.mesh_only(
+            edge_port_step,
+            tmp_path / "wave",
+            ports={"port_1": {"number": 1, "kind": "wave", "prop_dir": "y"}},
+            FEM_air_pad_mm=3.0,
+        )
+
+        domain = meta["domain_bbox"]
+        mode = meta["port_modes"]["1"]
+        axis = mode["prop_axis"]
+        wall = domain[axis] if mode["plane_at"] < 0 else domain[axis + 3]
+
+        assert mode["plane_at"] == pytest.approx(wall, abs=1e-7)
+
+    @pytest.mark.slow
+    def test_only_the_wave_port_face_loses_its_padding(self, edge_port_step, tmp_path):
+        """The other five faces keep the padding they were asked for."""
+        meta = self.mesh_only(
+            edge_port_step,
+            tmp_path / "wave_pad",
+            ports={"port_1": {"number": 1, "kind": "wave", "prop_dir": "y"}},
+            FEM_air_pad_mm=3.0,
+        )
+
+        bbox, domain = meta["bbox"], meta["domain_bbox"]
+        axis = meta["port_modes"]["1"]["prop_axis"]
+
+        assert domain[axis] == pytest.approx(bbox[axis], abs=1e-7)
+        for i in range(3):
+            if i != axis:
+                assert domain[i] == pytest.approx(bbox[i] - 3e-3, abs=1e-6)
+            assert domain[i + 3] == pytest.approx(bbox[i + 3] + 3e-3, abs=1e-6)
+
     def test_no_symmetry_is_recorded_by_default(self, named_step, tmp_path):
         meta = self.mesh_only(named_step, tmp_path / "out")
 

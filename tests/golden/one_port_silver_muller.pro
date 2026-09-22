@@ -46,7 +46,7 @@ Function {
 
   dir_1[] = Vector[0., 0., 1.];
   ePort_1[] = dir_1[];
-  Yrel_1 = eta0 / (93.74999999999999);  // eta0/Zs, Zs=z0*w/gap
+  Yrel_1[] = eta0 / (93.74999999999999);  // eta0/Zs, Zs=z0*w/gap
   eInc[Port_1] = ($ActivePort == 1) ? ePort_1[] : Vector[0.,0.,0.];
   eInc[Abc] = Vector[0.,0.,0.];
 }
@@ -105,9 +105,9 @@ Formulation {
 
 
       // lumped port 1: resistive sheet (Z0=50.0) + source
-      Galerkin { [ -I[]*k0[]*Yrel_1*(1/muR[]) * Normal[] /\ (Normal[] /\ Dof{e}) , {e} ] ;
+      Galerkin { [ -I[]*k0[]*Yrel_1[]*(1/muR[]) * Normal[] /\ (Normal[] /\ Dof{e}) , {e} ] ;
         In Port_1 ; Integration I1 ; Jacobian Jac ; }
-      Galerkin { [ 2*I[]*k0[]*Yrel_1*(1/muR[]) * Normal[] /\ (Normal[] /\ eInc[]) , {e} ] ;
+      Galerkin { [ 2*I[]*k0[]*Yrel_1[]*(1/muR[]) * Normal[] /\ (Normal[] /\ eInc[]) , {e} ] ;
         In Port_1 ; Integration I1 ; Jacobian Jac ; }
     }
   }

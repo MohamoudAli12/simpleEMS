@@ -44,6 +44,20 @@ class TestDerivedQuantities:
 
         assert params.substrate_kappa == pytest.approx(expected, rel=1e-12)
 
+    def test_kappa_is_read_back_where_it_was_defined(self, params):
+        """The FEM backend inverts kappa to a loss tangent. openEMS fixes kappa
+        at one frequency, so inverting it anywhere else scales the loss: read
+        back at the band centre instead of main_freq, a 2-3 GHz sweep at
+        2.45 GHz returns 0.001225 for a 0.001 board."""
+        options = params.fem_options
+
+        assert options.kappa_freq == pytest.approx(params.main_freq)
+
+        recovered = options.kappa_freq and params.substrate_kappa / (
+            2 * np.pi * options.kappa_freq * EPS0 * params.substrate_eps_r
+        )
+        assert recovered == pytest.approx(params.substrate_tand, rel=1e-12)
+
     def test_lossless_substrate_has_zero_kappa(self, fr4):
         from simpleEMS.patch_antenna import InsetFedPatchParams
 
@@ -201,15 +215,30 @@ class TestFEMOptions:
         assert params.FEM_mesh_fine_scale == defaults.mesh_fine_scale
         assert params.FEM_min_layers == defaults.min_layers
 
+    # FEMOptions fields that are derived rather than exposed as a FEM_* knob,
+    # mapped to the SimParams attribute each is fed from.
+    DERIVED_OPTIONS = {"kappa_freq": "main_freq"}
+
     def test_fem_options_property_round_trips_every_field(self, params):
-        """Every ``FEMOptions`` field must be fed by a ``FEM_*`` param; a
-        field added to one and not the other would silently use the default."""
+        """Every ``FEMOptions`` field must be fed by a ``FEM_*`` param, or be a
+        named derived field; one added to neither would silently use the
+        default."""
         options = params.fem_options
 
         for field in dataclasses.fields(FEMOptions):
+            if field.name in self.DERIVED_OPTIONS:
+                continue
             flat_name = f"FEM_{field.name}"
             assert hasattr(params, flat_name), f"{flat_name} missing on SimParams"
             assert getattr(options, field.name) == getattr(params, flat_name)
+
+    def test_derived_options_are_fed_from_their_source(self, params):
+        """``kappa_freq`` is not a knob: it is the frequency openEMS's kappa was
+        built at, so it has to follow ``main_freq`` and not drift from it."""
+        options = params.fem_options
+
+        for name, source in self.DERIVED_OPTIONS.items():
+            assert getattr(options, name) == getattr(params, source)
 
     def test_custom_values_reach_the_bundled_options(self, fr4):
         from simpleEMS.patch_antenna import InsetFedPatchParams

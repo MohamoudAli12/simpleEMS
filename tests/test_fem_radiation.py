@@ -176,6 +176,61 @@ class TestParseMatlabGrid:
 
 
 # ---------------------------------------------------------------------
+# a PEC box cannot radiate
+# ---------------------------------------------------------------------
+class TestPecBoxRefusesAFarField:
+    """Under FEM_boundary='pec' the outer box is a perfect conductor, so the
+    fields are those of a shielded enclosure and no pattern exists."""
+
+    def meta(self, tmp_path, boundary):
+        import json
+
+        (tmp_path / "fem_mesh.json").write_text(
+            json.dumps(
+                {
+                    "boundary": boundary,
+                    "pro_path": str(tmp_path / "s.pro"),
+                    "msh_path": str(tmp_path / "s.msh"),
+                    "bbox": [0, 0, 0, 0.05, 0.05, 0.002],
+                    "domain_bbox": [-0.05, -0.05, -0.05, 0.1, 0.1, 0.05],
+                }
+            )
+        )
+        return tmp_path
+
+    def test_a_pec_box_is_refused(self, tmp_path):
+        from simpleEMS.fem_radiation import FEMNF2FF
+
+        with pytest.raises(ValueError, match="no far field under FEM_boundary='pec'"):
+            FEMNF2FF()._pattern(str(self.meta(tmp_path, "pec")), 2.45e9)
+
+    def test_the_refusal_says_what_to_use_instead(self, tmp_path):
+        from simpleEMS.fem_radiation import FEMNF2FF
+
+        with pytest.raises(ValueError) as excinfo:
+            FEMNF2FF()._pattern(str(self.meta(tmp_path, "pec")), 2.45e9)
+
+        assert "silver_muller" in str(excinfo.value)
+        assert "pml" in str(excinfo.value)
+
+    @pytest.mark.parametrize("boundary", ["silver_muller", "pml"])
+    def test_an_absorbing_box_is_not_refused(self, tmp_path, boundary, monkeypatch):
+        """Only 'pec' is refused. The solver is stubbed out: letting the real
+        one run here would launch getdp on a mesh that does not exist."""
+        from simpleEMS import fem_radiation
+
+        def _stub(*args, **kwargs):
+            raise RuntimeError("stubbed solver")
+
+        monkeypatch.setattr(fem_radiation.fem_solver, "solve_fields_and_power", _stub)
+
+        with pytest.raises(RuntimeError, match="stubbed solver"):
+            fem_radiation.FEMNF2FF()._pattern(
+                str(self.meta(tmp_path, boundary)), 2.45e9
+            )
+
+
+# ---------------------------------------------------------------------
 # _check_farfield_margin
 # ---------------------------------------------------------------------
 class TestCheckFarfieldMargin:
