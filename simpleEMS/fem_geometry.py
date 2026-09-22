@@ -385,6 +385,128 @@ _WAVEPORT_WIDTH_NARROW = 10.0  # port widths per trace width, trace narrower tha
 _WAVEPORT_WIDTH_WIDE = 5.0  # port widths per trace width, otherwise
 _WAVEPORT_HEIGHT = 6.0  # port heights per substrate thickness
 
+# A wave port terminates the domain, so its plane has to be an end of the
+# structure. A CPW port's plane is snapped onto the FDTD grid before the FEM
+# backend ever sees it, which lands it a fraction of a millimetre inside the
+# board, so a plane this close to the end is pulled out to it.
+_PORT_SNAP_FRAC = 0.01  # of the shortest wavelength in the densest dielectric
+
+
+def _structure_bbox(originals: list) -> tuple:
+    """Extents of the structure proper: everything but the ports.
+
+    A port solid is measured and then deleted, and the exporter gives one drawn
+    as a sheet a micron of thickness, so it reaches half a micron past the board
+    it sits on. That overhang must not decide where the board ends.
+
+    Parameters
+    ----------
+    originals : list
+        One ``(role, name, bbox, bbox_volume)`` entry per solid.
+
+    Returns
+    -------
+    tuple
+        Extents as ``(x0, y0, z0, x1, y1, z1)``, empty-safe: a geometry of
+        nothing but ports returns zeros.
+    """
+    boxes = [bb for role, _n, bb, _v in originals if role not in ("ignore", "port")]
+    if not boxes:
+        return (0.0,) * 6
+    return tuple(
+        [min(bb[i] for bb in boxes) for i in range(3)]
+        + [max(bb[i + 3] for bb in boxes) for i in range(3)]
+    )
+
+
+def _wave_port_faces(
+    problem: Problem,
+    port_geo: dict,
+    originals: list,
+    diel_bbox: tuple,
+    lambda_min: float,
+) -> tuple[dict[tuple[int, int], float], dict[int, float]]:
+    """Find which faces of the structure the wave ports stand on.
+
+    A wave port is a terminating boundary, not a sheet in the middle of the air:
+    the mode it launches has nothing behind it. So the air box must put its wall
+    on the port plane, and this reports which faces those are and where they go.
+
+    The plane is the end of the structure proper, not of the port solid, and not
+    of the padded box: it has to cut the board, or the cross-section comes out
+    all air and the mode solve finds nothing guided.
+
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying the ports and their propagation axes.
+    port_geo : dict
+        Extents of each port solid, keyed by name.
+    originals : list
+        One ``(role, name, bbox, bbox_volume)`` entry per solid, which
+        :func:`_structure_bbox` measures the structure proper from.
+    diel_bbox : tuple
+        Extents of the dielectrics, used to derive an unset propagation axis.
+    lambda_min : float
+        Shortest wavelength in the densest dielectric, in metres, which sets how
+        far a port may be snapped.
+
+    Returns
+    -------
+    tuple[dict[tuple[int, int], float], dict[int, float]]
+        The plane to put each terminated face on, keyed by ``(axis, side)`` with
+        ``side`` ``0`` for the low face and ``1`` for the high one; and the plane
+        each wave port sits on, keyed by port number.
+
+    Raises
+    ------
+    RuntimeError
+        If a wave port's plane is too far inside the structure to be an end of
+        it, so no domain wall can be placed on it.
+    """
+    struct = _structure_bbox(originals)
+    snap = _PORT_SNAP_FRAC * lambda_min
+    faces: dict[tuple[int, int], float] = {}
+    planes: dict[int, float] = {}
+    for pspec in problem.ports:
+        if pspec.kind != "wave":
+            continue
+        boxes = [port_geo[name] for name in pspec.solids if name in port_geo]
+        if not boxes:
+            continue
+        merged = tuple(
+            [min(box[i] for box in boxes) for i in range(3)]
+            + [max(box[i + 3] for box in boxes) for i in range(3)]
+        )
+        axis = (
+            {"x": 0, "y": 1, "z": 2}[pspec.prop_dir]
+            if pspec.prop_dir
+            else _port_prop_axis(merged, diel_bbox)
+        )
+        plane = 0.5 * (merged[axis] + merged[axis + 3])
+        ends = ((struct[axis], 0), (struct[axis + 3], 1))
+        end, side = min(ends, key=lambda pair: abs(plane - pair[0]))
+        offset = abs(plane - end)
+        if offset > snap:
+            raise RuntimeError(
+                f"wave port {pspec.number} sits {offset * 1e3:.4f} mm inside the "
+                f"structure along '{'xyz'[axis]}', which spans "
+                f"{struct[axis] * 1e3:.4f} to {struct[axis + 3] * 1e3:.4f} mm. A "
+                "wave port terminates the simulation domain, so it has to stand "
+                "on an end of the structure -- draw the line out to the board "
+                "edge, or use FEM_port_type='lumpedport' for a feed inside the "
+                "board."
+            )
+        if offset > 0.0:
+            console.print(
+                f"[info]FEM: wave port {pspec.number} moved "
+                f"{offset * 1e3:.4f} mm onto the {'xyz'[axis]}{'-+'[side]} end "
+                "of the structure, so it terminates the domain.[/info]"
+            )
+        faces[(axis, side)] = end
+        planes[pspec.number] = end
+    return faces, planes
+
 
 def _wave_port_span(
     port_bbox: tuple,
@@ -393,6 +515,7 @@ def _wave_port_span(
     domain_bbox: tuple,
     width_mm: float | None = None,
     height_mm: float | None = None,
+    plane: float | None = None,
 ) -> tuple:
     """Size a wave port's cross-section around the line it terminates.
 
@@ -414,6 +537,10 @@ def _wave_port_span(
     height_mm : float, optional
         Height along the board normal in millimetres, from the ground side of
         the substrate. ``None`` derives it from the substrate height.
+    plane : float, optional
+        Position along ``axis`` to place the cross-section on, which is both
+        the domain wall and the S-parameters' reference plane. ``None`` (the
+        default) keeps the plane the port solid was drawn on.
 
     Returns
     -------
@@ -449,9 +576,11 @@ def _wave_port_span(
     )
 
     span = list(domain_bbox)
-    # keep the plane where the port was drawn: the S-parameters' reference plane
-    span[axis] = port_bbox[axis]
-    span[axis + 3] = port_bbox[axis + 3]
+    # the port plane, which is both the domain wall and the S-parameters'
+    # reference plane
+    at = plane if plane is not None else 0.5 * (port_bbox[axis] + port_bbox[axis + 3])
+    span[axis] = at
+    span[axis + 3] = at
 
     centre = 0.5 * (port_bbox[across] + port_bbox[across + 3])
     span[across] = max(domain_bbox[across], centre - width / 2)
@@ -648,11 +777,10 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
         role = spec.role if spec else "ignore"
         if role in ("pec", "lossy_conductor", "port"):
             if role == "port" and short in wave_solids:
-                # A wave port's sheet has to cut the whole domain at the port
-                # plane, or energy simply passes around it -- but the domain
-                # does not exist yet; the air box is built after this. So only
-                # the plane is recorded here, and _build_wave_port_sheets makes
-                # the sheet once there is a domain to span.
+                # A wave port's plane *is* the domain wall, and its rectangle is
+                # clipped to the domain -- but the air box does not exist yet; it
+                # is built after this. So only the plane is recorded here, and
+                # _build_wave_port_sheets makes the sheet once there is a domain.
                 port_geo[short] = gmsh.model.getBoundingBox(dim, tag)
                 metal_solids.append((3, tag))
                 continue
@@ -682,6 +810,7 @@ def _build_wave_port_sheets(
     port_geo: dict,
     diel_bbox: tuple,
     domain_bbox: tuple,
+    port_planes: dict[int, float] | None = None,
 ) -> list:
     """Build each wave port's cross-section, once the domain extents are known.
 
@@ -708,6 +837,10 @@ def _build_wave_port_sheets(
         substrate height.
     domain_bbox : tuple
         Extents the sheet is clipped to, as ``(x0, y0, z0, x1, y1, z1)``.
+    port_planes : dict, optional
+        Plane each port is placed on, keyed by port number, from
+        :func:`_wave_port_faces`. A port missing from it keeps the plane its
+        solid was drawn on.
 
     Returns
     -------
@@ -745,6 +878,7 @@ def _build_wave_port_sheets(
             domain_bbox,
             problem.waveport_width_mm,
             problem.waveport_height_mm,
+            (port_planes or {}).get(pspec.number),
         )
         face_tag = _wave_port_sheet(span, "xyz"[axis])
         gmsh.model.occ.synchronize()
@@ -755,7 +889,10 @@ def _build_wave_port_sheets(
 
 
 def _build_air_box(
-    problem: Problem, struct: tuple, lambda0_max: float
+    problem: Problem,
+    struct: tuple,
+    lambda0_max: float,
+    port_faces: dict[tuple[int, int], float] | None = None,
 ) -> tuple[bool, tuple, tuple, float]:
     """Wrap the structure in an air box, plus an outer PML shell if requested.
 
@@ -772,6 +909,10 @@ def _build_air_box(
     lambda0_max : float
         Longest wavelength in the sweep, in metres, which sets the padding
         unless ``problem.air_pad_mm`` gives it directly.
+    port_faces : dict, optional
+        Where to put each face a wave port terminates, keyed by ``(axis, side)``,
+        from :func:`_wave_port_faces`. Those faces go on the port plane rather
+        than being padded, and carry no PML shell: the port is the boundary.
 
     Returns
     -------
@@ -784,24 +925,53 @@ def _build_air_box(
     faces_mm = problem.air_pad_faces_mm
     if faces_mm is None:
         auto = max(problem.air_pad_frac * lambda0_max, 3.0 * (struct[5] - struct[2]))
-        faces = ((auto, auto),) * 3
+        faces = [[auto, auto] for _ in range(3)]
     else:
-        faces = tuple((low * 1e-3, high * 1e-3) for low, high in faces_mm)
-    # inner box: each face stands off the structure by its own padding
-    ax0, ay0, az0 = (struct[axis] - faces[axis][0] for axis in range(3))
-    ax1, ay1, az1 = (struct[3 + axis] + faces[axis][1] for axis in range(3))
+        faces = [[low * 1e-3, high * 1e-3] for low, high in faces_mm]
+    port_faces = port_faces or {}
+    # a wave port is the domain wall, so its face goes on the port plane
+    for axis, side in sorted(port_faces):
+        if faces[axis][side] > 0.0:
+            console.print(
+                f"[info]FEM: dropping the {'xyz'[axis]}{'-+'[side]} air padding "
+                f"({faces[axis][side] * 1e3:.3f} mm): a wave port terminates the "
+                "domain on that face.[/info]"
+            )
+        faces[axis][side] = 0.0
+    # inner box: each face stands off the structure by its own padding, except
+    # the ones a wave port terminates, which sit exactly on its plane
+    low = [struct[axis] - faces[axis][0] for axis in range(3)]
+    high = [struct[3 + axis] + faces[axis][1] for axis in range(3)]
+    for (axis, side), plane in port_faces.items():
+        (low if side == 0 else high)[axis] = plane
+    ax0, ay0, az0 = low
+    ax1, ay1, az1 = high
     inner_bbox = (ax0, ay0, az0, ax1, ay1, az1)
     gmsh.model.occ.addBox(ax0, ay0, az0, ax1 - ax0, ay1 - ay0, az1 - az0)
     pml_thick = 0.0
     if is_pml:
-        # one uniform shell, sized off the tightest face so it never outgrows
-        # the smallest air gap; the .pro template carries a single PmlDelta
-        tightest_pad = min(pad for face in faces for pad in face)
-        pml_thick = max(0.2 * lambda0_max, 2.0 * tightest_pad / 3.0)
-        ox0, oy0, oz0 = ax0 - pml_thick, ay0 - pml_thick, az0 - pml_thick
-        ox1, oy1, oz1 = ax1 + pml_thick, ay1 + pml_thick, az1 + pml_thick
-        gmsh.model.occ.addBox(ox0, oy0, oz0, ox1 - ox0, oy1 - oy0, oz1 - oz0)
-        box_bbox = (ox0, oy0, oz0, ox1, oy1, oz1)
+        # one uniform shell, sized off the tightest face it actually covers so
+        # it never outgrows the smallest air gap; the .pro template carries a
+        # single PmlDelta. A wave-port face carries no shell -- the port is the
+        # boundary there, and a shell behind it would bury it in the domain.
+        padded = [
+            faces[axis][side]
+            for axis in range(3)
+            for side in range(2)
+            if (axis, side) not in port_faces
+        ]
+        pml_thick = max(0.2 * lambda0_max, 2.0 * min(padded) / 3.0) if padded else 0.0
+        outer_low = list(low)
+        outer_high = list(high)
+        for axis in range(3):
+            if (axis, 0) not in port_faces:
+                outer_low[axis] -= pml_thick
+            if (axis, 1) not in port_faces:
+                outer_high[axis] += pml_thick
+        gmsh.model.occ.addBox(
+            *outer_low, *(outer_high[i] - outer_low[i] for i in range(3))
+        )
+        box_bbox = (*outer_low, *outer_high)
     else:
         box_bbox = inner_bbox
     gmsh.model.occ.synchronize()
@@ -1324,15 +1494,25 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
     # kept for the wave-port mode solve, which needs to know which part of a
     # port's cross-section is substrate and which is air
     diel_bboxes = {name: bb for role, name, bb, _v in originals if role == "dielectric"}
+    # A wave port terminates the domain, so the air box must not pad the face it
+    # stands on. That has to be settled before the box is built.
+    port_faces, port_planes = _wave_port_faces(
+        problem, port_geo, originals, diel_bbox, lambda_min
+    )
     sheets = _build_footprint_sheets(problem, diel_bbox, port_geo)
     is_pml, inner_bbox, box_bbox, pml_thick = _build_air_box(
-        problem, struct, lambda0_max
+        problem, struct, lambda0_max, port_faces
     )
     # Now the domain exists, so a wave port's cross-section can be clipped to
     # it. Under a PML it is clipped to the inner box, so the sheet does not cut
     # into the absorbing shell.
     sheets = _build_wave_port_sheets(
-        problem, sheets, port_geo, diel_bbox, inner_bbox if is_pml else box_bbox
+        problem,
+        sheets,
+        port_geo,
+        diel_bbox,
+        inner_bbox if is_pml else box_bbox,
+        port_planes,
     )
     sym_axis_i, sym_plane, sheets = _apply_symmetry_cut(
         problem, struct, box_bbox, sheets

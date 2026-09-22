@@ -96,8 +96,16 @@ class SimParams:
         allowed to perform (must be ``>= 4``). Ignored by the FDTD backend.
         Default is ``10``.
     FEM_boundary : str, optional
-        FEM backend only. Outer truncation: ``"silver_muller"`` (default)
-        or ``"pml"``.
+        FEM backend only. Outer truncation: ``"silver_muller"`` (default),
+        ``"pml"`` or ``"pec"``. The first two let the box radiate;
+        ``"pec"`` shorts it instead, making the model a shielded enclosure.
+        Use ``"pec"`` for a closed structure -- a transmission line, a filter
+        -- where nothing is meant to leave the box. It is also the only
+        boundary that agrees with what a wave port's own transverse mode solve
+        assumes, since that mode is solved on a cross-section whose outline is
+        a PEC wall, so it is the one to reach for when a matched line loses
+        power between its ports. A PEC box cannot radiate, so
+        ``FEMNF2FF.CalcNF2FF`` refuses a far field under it.
     FEM_symmetry : tuple, optional
         FEM backend only. Mirror-symmetry plane ``(axis, kind, at)`` used to
         halve the mesh. ``None`` (default) disables symmetry.
@@ -117,7 +125,10 @@ class SimParams:
         ``[[8, 8], [8, 8], [2, 30]]`` for a patch, which needs a deep air
         column above it but almost none below its ground plane. Use this for
         non-radiating structures (e.g. filters) whose box shouldn't scale
-        with a wide S-parameter sweep's lowest frequency. If a far-field
+        with a wide S-parameter sweep's lowest frequency. A face a wave port
+        stands on is padded by nothing whatever this says, because the port
+        is the domain wall there; that face can therefore carry no far field.
+        If a far-field
         pattern is later requested and this padding is too small for an
         accurate near-to-far-field transform at the requested frequency,
         ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the face that is
@@ -150,9 +161,12 @@ class SimParams:
         ``"waveport"`` instead solves the transverse mode living on the port's
         cross-section and drives the line with that, which is what a
         transmission line needs: a microstrip quasi-TEM mode is not uniform
-        across the port face. The geometry is unchanged either way -- the
-        same ``AddLumpedPort`` or ``create_cpw_port`` call is simply read
-        differently. A coplanar waveguide port is always treated as a wave
+        across the port face. A wave port terminates the simulation domain, so
+        it has to stand on an end of the structure -- run the line out to the
+        board edge. The air box then puts its wall on the port plane, and a
+        port too far inside to do that is refused. The geometry is unchanged
+        either way -- the same ``AddLumpedPort`` or ``create_cpw_port`` call is
+        simply read differently. A coplanar waveguide port is always treated as a wave
         port, because its mode is odd and a single constant vector excites the
         even parallel-plate mode instead.
     FEM_port_mode_eps_eff : float, optional
@@ -281,6 +295,8 @@ class SimParams:
             port_mode_eps_eff=self.FEM_port_mode_eps_eff,
             waveport_width_mm=self.FEM_waveport_width_mm,
             waveport_height_mm=self.FEM_waveport_height_mm,
+            # substrate_kappa was built at main_freq; read it back there
+            kappa_freq=self.main_freq,
         )
 
     @property

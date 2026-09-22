@@ -83,7 +83,8 @@ def write_problem(
     # with no wave ports emits exactly what it always did.
     wave_ports = [pm for pm in ports if pm.is_wave]
     wave_consts = "".join(
-        f",\n  NEFF_{pm.number} = 1.0,   // beta/k0 of port {pm.number}'s mode"
+        f",\n  NEFF_RE_{pm.number} = 1.0,   // Re(beta/k0) of port {pm.number}'s mode"
+        f",\n  NEFF_IM_{pm.number} = 0.0,   // Im(beta/k0); negative on a lossy line"
         f"\n  ZC_{pm.number} = {_fmt(pm.z0)}   // its characteristic impedance [ohm]"
         for pm in wave_ports
     )
@@ -163,6 +164,28 @@ def write_problem(
     sym_in_pec = ", Sym" if (sym and mesh.sym_kind == "pec") else ""
     sym_in_tot = ", Sym" if sym else ""
 
+    # A "pec" outer boundary shorts the box instead of absorbing into it: the
+    # outer faces join BndPEC and the Silver-Muller term is not emitted. It
+    # makes the model a shielded enclosure, which is what a closed structure --
+    # a line, a filter -- actually wants, and it is the only boundary whose
+    # walls match what the wave port's own 2D mode solve assumes, since
+    # fem_port_mode.extract_cross_section treats the cross-section's outline as
+    # a PEC wall. It cannot radiate, so a far field is refused under it.
+    is_pec_box = getattr(mesh, "boundary", "silver_muller") == "pec"
+    abc_in_pec = ", Abc" if is_pec_box else ""
+    abc_eq = (
+        "      // outer boundary: perfect electric conductor, constrained to\n"
+        "      // E_tan = 0 through BndPEC -- a shielded box, nothing to absorb"
+        if is_pec_box
+        else (
+            "      // outer free-space Silver-Muller ABC (first-order "
+            "outgoing-wave boundary)\n"
+            "      Galerkin { [ -I[]*k0[] * (1/muR[]) * Normal[] /\\ "
+            "( Normal[] /\\ Dof{e} ) , {e} ] ;\n"
+            "        In Abc ; Integration I1 ; Jacobian Jac ; }"
+        )
+    )
+
     # PML: complex coordinate stretching in the outer shell. epsR and nuR (=1/muR)
     # become anisotropic tensors there; cX/cY/cZ = 1 - i*Damp/k0.
     pml = getattr(mesh, "pml_region", 0)
@@ -235,9 +258,16 @@ def write_problem(
             port_fun_lines.append(
                 f"  ePort_{pm.number}[] = ComplexVectorField[XYZ[]]{{{pm.number}}};"
             )
-            # a wave port terminates into its own mode, so the boundary term is
-            # scaled by the modal wave admittance beta/k0, not by a sheet
-            port_fun_lines.append(f"  Yrel_{pm.number} = NEFF_{pm.number};  // beta/k0")
+            # A wave port terminates into its own mode, so the boundary term is
+            # scaled by the modal wave admittance beta/k0, not by a sheet. It is
+            # complex on a lossy line -- beta carries the attenuation -- and
+            # GetDP's -setnumber only takes reals, so it arrives as two.
+            # Yrel is a Function, not a bare constant: a bare assignment in
+            # GetDP is evaluated at parse time and cannot hold a Complex[].
+            port_fun_lines.append(
+                f"  Yrel_{pm.number}[] = "
+                f"Complex[NEFF_RE_{pm.number}, NEFF_IM_{pm.number}];  // beta/k0"
+            )
             port_fun_lines.append(
                 f"  VMODE_{pm.number} = Sqrt[2*ZC_{pm.number}];"
                 f"  // voltage of the 1 W mode"
@@ -245,7 +275,7 @@ def write_problem(
         else:
             port_fun_lines.append(f"  ePort_{pm.number}[] = dir_{pm.number}[];")
             port_fun_lines.append(
-                f"  Yrel_{pm.number} = eta0 / ({_fmt(pm.sheet_impedance)});"
+                f"  Yrel_{pm.number}[] = eta0 / ({_fmt(pm.sheet_impedance)});"
                 f"  // eta0/Zs, Zs=z0*w/gap"
             )
         # $ActivePort (not the ACTIVE_PORT constant) so the source can be
@@ -268,9 +298,9 @@ def write_problem(
         )
         port_eq_lines.append(
             f"""      // {label}
-      Galerkin {{ [ -I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ Dof{{e}}) , {{e}} ] ;
+      Galerkin {{ [ -I[]*k0[]*Yrel_{pm.number}[]*(1/muR[]) * Normal[] /\\ (Normal[] /\\ Dof{{e}}) , {{e}} ] ;
         In Port_{pm.number} ; Integration I1 ; Jacobian Jac ; }}
-      Galerkin {{ [ 2*I[]*k0[]*Yrel_{pm.number}*(1/muR[]) * Normal[] /\\ (Normal[] /\\ eInc[]) , {{e}} ] ;
+      Galerkin {{ [ 2*I[]*k0[]*Yrel_{pm.number}[]*(1/muR[]) * Normal[] /\\ (Normal[] /\\ eInc[]) , {{e}} ] ;
         In Port_{pm.number} ; Integration I1 ; Jacobian Jac ; }}"""
         )
 
@@ -374,7 +404,7 @@ Group {{
   Abc  = Region[{ABC}];
 
   Ports  = Region[{{{ports_list}}}];
-  BndPEC = Region[{{Pec{sym_in_pec}}}];
+  BndPEC = Region[{{Pec{sym_in_pec}{abc_in_pec}}}];
   DomainDiel = Region[{{{diel_region_list}}}];
   Domain = Region[{{{diel_region_list}, Air{domain_pml}}}];
   BndAll = Region[{{Pec, {imped_extra}Ports, Abc}}];
@@ -443,9 +473,7 @@ Formulation {{
       Galerkin {{ [ -k0[]^2 * epsR[] * Dof{{e}} , {{e}} ] ;
         In Domain ; Integration I1 ; Jacobian Jac ; }}
 
-      // outer free-space Silver-Muller ABC (first-order outgoing-wave boundary)
-      Galerkin {{ [ -I[]*k0[] * (1/muR[]) * Normal[] /\\ ( Normal[] /\\ Dof{{e}} ) , {{e}} ] ;
-        In Abc ; Integration I1 ; Jacobian Jac ; }}
+{abc_eq}
 
 {chr(10).join(imped_eq_lines)}
 {chr(10).join(port_eq_lines)}
@@ -569,10 +597,17 @@ def write_mode_problem(
     for name, rid in sorted(mesh.dielectric_regions.items()):
         d = problem.solids[name].dielectric
         diel_lines.append(f"  Diel_{name} = Region[{rid}];")
-        # The mode solve wants the propagation constant of the lossless line;
-        # loss is carried by the 3D solve. Using the real part here keeps beta
-        # real and the eigenvalue filter simple.
-        epsr_lines.append(f"  epsR[Diel_{name}] = {_fmt(d.eps_r)};")
+        # The cross-section carries the same complex permittivity the 3D solve
+        # uses, so the mode comes out with the propagation constant of the real,
+        # lossy line: beta gains a negative imaginary part, which is the
+        # attenuation. This is what Ansys' port solver does -- "the port solver
+        # assumes that the wave port you define is connected to a waveguide that
+        # has the same cross-section and material properties as the port", and
+        # "wave ports calculate [...] complex propagation constant".
+        epsr_lines.append(
+            f"  epsR[Diel_{name}] = Complex[{_fmt(d.eps_r)}, "
+            f"-{_fmt(d.eps_r * d.tan_d)}];"
+        )
         nur_lines.append(f"  nuR[Diel_{name}] = {_fmt(1.0 / d.mu_r)};")
     nur_lines.append("  nuR[Air] = 1.;")
     diel_region_list = ", ".join(f"Diel_{n}" for n in sorted(mesh.dielectric_regions))

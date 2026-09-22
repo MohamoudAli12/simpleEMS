@@ -107,6 +107,22 @@ class PortMode:
         """Effective permittivity of the line, ``n_eff**2``."""
         return self.n_eff**2
 
+    @property
+    def alpha_np_per_m(self) -> float:
+        """Attenuation constant in nepers per metre.
+
+        Under the ``e^{jwt}`` convention a wave travelling in ``+z`` goes as
+        ``e^{-j beta z}``, so a lossy line puts the loss in a negative imaginary
+        part of ``beta`` and this is ``-Im(beta)``. It is zero for a lossless
+        cross-section.
+        """
+        return max(0.0, -float(self.beta.imag))
+
+    @property
+    def alpha_db_per_m(self) -> float:
+        """Attenuation constant in dB per metre."""
+        return 20.0 / math.log(10.0) * self.alpha_np_per_m
+
 
 @dataclass
 class _Section:
@@ -608,21 +624,24 @@ def _locate_and_sample(coords: NDArray, values: NDArray, pts: NDArray) -> NDArra
     return out
 
 
-def _characteristic_impedance(
+def _modal_voltage(
     coords: NDArray,
     values: NDArray,
     section: PortModeSetup,
     direction: str,
     samples: int = 201,
-) -> float:
+) -> complex:
     """
-    Characteristic impedance of a power-normalised mode, ``|V|^2 / (2P)``.
+    The signed modal voltage: the largest potential swing across the section.
 
-    ``V`` is the largest potential swing along a straight path across the
-    cross-section, which is the ground-to-conductor voltage without needing to
-    be told which conductor is the signal one: a conductor is an equipotential,
-    so the running integral of ``-E.dl`` flattens out on it and turns around
-    after it.
+    This is the ground-to-conductor voltage, found without being told which
+    conductor is the signal one: a conductor is an equipotential, so the running
+    integral of ``-E.dl`` flattens out on it and turns around after it.
+
+    The sign is kept, and it is what makes the mode's own sign reproducible.
+    The path is chosen by the geometry rather than by wherever the field happens
+    to peak, so the voltage it reads varies smoothly with frequency -- see
+    :func:`solve_port_mode`, which uses it to orient the mode.
 
     Parameters
     ----------
@@ -638,13 +657,13 @@ def _characteristic_impedance(
 
     Returns
     -------
-    float
-        The impedance in ohms, or ``0.0`` if the path lies along the port
-        normal, where there is no transverse voltage to integrate.
+    complex
+        The voltage in volts, or ``0`` if the path lies along the port normal,
+        where there is no transverse voltage to integrate.
     """
     axis3 = {"x": 0, "y": 1, "z": 2}[direction]
     if axis3 == section.prop_axis:
-        return 0.0
+        return 0j
     local = 0 if axis3 == section.axes[0] else 1
     other = 1 - local
 
@@ -665,7 +684,7 @@ def _characteristic_impedance(
     # largest voltage: a conductor is an equipotential, so the path that cuts
     # closest to it reads the full ground-to-conductor swing and the rest read
     # less.
-    best = 0.0
+    best = 0j
     for frac in np.linspace(0.02, 0.98, _VOLTAGE_PATHS):
         pts = np.zeros((samples, 2))
         pts[:, local] = s
@@ -681,8 +700,41 @@ def _characteristic_impedance(
         # running V(s) = -int E.dl, trapezoid
         seg = -0.5 * (comp[:-1] + comp[1:]) * dl
         running = np.concatenate([[0.0 + 0j], np.cumsum(seg)])
-        best = max(best, float(np.max(np.abs(running))))
-    return best * best / 2.0
+        peak = running[int(np.argmax(np.abs(running)))]
+        if abs(peak) > abs(best):
+            best = complex(peak)
+    return best
+
+
+def _characteristic_impedance(
+    coords: NDArray,
+    values: NDArray,
+    section: PortModeSetup,
+    direction: str,
+    samples: int = 201,
+) -> float:
+    """
+    Characteristic impedance of a power-normalised mode, ``|V|^2 / (2P)``.
+
+    Parameters
+    ----------
+    coords, values : NDArray
+        The mode profile, in the local frame and already power-normalised.
+    section : PortModeSetup
+        The prepared port, supplying the local frame and its extents.
+    direction : str
+        Axis the voltage path runs along: ``"x"``, ``"y"``, or ``"z"``.
+    samples : int
+        Number of points along the path. Default ``201``.
+
+    Returns
+    -------
+    float
+        The impedance in ohms, or ``0.0`` if the path lies along the port
+        normal, where there is no transverse voltage to integrate.
+    """
+    voltage = abs(_modal_voltage(coords, values, section, direction, samples))
+    return voltage * voltage / 2.0
 
 
 def _write_mode_view(
@@ -1060,6 +1112,18 @@ def solve_port_mode(
             f"(int|E|^2 = {integral:.4g}, beta = {beta:.4g})"
         )
     values = values * math.sqrt(1.0 / (flux * integral))
+
+    # The pivot above fixes the phase but not the sign: which component of the
+    # eigenvector is largest can change from one solve frequency to the next,
+    # and when it does the whole mode flips. That puts a 180 degree step in the
+    # middle of the sweep, which the rational fit then interpolates across. So
+    # the sign is taken from the modal voltage instead -- its path is set by the
+    # geometry, not by where the field peaks, so it varies smoothly with
+    # frequency. The convention is the physical one: the signal conductor sits
+    # at positive potential.
+    v_mode = _modal_voltage(coords, values, setup, setup.direction)
+    if v_mode.real < 0.0:
+        values = -values
 
     if setup.zc_override is not None:
         zc = float(setup.zc_override)

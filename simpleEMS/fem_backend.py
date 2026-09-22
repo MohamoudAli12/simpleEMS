@@ -125,8 +125,9 @@ class FEMOptions:
     Parameters
     ----------
     boundary : str
-        Outer boundary condition, either ``"silver_muller"`` (default) or
-        ``"pml"``.
+        Outer boundary condition: ``"silver_muller"`` (default), ``"pml"`` or
+        ``"pec"``. See :attr:`~simpleEMS.sim_params.SimParams` for what each
+        one is for.
     symmetry : tuple, optional
         Mirror-symmetry plane ``(axis, kind, at)``, where ``axis`` is ``"x"``,
         ``"y"``, or ``"z"``, ``kind`` is ``"pec"`` or ``"pmc"``, and ``at`` is
@@ -202,6 +203,13 @@ class FEMOptions:
         Height of each wave port's cross-section in millimetres, measured from
         the ground side of the substrate. Default ``None``: six substrate
         thicknesses.
+    kappa_freq : float, optional
+        Frequency at which a CSXCAD material's ``kappa`` was set, in Hz, which
+        is where it has to be read back as a loss tangent. openEMS models
+        dielectric loss as a conductivity fixed at one frequency --
+        ``SimParams.substrate_kappa`` is ``tand*2*pi*main_freq*eps0*eps_r`` --
+        so inverting it anywhere else scales the loss by the ratio of the two.
+        Default ``None``, which falls back to the sweep's centre frequency.
     """
 
     boundary: str = "silver_muller"
@@ -229,6 +237,7 @@ class FEMOptions:
     port_mode_eps_eff: float | None = None
     waveport_width_mm: float | None = None
     waveport_height_mm: float | None = None
+    kappa_freq: float | None = None
 
     def __post_init__(self) -> None:
         """
@@ -240,9 +249,10 @@ class FEMOptions:
             If ``boundary`` or ``fe_order`` is not one of the supported
             choices, or if ``num_solve_points`` is below the minimum.
         """
-        if self.boundary not in ("silver_muller", "pml"):
+        if self.boundary not in ("silver_muller", "pml", "pec"):
             raise ValueError(
-                f"boundary must be 'silver_muller' or 'pml', got {self.boundary!r}"
+                f"boundary must be 'silver_muller', 'pml' or 'pec', "
+                f"got {self.boundary!r}"
             )
         if self.fe_order not in (1, 2):
             raise ValueError(f"fe_order must be 1 or 2, got {self.fe_order}")
@@ -451,7 +461,7 @@ class Problem:
     # that declares these defaults; Problem never redeclares them.
     @property
     def boundary(self) -> str:
-        """Outer boundary condition: ``"silver_muller"`` or ``"pml"``."""
+        """Outer boundary condition: ``"silver_muller"``, ``"pml"`` or ``"pec"``."""
         return self.options.boundary
 
     @property
@@ -581,7 +591,7 @@ def _register_port(
 
 
 def _csx_roles(
-    csx: ContinuousStructure, centre_freq: float, port_type: str = "lumpedport"
+    csx: ContinuousStructure, kappa_freq: float, port_type: str = "lumpedport"
 ) -> tuple[dict, dict, dict, dict]:
     """
     Assign an electromagnetic role to each CSXCAD property.
@@ -590,8 +600,9 @@ def _csx_roles(
     ----------
     csx : ContinuousStructure
         The CSXCAD geometry.
-    centre_freq : float
-        Frequency in Hz at which conductivity is converted to a loss tangent.
+    kappa_freq : float
+        Frequency in Hz at which each material's ``kappa`` was set, which is
+        where it has to be read back as a loss tangent.
     port_type : str
         ``"lumpedport"`` (default) or ``"waveport"``, deciding what the ports
         already in the geometry become. A coplanar waveguide port is a wave
@@ -628,12 +639,14 @@ def _csx_roles(
             sigma_by_name[name] = float(prop.GetConductivity())
         elif type_string == "Material":
             eps_r = float(prop.GetMaterialProperty("epsilon"))
-            # openEMS stores dielectric loss as an equivalent conductivity kappa
-            # [S/m]; convert it back to a loss tangent at the band centre via
-            # kappa = tan_d * w * eps0 * eps_r (GetDP wants tan_d, not kappa).
+            # openEMS stores dielectric loss as an equivalent conductivity
+            # kappa [S/m], fixed at the frequency it was defined at:
+            # kappa = tan_d * w * eps0 * eps_r. GetDP wants tan_d, so invert it
+            # at that same frequency -- anywhere else scales the loss by the
+            # ratio of the two.
             kappa = float(prop.GetMaterialProperty("kappa"))
             tan_d = (
-                kappa / (2 * math.pi * centre_freq * EPS0 * eps_r)
+                kappa / (2 * math.pi * kappa_freq * EPS0 * eps_r)
                 if eps_r > 0 and kappa
                 else 0.0
             )
@@ -703,10 +716,14 @@ def _build_problem(
     step_file = str(output_path / "structure.step")
 
     freqs = np.asarray(freqs, dtype=float)
-    centre_freq = 0.5 * (float(freqs.min()) + float(freqs.max()))
     options = FEM_options or FEMOptions()
+    # openEMS stores dielectric loss as a conductivity fixed at one frequency,
+    # so kappa has to be read back at that same frequency or the loss comes out
+    # scaled by the ratio of the two. The sweep's centre is only a fallback for
+    # a geometry that reached here without params behind it.
+    kappa_freq = options.kappa_freq or 0.5 * (float(freqs.min()) + float(freqs.max()))
     role_by_name, dielectric_by_name, port_by_name, sigma_by_name = _csx_roles(
-        csx, centre_freq, options.port_type
+        csx, kappa_freq, options.port_type
     )
 
     prob = Problem(step_file=step_file, name="structure", freqs=freqs)
@@ -867,6 +884,7 @@ def _mesh_problem(
         "pro_path": pro_path,
         "name": prob.name,
         "bbox": list(mesh.bbox),  # structure extents (m); needed for far-field box
+        "boundary": mesh.boundary,  # a "pec" box cannot radiate; see fem_radiation
         "domain_bbox": list(mesh.inner_bbox),  # meshed E/H extents (m); Huygens
         # box must stay strictly inside this or CutBox samples outside the mesh
         "symmetry_axis": (
@@ -1090,13 +1108,17 @@ def _sweep_from_meta(
             mode = fem_port_mode.solve_port_mode(
                 setup, freq, output_path, verbose=False
             )
-            setnumbers[f"NEFF_{number}"] = float(mode.n_eff.real)
+            # Both parts: the modal admittance of a lossy line is complex, and
+            # GetDP's -setnumber only carries reals.
+            setnumbers[f"NEFF_RE_{number}"] = float(mode.n_eff.real)
+            setnumbers[f"NEFF_IM_{number}"] = float(mode.n_eff.imag)
             setnumbers[f"ZC_{number}"] = float(mode.zc)
             modal_z[number] = float(mode.zc)
             if verbose:
                 console.print(
                     f"[info]port {number} mode @ {freq / 1e9:.4g} GHz: "
-                    f"eps_eff={mode.eps_eff.real:.4g}, Zc={mode.zc:.4g} ohm[/info]"
+                    f"eps_eff={mode.eps_eff.real:.4g}, Zc={mode.zc:.4g} ohm, "
+                    f"alpha={mode.alpha_db_per_m:.4g} dB/m[/info]"
                 )
         fem_solver.run_getdp(
             pro_path,
@@ -1400,7 +1422,8 @@ def simulate_step_FEM(
         ``ports`` is omitted, solids whose names look like ports are used
         instead.
     FEM_boundary : str
-        Outer boundary condition: ``"silver_muller"`` (default) or ``"pml"``.
+        Outer boundary condition: ``"silver_muller"`` (default), ``"pml"`` or
+        ``"pec"``.
     FEM_symmetry : tuple, optional
         Mirror-symmetry plane ``(axis, kind, at)``, so only half the structure
         is meshed. See :class:`FEMOptions`. Default ``None``.

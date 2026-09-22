@@ -510,6 +510,13 @@ class FEMNF2FF:
         key = (output_path, freq)
         if key not in self._cache:
             meta = json.loads((Path(output_path) / _MESH_META).read_text())
+            if meta.get("boundary") == "pec":
+                raise ValueError(
+                    "no far field under FEM_boundary='pec': the outer box is a "
+                    "perfect conductor, so the fields are those of a shielded "
+                    "enclosure and nothing radiates out of it. Re-run with "
+                    "FEM_boundary='silver_muller' or 'pml' to compute a pattern."
+                )
             pro, msh, bbox = meta["pro_path"], meta["msh_path"], tuple(meta["bbox"])
             domain_bbox = tuple(meta["domain_bbox"]) if "domain_bbox" in meta else None
             if domain_bbox is None:
