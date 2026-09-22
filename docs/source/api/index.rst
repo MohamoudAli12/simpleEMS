@@ -4,6 +4,7 @@ API
     :maxdepth: 2
 
     sim_tools
+    plot_theme
     patch_antenna
     ifa_antenna
     quarterwave_stub_filter
