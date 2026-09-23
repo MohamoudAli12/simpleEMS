@@ -160,6 +160,11 @@ class FEMOptions:
     num_solve_points : int
         Number of frequencies the sweep solves at, from which the full
         S-parameter curve is interpolated. Must be ``>= 4``. Default ``10``.
+    max_solve_points : int, optional
+        Ceiling on the solve count when the interpolated curve breaks
+        passivity and the sweep keeps solving to fix it. Must be
+        ``>= num_solve_points``. Default ``None``, which allows twice
+        ``num_solve_points``. A passive response costs ``num_solve_points``.
     port_mode_modes : int
         Number of eigenpairs each wave port's mode solve computes. Raise it if
         a port reports that it found no guided mode. Default ``6``.
@@ -230,6 +235,7 @@ class FEMOptions:
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
     num_solve_points: int = 10
+    max_solve_points: int | None = None
     port_type: str = "lumpedport"
     port_mode_modes: int = 6
     port_mode_index: int = 0
@@ -260,6 +266,14 @@ class FEMOptions:
             raise ValueError(
                 f"num_solve_points must be >= 4 for a stable rational fit, "
                 f"got {self.num_solve_points}"
+            )
+        if (
+            self.max_solve_points is not None
+            and self.max_solve_points < self.num_solve_points
+        ):
+            raise ValueError(
+                f"max_solve_points must be >= num_solve_points "
+                f"({self.num_solve_points}), got {self.max_solve_points}"
             )
         if self.port_type not in ("lumpedport", "waveport"):
             raise ValueError(
@@ -508,6 +522,11 @@ class Problem:
     def num_solve_points(self) -> int:
         """Number of frequencies the sweep solves at."""
         return self.options.num_solve_points
+
+    @property
+    def max_solve_points(self) -> int | None:
+        """Ceiling on the solve count when the curve breaks passivity."""
+        return self.options.max_solve_points
 
     @property
     def port_type(self) -> str:
@@ -1013,6 +1032,7 @@ def _sweep_from_meta(
     num_solve_points: int,
     output_path: Path,
     verbose: bool = True,
+    max_solve_points: int | None = None,
 ) -> None:
     """
     Run the frequency sweep on the mesh recorded in ``fem_mesh.json``.
@@ -1023,6 +1043,9 @@ def _sweep_from_meta(
         Frequency points (Hz) to report results at.
     num_solve_points : int
         Number of frequencies the sweep solves at.
+    max_solve_points : int, optional
+        Ceiling on the solve count when the curve breaks passivity. Default
+        ``None``, which allows twice ``num_solve_points``.
     output_path : Path
         Directory holding the mesh metadata written by :func:`build_mesh`, and
         receiving the ``fem_sparams.npz`` results.
@@ -1151,7 +1174,12 @@ def _sweep_from_meta(
     # S(f) onto the full dense grid.
     freqs = np.asarray(freqs, dtype=float)
     s_dense = fem_sweep.rational_sweep(
-        freqs, port_numbers, solve_at, num_solve_points, verbose=verbose
+        freqs,
+        port_numbers,
+        solve_at,
+        num_solve_points,
+        max_solves=max_solve_points,
+        verbose=verbose,
     )
 
     # V/I are linear in the same field solution S was fit from, so the same
@@ -1221,8 +1249,14 @@ def run_sweep(
     """
     output_path = Path(output_path)
     build_mesh(csx, freqs, output_path, verbose=verbose, FEM_options=FEM_options)
-    num_solve_points = (FEM_options or FEMOptions()).num_solve_points
-    _sweep_from_meta(freqs, num_solve_points, output_path, verbose)
+    options = FEM_options or FEMOptions()
+    _sweep_from_meta(
+        freqs,
+        options.num_solve_points,
+        output_path,
+        verbose,
+        max_solve_points=options.max_solve_points,
+    )
 
 
 def compute_sim_data(
@@ -1385,6 +1419,7 @@ def simulate_step_FEM(
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale,
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers,
     FEM_num_solve_points: int = _FEM_DEFAULTS.num_solve_points,
+    FEM_max_solve_points: int | None = _FEM_DEFAULTS.max_solve_points,
     charac_imp: float = 50.0,
     output_path: str | Path = "Sim_Path",
     run: bool = True,
@@ -1447,6 +1482,9 @@ def simulate_step_FEM(
     FEM_num_solve_points : int
         Number of frequencies the sweep solves at (must be ``>= 4``). Default
         ``10``.
+    FEM_max_solve_points : int, optional
+        Ceiling on the solve count when the curve breaks passivity. Default
+        ``None``, which allows twice ``FEM_num_solve_points``.
     charac_imp : float
         Port reference impedance in ohms, used for any port that does not set
         its own. Default ``50.0``.
@@ -1493,6 +1531,7 @@ def simulate_step_FEM(
         mesh_fine_scale=FEM_mesh_fine_scale,
         min_layers=FEM_min_layers,
         num_solve_points=FEM_num_solve_points,
+        max_solve_points=FEM_max_solve_points,
     )
     prob = _problem_from_step(
         step_file,
@@ -1530,5 +1569,11 @@ def simulate_step_FEM(
         plotter.view_xy()
         plotter.show()
     if run:
-        _sweep_from_meta(freqs, prob.num_solve_points, output_path, verbose)
+        _sweep_from_meta(
+            freqs,
+            prob.num_solve_points,
+            output_path,
+            verbose,
+            max_solve_points=prob.max_solve_points,
+        )
     return compute_sim_data(freqs, charac_imp, output_path)

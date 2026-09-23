@@ -95,6 +95,12 @@ class SimParams:
         Number of full FEM solves the adaptive rational-interpolation sweep is
         allowed to perform (must be ``>= 4``). Ignored by the FDTD backend.
         Default is ``10``.
+    FEM_max_solve_points : int, optional
+        Ceiling on the solve count when the interpolated curve comes out
+        non-passive and the sweep keeps solving to pull it back (must be
+        ``>= FEM_num_solve_points``). A passive response never costs more than
+        ``FEM_num_solve_points``. Default is ``None``, which allows twice
+        ``FEM_num_solve_points``.
     FEM_boundary : str, optional
         FEM backend only. Outer truncation: ``"silver_muller"`` (default),
         ``"pml"`` or ``"pec"``. The first two let the box radiate;
@@ -244,6 +250,7 @@ class SimParams:
     simulation_box: NDArray | None = None
 
     FEM_num_solve_points: int = 10
+    FEM_max_solve_points: int | None = _FEM_DEFAULTS.max_solve_points
     FEM_boundary: str = _FEM_DEFAULTS.boundary
     FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry
     FEM_fe_order: int = _FEM_DEFAULTS.fe_order
@@ -288,6 +295,7 @@ class SimParams:
             mesh_fine_scale=self.FEM_mesh_fine_scale,
             min_layers=self.FEM_min_layers,
             num_solve_points=self.FEM_num_solve_points,
+            max_solve_points=self.FEM_max_solve_points,
             port_type=self.FEM_port_type,
             port_mode_modes=self.FEM_port_mode_modes,
             port_mode_index=self.FEM_port_mode_index,
@@ -476,6 +484,14 @@ class SimParams:
             raise ValueError(
                 f"FEM_num_solve_points must be >= 4 for a stable rational fit, "
                 f"got {self.FEM_num_solve_points}"
+            )
+        if (
+            self.FEM_max_solve_points is not None
+            and self.FEM_max_solve_points < self.FEM_num_solve_points
+        ):
+            raise ValueError(
+                f"FEM_max_solve_points must be >= FEM_num_solve_points "
+                f"({self.FEM_num_solve_points}), got {self.FEM_max_solve_points}"
             )
 
     def _compute_common(self) -> None:
