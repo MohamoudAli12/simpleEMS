@@ -10,7 +10,12 @@ milliseconds and with an exact answer to compare against.
 import numpy as np
 import pytest
 
-from simpleEMS.fem_sweep import _fit_matrix, _passivity_excess, rational_sweep
+from simpleEMS.fem_sweep import (
+    _bisect_violation,
+    _fit_matrix,
+    _passivity_excess,
+    rational_sweep,
+)
 
 
 FGRID = np.linspace(2.0e9, 3.0e9, 401)
@@ -327,3 +332,146 @@ class TestRationalSweep:
         rational_sweep(FGRID, [1], counting_solver, 6, verbose=True)
 
         assert "6 solves in" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------
+# passivity-driven refinement
+# ---------------------------------------------------------------------
+def _scattered_two_port(seed, noise=5e-3, tau=2e-9):
+    """A near-unity two-port whose solves scatter but stay individually passive.
+
+    This is the case the refinement loop cannot win: AAA interpolates exactly,
+    so points that disagree with each other admit no passive model however many
+    of them there are. Projecting each matrix onto the passive set keeps the
+    blame off the solves themselves, which is what makes the stall branch the
+    one under test.
+    """
+    rng = np.random.default_rng(seed)
+
+    def solve(freq):
+        phase = np.exp(-2j * np.pi * freq * tau)
+
+        def jitter():
+            return noise * (rng.standard_normal() + 1j * rng.standard_normal())
+
+        s = np.array(
+            [
+                [0.05 * phase + jitter(), phase + jitter()],
+                [phase + jitter(), 0.05 * phase + jitter()],
+            ]
+        )
+        u, sigma, vh = np.linalg.svd(s)
+        return u @ np.diag(np.minimum(sigma, 1.0 - 1e-12)) @ vh
+
+    return solve
+
+
+class TestPassivityRefinement:
+    def test_a_passive_response_never_spends_the_extra_budget(self, counting_solver):
+        """The ceiling is for emergencies: a well-behaved structure pays the
+        budget it was quoted and not one solve more."""
+        rational_sweep(FGRID, [1], counting_solver, 10, max_solves=30, verbose=False)
+
+        assert len(counting_solver.frequencies) == 10
+
+    def test_the_default_ceiling_is_twice_the_budget(self, counting_solver, capsys):
+        rational_sweep(FGRID, [1], counting_solver, 8, verbose=True)
+
+        assert "(16 if non-passive)" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("cap", [10, 14, 25], ids=["equal", "small", "large"])
+    def test_extra_solves_are_capped(self, cap):
+        solver = _scattered_two_port(seed=2)
+        calls = []
+
+        def counted(freq):
+            calls.append(freq)
+            return solver(freq)
+
+        rational_sweep(FGRID, [1, 2], counted, 10, max_solves=cap, verbose=False)
+
+        assert len(calls) <= cap
+
+    def test_stalled_refinement_stops_well_short_of_the_cap(self):
+        """Solve points that disagree cannot be interpolated into a passive
+        curve, so the loop must notice and stop rather than burn the ceiling."""
+        counts = []
+        for seed in range(8):
+            solver = _scattered_two_port(seed)
+            calls = []
+
+            def counted(freq, solver=solver, calls=calls):
+                calls.append(freq)
+                return solver(freq)
+
+            rational_sweep(FGRID, [1, 2], counted, 10, max_solves=40, verbose=False)
+            counts.append(len(calls))
+
+        assert max(counts) < 20
+
+    def test_a_violation_is_bisected_inside_its_own_interval(self):
+        """The rule the refinement turns on: a spurious pole sits between two
+        solve points, so the next solve belongs in that gap and nowhere else."""
+        fgrid = np.linspace(2.0e9, 3.0e9, 401)
+        solved = np.linspace(2.0e9, 3.0e9, 5)
+        model = np.full((len(fgrid), 1, 1), 0.5 + 0j)
+        model[310] = 1.8 + 0j  # 2.775 GHz: between the 4th and 5th solve point
+
+        target = _bisect_violation(model, fgrid, solved)
+
+        assert solved[3] < target < solved[4]
+        assert target == pytest.approx(np.sqrt(solved[3] * solved[4]))
+
+    @pytest.mark.parametrize(
+        "spike, expected",
+        [(0, "below"), (400, "above")],
+        ids=["at-the-bottom-edge", "at-the-top-edge"],
+    )
+    def test_an_unbracketed_violation_declines_to_guess(self, spike, expected):
+        """At the very edge of the band the violation has no interval around
+        it, so the caller falls back to curvature-based placement."""
+        fgrid = np.linspace(2.0e9, 3.0e9, 401)
+        solved = np.array([2.0e9, 3.0e9])
+        model = np.full((len(fgrid), 1, 1), 0.5 + 0j)
+        model[spike] = 1.8 + 0j
+
+        assert _bisect_violation(model, fgrid, solved) is None
+
+    def test_a_passive_model_still_names_its_largest_singular_value(self):
+        """The helper does not test passivity itself -- the caller decides when
+        to use it. It only answers "where is the worst point, and what brackets
+        it", which must stay true for a passive model too."""
+        fgrid = np.linspace(2.0e9, 3.0e9, 401)
+        solved = np.linspace(2.0e9, 3.0e9, 5)
+        model = np.full((len(fgrid), 1, 1), 0.2 + 0j)
+        model[160] = 0.9 + 0j  # 2.4 GHz
+
+        target = _bisect_violation(model, fgrid, solved)
+
+        assert solved[1] < target < solved[2]
+
+    def test_the_warning_names_non_passive_solves_when_a_solve_is_active(self, capsys):
+        def solve(freq):
+            return np.array([[1.4 + 0j]], dtype=complex)
+
+        rational_sweep(FGRID, [1], solve, 6, verbose=True)
+
+        assert "the FEM solves themselves are non-passive" in capsys.readouterr().out
+
+    def test_the_warning_blames_solve_quality_when_refinement_stalls(self, capsys):
+        rational_sweep(
+            FGRID, [1, 2], _scattered_two_port(seed=2), 10, max_solves=40, verbose=True
+        )
+
+        out = capsys.readouterr().out
+        if "exceeds passivity" not in out:
+            pytest.skip("this seed happened to fit a passive model")
+        assert "admit no passive model" in out
+        assert "FEM_elems_per_wavelength" in out
+
+    def test_a_passive_sweep_says_nothing_about_passivity(
+        self, counting_solver, capsys
+    ):
+        rational_sweep(FGRID, [1], counting_solver, 10, verbose=True)
+
+        assert "exceeds passivity" not in capsys.readouterr().out
