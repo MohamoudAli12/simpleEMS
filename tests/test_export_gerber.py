@@ -11,6 +11,7 @@ below pin that inference through :func:`infer_layers` directly rather than by
 parsing Gerber text.
 """
 
+import math
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ from simpleEMS.export_gerber import (  # noqa: E402
     gerber_coord,
     infer_layers,
     primitive_box,
+    primitive_cylindrical_shell,
     primitive_polygon,
 )
 
@@ -51,6 +53,20 @@ def add_box(csx, name, z0, z1, xy=(-1.0, -1.0, 1.0, 1.0)):
     metal = csx.AddMetal(name)
     metal.AddBox(priority=1, start=[xy[0], xy[1], z0], stop=[xy[2], xy[3], z1])
     return metal
+
+
+def add_shell_antipad(csx, name, z0, z1, xy=(2.0, 2.0), inner=0.15, outer=0.5):
+    """An antipad the way ``create_via`` draws one: a ring from the barrel
+    wall out to the antipad radius."""
+    material = csx.AddMaterial(name, epsilon=1)
+    material.AddCylindricalShell(
+        priority=3,
+        start=[xy[0], xy[1], z0],
+        stop=[xy[0], xy[1], z1],
+        radius=(outer + inner) / 2,
+        shell_width=outer - inner,
+    )
+    return material
 
 
 @pytest.fixture
@@ -393,6 +409,42 @@ class TestClearances:
         for layer in layers:
             assert "substrate" not in [name for name, _ in layer.clearances]
 
+    def test_a_shell_antipad_is_a_clearance(self):
+        """What ``create_via`` actually produces. This used to vanish: the
+        exact-name dispatch in ``_corner_points`` had no shell branch, so the
+        plane came out with no clearance in it at all."""
+        csx = ContinuousStructure()
+        add_box(csx, "inner", 0.0, T, xy=(-4.0, -4.0, 4.0, 4.0))
+        add_shell_antipad(csx, "via_antipad", 0.0, T)
+
+        (layer,) = infer_layers(csx).layers
+
+        assert [name for name, _ in layer.clearances] == ["via_antipad"]
+
+    def test_a_shell_off_the_z_axis_is_skipped(self, capsys):
+        csx = ContinuousStructure()
+        add_box(csx, "inner", 0.0, T, xy=(-4.0, -4.0, 4.0, 4.0))
+        material = csx.AddMaterial("tilted", epsilon=1)
+        material.AddCylindricalShell(
+            priority=3, start=[0, 0, 0], stop=[3, 0, 0], radius=0.3, shell_width=0.2
+        )
+
+        (layer,) = infer_layers(csx).layers
+
+        assert layer.clearances == []
+        assert "no XY footprint to export" in capsys.readouterr().out
+
+    def test_a_shell_antipad_is_written_as_a_void(self, tmp_path):
+        """End to end: the clearance reaches the file, in clear polarity."""
+        csx = ContinuousStructure()
+        add_box(csx, "inner", 0.0, T, xy=(-4.0, -4.0, 4.0, 4.0))
+        add_shell_antipad(csx, "via_antipad", 0.0, T)
+
+        text = export(csx, tmp_path)["layout-F_Cu.gtl"]
+
+        assert text.index("%LPC*%") < text.index("%LNvia_antipad*%")
+        assert text.count("G36*") == 2
+
     def test_clearances_are_written_in_clear_polarity_after_the_copper(
         self, golden_structure, tmp_path
     ):
@@ -524,6 +576,43 @@ class TestPrimitiveWriters:
         assert body[1] == "X200000Y0D01*"
         assert body[2] == "X200000Y300000D01*"
         assert body[3] == "X0Y300000D01*"
+
+    def test_shell_clears_the_full_outer_disc(self, tmp_path):
+        """The void is the outer disc, not the annulus the primitive
+        describes. In Gerber the barrel is a drill, not copper on this layer,
+        so clearing only the ring would leave an island of copper that the
+        plated barrel then bonds to the plane."""
+        csx = ContinuousStructure()
+        add_shell_antipad(csx, "antipad", 0.0, 0.035, xy=(1.0, 2.0))
+        shell = csx.GetAllPrimitives()[0]
+
+        path = tmp_path / "out.gbr"
+        with open(path, "w") as handle:
+            primitive_cylindrical_shell(handle, shell)
+        body = path.read_text().splitlines()[1:-1]
+
+        radii = set()
+        for line in body:
+            x_text, y_text = line[1:-4].split("Y")
+            x_mm, y_mm = int(x_text) / 1e5, int(y_text) / 1e5
+            radii.add(round(math.hypot(x_mm - 1.0, y_mm - 2.0), 4))
+
+        assert radii == {0.5}
+
+    def test_shell_closes_back_to_its_first_vertex(self, tmp_path):
+        csx = ContinuousStructure()
+        add_shell_antipad(csx, "antipad", 0.0, 0.035)
+        shell = csx.GetAllPrimitives()[0]
+
+        path = tmp_path / "out.gbr"
+        with open(path, "w") as handle:
+            primitive_cylindrical_shell(handle, shell)
+        content = path.read_text()
+        body = content.splitlines()[1:-1]
+
+        assert content.count("D02*") == 1
+        assert content.count("D01*") == 60
+        assert body[0][:-4] == body[-1][:-4]
 
     def test_polygon_with_non_z_normal_is_not_written(self, tmp_path, capsys):
         csx = ContinuousStructure()
