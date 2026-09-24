@@ -381,6 +381,104 @@ class TestExportStep:
             math.pi * (0.5**2 - 0.4**2) * 1.6, rel=1e-3
         )
 
+    def test_an_antipad_is_cut_out_of_the_plane_it_clears(self, tmp_path):
+        """CSXCAD settles the overlap by priority; STEP has no priorities, so
+        the copper has to lose the volume for real."""
+        csx = ContinuousStructure()
+        plane = csx.AddMetal("plane")
+        plane.AddBox(priority=2, start=[-5, -5, 0], stop=[5, 5, 0.035])
+        antipad = csx.AddMaterial("antipad", epsilon=1)
+        antipad.AddCylindricalShell(
+            priority=4,
+            start=[0, 0, 0],
+            stop=[0, 0, 0.035],
+            radius=0.325,
+            shell_width=0.35,
+        )
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+        volumes = sorted(solid.Volume() for solid in result.solids().vals())
+
+        slab = 10.0 * 10.0 * 0.035
+        disc = math.pi * 0.5**2 * 0.035
+        ring = math.pi * (0.5**2 - 0.15**2) * 0.035
+        assert volumes[0] == pytest.approx(ring, rel=1e-3)
+        assert volumes[1] == pytest.approx(slab - disc, rel=1e-6)
+
+    def test_the_cut_is_the_outer_disc_not_the_ring(self, tmp_path):
+        """The ring's bore is the barrel's. Cutting only the ring would leave
+        a collar of plane copper hugging the via -- the short the antipad is
+        there to prevent -- so the void is the whole disc."""
+        csx = ContinuousStructure()
+        plane = csx.AddMetal("plane")
+        plane.AddBox(priority=2, start=[-5, -5, 0], stop=[5, 5, 0.035])
+        antipad = csx.AddMaterial("antipad", epsilon=1)
+        antipad.AddCylindricalShell(
+            priority=4,
+            start=[0, 0, 0],
+            stop=[0, 0, 0.035],
+            radius=0.325,
+            shell_width=0.35,
+        )
+        barrel = csx.AddMetal("barrel")
+        barrel.AddCylinder(priority=6, start=[0, 0, 0], stop=[0, 0, 0.035], radius=0.15)
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+
+        slab = 10.0 * 10.0 * 0.035
+        (cut_plane,) = [
+            solid for solid in result.solids().vals() if solid.BoundingBox().xlen > 9.0
+        ]
+        (via,) = [
+            solid
+            for solid in result.solids().vals()
+            if solid.Volume() == pytest.approx(math.pi * 0.15**2 * 0.035, rel=1e-3)
+        ]
+
+        # Cutting the ring alone would leave pi*0.15^2*0.035 of copper behind.
+        assert cut_plane.Volume() == pytest.approx(
+            slab - math.pi * 0.5**2 * 0.035, rel=1e-6
+        )
+        shared = (
+            cq.Workplane(obj=cut_plane).intersect(cq.Workplane(obj=via)).val().Volume()
+        )
+        assert shared == pytest.approx(0.0, abs=1e-12)
+
+    def test_a_dielectric_the_metal_outranks_does_not_cut_it(self, tmp_path):
+        """The ordinary case -- a trace sitting on its substrate -- must be
+        left alone, or every board would come back with its traces hollowed."""
+        csx = ContinuousStructure()
+        substrate = csx.AddMaterial("substrate", epsilon=4.4)
+        substrate.AddBox(priority=0, start=[-5, -5, 0], stop=[5, 5, 1.6])
+        trace = csx.AddMetal("trace")
+        trace.AddBox(priority=6, start=[-0.5, -4, 0.8], stop=[0.5, 4, 1.0])
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+        volumes = sorted(solid.Volume() for solid in result.solids().vals())
+
+        assert volumes[0] == pytest.approx(1.0 * 8.0 * 0.2, rel=1e-9)
+        assert volumes[1] == pytest.approx(10.0 * 10.0 * 1.6, rel=1e-9)
+
+    def test_a_clearance_that_swallows_a_conductor_is_reported(self, tmp_path, capsys):
+        csx = ContinuousStructure()
+        pad = csx.AddMetal("pad")
+        pad.AddBox(priority=2, start=[-0.2, -0.2, 0], stop=[0.2, 0.2, 0.035])
+        antipad = csx.AddMaterial("antipad", epsilon=1)
+        antipad.AddCylindricalShell(
+            priority=4,
+            start=[0, 0, -0.1],
+            stop=[0, 0, 0.1],
+            radius=1.0,
+            shell_width=1.0,
+        )
+
+        export_step(csx, tmp_path)
+
+        assert "removed the whole solid" in capsys.readouterr().out
+
     def test_unsupported_primitive_is_reported(self, tmp_path, capsys):
         """Most of CSXCAD's primitive types still have no branch. Dropping one
         without a word is how the missing cylinder support stayed hidden."""
