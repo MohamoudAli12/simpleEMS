@@ -1426,6 +1426,7 @@ def _mesh_and_write(
     gmsh.option.setNumber("Mesh.MeshSizeMax", max(lc_air, lc_diel))
     gmsh.option.setNumber("Mesh.MeshSizeMin", lc_fine / 5.0)
     gmsh.option.setNumber("Mesh.Optimize", 1)
+    _mesh_cylinders_with_meshadapt()
 
     gmsh.model.mesh.generate(3)
     msh_path = Path(workdir).absolute() / f"{problem.name}.msh"
@@ -1442,6 +1443,21 @@ def _mesh_and_write(
         )
     gmsh.finalize()
     return str(msh_path)
+
+
+def _mesh_cylinders_with_meshadapt() -> None:
+    """Mesh every cylindrical face with Gmsh's MeshAdapt algorithm.
+
+    Gmsh meshes a cylinder in its unrolled parameter space, where the seam
+    appears twice, once on each side. On a thin, finely sized barrel -- a via
+    -- the default Frontal-Delaunay algorithm can join three nodes of that seam
+    into one triangle. Rolled back up, the triangle is flat, and getdp fails on
+    its zero Jacobian with ``Null determinant in 'ChangeOfCoord_Form2'``.
+    MeshAdapt meshes those faces cleanly; every other face keeps the default.
+    """
+    for dim, tag in gmsh.model.getEntities(2):
+        if gmsh.model.getType(dim, tag) == "Cylinder":
+            gmsh.model.mesh.setAlgorithm(dim, tag, 1)
 
 
 # ----------------------------
