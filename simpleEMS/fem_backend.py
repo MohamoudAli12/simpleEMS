@@ -138,9 +138,9 @@ class FEMOptions:
         Element order, either ``1`` (default) or ``2``. Order ``2`` is more
         accurate and roughly three times as expensive to solve.
     air_pad_frac : float
-        Air padding around the structure, as a fraction of the longest
-        wavelength in the sweep. Default ``0.25``. Ignored when ``air_pad_mm``
-        is set.
+        Air padding around the structure, as a fraction of the free-space
+        wavelength at ``mesh_freq``. Default ``0.25``. Ignored when
+        ``air_pad_mm`` is set.
     air_pad_mm : float or tuple, optional
         Air padding around the structure in millimetres, used in place of
         ``air_pad_frac``. Either one value for all six faces, three values
@@ -151,6 +151,12 @@ class FEMOptions:
     elems_per_wavelength : float
         Target number of mesh elements per wavelength, applied separately in
         each material. Default ``16.0``.
+    mesh_freq : float, optional
+        Frequency the mesh is sized at, in Hz. Element size and air padding
+        are both derived from its wavelength, so this is the one number that
+        sets how expensive the mesh is. Default ``None``, which falls back to
+        the top of the sweep; ``SimParams`` fills it with ``main_freq``, so a
+        wide plot range no longer refines the mesh.
     mesh_fine_scale : float
         Multiplier on the element size near conductors. Values above ``1``
         coarsen the mesh there. Default ``1.0``.
@@ -225,13 +231,17 @@ class FEMOptions:
     # refinement does not fix it; use 2 when phase or group delay matter
     fe_order: int = 1
     air_pad_frac: float = 0.25
-    # for non-radiating structures (e.g. filters) whose box shouldn't scale
-    # with a wide sweep's lowest frequency; FEMNF2FF.CalcNF2FF raises if this
-    # is later too small for a far-field transform at the requested frequency.
+    # for a structure whose box has no reason to be a quarter-wavelength at
+    # all, such as a filter; FEMNF2FF.CalcNF2FF raises if this is later too
+    # small for a far-field transform at the requested frequency.
     # Kept exactly as given -- air_pad_faces_mm expands it -- because SimParams
     # round-trips every field of this class by equality.
     air_pad_mm: float | tuple | None = None
     elems_per_wavelength: float = 16.0
+    # The sweep grid says where to plot S-parameters, not what the structure is
+    # for; meshing off its top end silently refines a wide plot window. Sized
+    # off the design frequency instead -- SimParams feeds main_freq in.
+    mesh_freq: float | None = None
     mesh_fine_scale: float = 1.0
     min_layers: int = 3
     num_solve_points: int = 10
@@ -262,6 +272,8 @@ class FEMOptions:
             )
         if self.fe_order not in (1, 2):
             raise ValueError(f"fe_order must be 1 or 2, got {self.fe_order}")
+        if self.mesh_freq is not None and self.mesh_freq <= 0:
+            raise ValueError(f"mesh_freq must be > 0 Hz, got {self.mesh_freq}")
         if self.num_solve_points < 4:
             raise ValueError(
                 f"num_solve_points must be >= 4 for a stable rational fit, "
@@ -490,7 +502,7 @@ class Problem:
 
     @property
     def air_pad_frac(self) -> float:
-        """Air padding as a fraction of the longest wavelength."""
+        """Air padding as a fraction of the wavelength at ``mesh_freq``."""
         return self.options.air_pad_frac
 
     @property
@@ -507,6 +519,11 @@ class Problem:
     def elems_per_wavelength(self) -> float:
         """Target number of mesh elements per wavelength."""
         return self.options.elems_per_wavelength
+
+    @property
+    def mesh_freq(self) -> float:
+        """Frequency the mesh is sized at, in Hz; the top of the sweep if unset."""
+        return self.options.mesh_freq or float(np.max(self.freqs))
 
     @property
     def mesh_fine_scale(self) -> float:
@@ -1416,6 +1433,7 @@ def simulate_step_FEM(
     FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac,
     FEM_air_pad_mm: float | tuple | None = _FEM_DEFAULTS.air_pad_mm,
     FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength,
+    FEM_mesh_freq: float | None = _FEM_DEFAULTS.mesh_freq,
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale,
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers,
     FEM_num_solve_points: int = _FEM_DEFAULTS.num_solve_points,
@@ -1474,6 +1492,11 @@ def simulate_step_FEM(
         ``None``.
     FEM_elems_per_wavelength : float
         Target number of mesh elements per wavelength. Default ``16.0``.
+    FEM_mesh_freq : float, optional
+        Frequency the mesh is sized at, in Hz -- both the element size and
+        the air padding come off its wavelength. Default ``None``, which
+        sizes the mesh at the top of ``freqs``. Name the frequency the
+        structure was designed at to stop a wide sweep refining the mesh.
     FEM_mesh_fine_scale : float
         Multiplier on the element size near conductors. Default ``1.0``.
     FEM_min_layers : int
@@ -1528,6 +1551,7 @@ def simulate_step_FEM(
         air_pad_frac=FEM_air_pad_frac,
         air_pad_mm=FEM_air_pad_mm,
         elems_per_wavelength=FEM_elems_per_wavelength,
+        mesh_freq=FEM_mesh_freq,
         mesh_fine_scale=FEM_mesh_fine_scale,
         min_layers=FEM_min_layers,
         num_solve_points=FEM_num_solve_points,

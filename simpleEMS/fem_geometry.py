@@ -891,7 +891,7 @@ def _build_wave_port_sheets(
 def _build_air_box(
     problem: Problem,
     struct: tuple,
-    lambda0_max: float,
+    lambda0_mesh: float,
     port_faces: dict[tuple[int, int], float] | None = None,
 ) -> tuple[bool, tuple, tuple, float]:
     """Wrap the structure in an air box, plus an outer PML shell if requested.
@@ -906,9 +906,9 @@ def _build_air_box(
         The FEM problem, supplying the boundary condition and the air padding.
     struct : tuple
         Extents of the structure to wrap, in metres.
-    lambda0_max : float
-        Longest wavelength in the sweep, in metres, which sets the padding
-        unless ``problem.air_pad_mm`` gives it directly.
+    lambda0_mesh : float
+        Free-space wavelength at the mesh frequency, in metres, which sets the
+        padding unless ``problem.air_pad_mm`` gives it directly.
     port_faces : dict, optional
         Where to put each face a wave port terminates, keyed by ``(axis, side)``,
         from :func:`_wave_port_faces`. Those faces go on the port plane rather
@@ -924,7 +924,7 @@ def _build_air_box(
     is_pml = problem.boundary == "pml"
     faces_mm = problem.air_pad_faces_mm
     if faces_mm is None:
-        auto = max(problem.air_pad_frac * lambda0_max, 3.0 * (struct[5] - struct[2]))
+        auto = max(problem.air_pad_frac * lambda0_mesh, 3.0 * (struct[5] - struct[2]))
         faces = [[auto, auto] for _ in range(3)]
     else:
         faces = [[low * 1e-3, high * 1e-3] for low, high in faces_mm]
@@ -960,7 +960,7 @@ def _build_air_box(
             for side in range(2)
             if (axis, side) not in port_faces
         ]
-        pml_thick = max(0.2 * lambda0_max, 2.0 * min(padded) / 3.0) if padded else 0.0
+        pml_thick = max(0.2 * lambda0_mesh, 2.0 * min(padded) / 3.0) if padded else 0.0
         outer_low = list(low)
         outer_high = list(high)
         for axis in range(3):
@@ -1472,12 +1472,13 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
         If a port solid produces no faces, e.g. because it does not touch the
         rest of the geometry.
     """
-    fmin = float(problem.freqs.min())
-    fmax = float(problem.freqs.max())
-    # smallest wavelength anywhere (inside the highest-eps dielectric)
+    fmesh = problem.mesh_freq
     eps_max = max([d.dielectric.eps_r for d in problem.dielectrics()] + [1.0])
-    lambda_min = C0 / (fmax * (eps_max**0.5))
-    lambda0_max = C0 / fmin  # longest free-space wavelength -> sets air padding
+    # free-space wavelength at the mesh frequency: sizes the air elements and
+    # the padding around the structure
+    lambda0_mesh = C0 / fmesh
+    # smallest wavelength anywhere (inside the highest-eps dielectric)
+    lambda_min = lambda0_mesh / (eps_max**0.5)
 
     Path(workdir).mkdir(parents=True, exist_ok=True)
     _init()
@@ -1501,7 +1502,7 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
     )
     sheets = _build_footprint_sheets(problem, diel_bbox, port_geo)
     is_pml, inner_bbox, box_bbox, pml_thick = _build_air_box(
-        problem, struct, lambda0_max, port_faces
+        problem, struct, lambda0_mesh, port_faces
     )
     # Now the domain exists, so a wave port's cross-section can be clipped to
     # it. Under a PML it is clipped to the inner box, so the sheet does not cut
@@ -1537,7 +1538,7 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
         diel_regions,
         port_regions,
         diel_vols,
-        C0 / fmax,  # shortest free-space wavelength -> the air size target
+        lambda0_mesh,  # free-space wavelength -> the air size target
     )
 
     return Mesh(

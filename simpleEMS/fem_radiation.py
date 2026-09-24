@@ -466,10 +466,14 @@ def _check_farfield_margin(
         If any face has less than a quarter-wavelength of air between the
         structure and the edge of the mesh, naming the padding needed.
     """
-    # Only structures meshed with an explicit FEM_air_pad_mm can fail this --
-    # the default padding already targets a quarter-wavelength. So it is
-    # checked here, when a pattern is actually asked for, rather than at mesh
-    # time: tight padding is fine for problems that never want a far field.
+    # The automatic padding is exactly a quarter-wavelength at the mesh
+    # frequency (FEM_mesh_freq, i.e. main_freq), so a pattern asked for there
+    # sits right on the limit and must pass; the slack below absorbs the float
+    # round-trip through fem_mesh.json. Under that frequency, and for a mesh
+    # padded by an explicit FEM_air_pad_mm, the gap can be genuinely short --
+    # which is why this is checked when a pattern is actually asked for rather
+    # than at mesh time: tight padding is fine for a problem that never wants
+    # a far field.
     min_gap = 0.25 * (C0 / freq)  # lambda/4 at the requested frequency
     gaps = {}
     for i, axis in enumerate("xyz"):
@@ -477,7 +481,7 @@ def _check_farfield_margin(
             gaps[f"{axis}-"] = bbox[i] - domain_bbox[i]
         gaps[f"{axis}+"] = domain_bbox[3 + i] - bbox[3 + i]
     face, gap = min(gaps.items(), key=lambda kv: kv[1])
-    if gap < min_gap:
+    if gap < min_gap * (1 - 1e-9):
         raise ValueError(
             f"Air padding too small for an accurate far field at {freq / 1e9:.4f} GHz: "
             f"the gap between the structure and the meshed domain boundary on the "
@@ -486,8 +490,10 @@ def _check_farfield_margin(
             f"near-to-far-field transform to be valid. Re-run setup_simulation/"
             f"build_mesh with at least {min_gap * 1e3:.2f} mm on the {face} face "
             f"-- FEM_air_pad_mm takes three [low, high] pairs, so that face can "
-            f"be widened on its own -- or drop FEM_air_pad_mm entirely to fall "
-            f"back to the automatic lambda/4-based padding."
+            f"be widened on its own. The automatic padding is a quarter-wavelength "
+            f"at FEM_mesh_freq (main_freq by default), so a pattern wanted below "
+            f"that frequency needs FEM_mesh_freq lowered to it, or the padding "
+            f"given explicitly."
         )
 
 

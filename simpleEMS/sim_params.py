@@ -119,9 +119,10 @@ class SimParams:
         FEM backend only. Nedelec edge-element order: ``1`` (default) or
         ``2``.
     FEM_air_pad_frac : float, optional
-        FEM backend only. Air padding as a fraction of the longest
-        wavelength. Defaults to :attr:`FEMOptions.air_pad_frac`. Ignored
-        when ``FEM_air_pad_mm`` is set.
+        FEM backend only. Air padding as a fraction of the free-space
+        wavelength at ``FEM_mesh_freq``. Defaults to
+        :attr:`FEMOptions.air_pad_frac`. Ignored when ``FEM_air_pad_mm`` is
+        set.
     FEM_air_pad_mm : float or tuple, optional
         FEM backend only. Explicit air padding in millimetres, added to the
         structure's bounding box in place of the ``FEM_air_pad_frac``
@@ -130,11 +131,10 @@ class SimParams:
         ``[low, high]`` pairs to set every face on its own -- for example
         ``[[8, 8], [8, 8], [2, 30]]`` for a patch, which needs a deep air
         column above it but almost none below its ground plane. Use this for
-        non-radiating structures (e.g. filters) whose box shouldn't scale
-        with a wide S-parameter sweep's lowest frequency. A face a wave port
-        stands on is padded by nothing whatever this says, because the port
-        is the domain wall there; that face can therefore carry no far field.
-        If a far-field
+        a non-radiating structure (e.g. a filter) whose box has no reason to
+        be a quarter-wavelength at all. A face a wave port stands on is padded
+        by nothing whatever this says, because the port is the domain wall
+        there; that face can therefore carry no far field. If a far-field
         pattern is later requested and this padding is too small for an
         accurate near-to-far-field transform at the requested frequency,
         ``FEMNF2FF.CalcNF2FF`` raises ``ValueError`` naming the face that is
@@ -144,6 +144,13 @@ class SimParams:
         FEM backend only. Target coarse mesh density, applied per material
         against that material's own wavelength. Default is ``16.0``; see
         :class:`FEMOptions` for why it is not ``8.0``.
+    FEM_mesh_freq : float, optional
+        FEM backend only. Frequency the mesh is sized at, in Hz -- both the
+        element size and the air padding come off its wavelength. Default is
+        ``None``, meaning ``main_freq``: ``freq_range`` is the window the
+        S-parameters are plotted over, so widening it to see more of a curve
+        no longer refines the mesh. Raise it to check the structure at the top
+        of a wide band, at the usual cost in elements.
     FEM_mesh_fine_scale : float, optional
         FEM backend only. Multiplier on the near-conductor element size.
         Default is ``1.0``.
@@ -257,6 +264,7 @@ class SimParams:
     FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac
     FEM_air_pad_mm: float | tuple | None = _FEM_DEFAULTS.air_pad_mm
     FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength
+    FEM_mesh_freq: float | None = _FEM_DEFAULTS.mesh_freq
     FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale
     FEM_min_layers: int = _FEM_DEFAULTS.min_layers
     FEM_port_type: str = _FEM_DEFAULTS.port_type
@@ -292,6 +300,9 @@ class SimParams:
             air_pad_frac=self.FEM_air_pad_frac,
             air_pad_mm=self.FEM_air_pad_mm,
             elems_per_wavelength=self.FEM_elems_per_wavelength,
+            # freq_range is the plot window; the mesh is sized for the
+            # frequency the structure was designed at
+            mesh_freq=self.FEM_mesh_freq or self.main_freq,
             mesh_fine_scale=self.FEM_mesh_fine_scale,
             min_layers=self.FEM_min_layers,
             num_solve_points=self.FEM_num_solve_points,
