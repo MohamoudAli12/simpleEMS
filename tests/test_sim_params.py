@@ -219,6 +219,10 @@ class TestFEMOptions:
     # mapped to the SimParams attribute each is fed from.
     DERIVED_OPTIONS = {"kappa_freq": "main_freq"}
 
+    # FEMOptions fields exposed as a FEM_* knob that falls back to a SimParams
+    # attribute when left unset, mapped to the attribute each falls back to.
+    KNOB_WITH_DERIVED_DEFAULT = {"mesh_freq": "main_freq"}
+
     def test_fem_options_property_round_trips_every_field(self, params):
         """Every ``FEMOptions`` field must be fed by a ``FEM_*`` param, or be a
         named derived field; one added to neither would silently use the
@@ -227,6 +231,10 @@ class TestFEMOptions:
 
         for field in dataclasses.fields(FEMOptions):
             if field.name in self.DERIVED_OPTIONS:
+                continue
+            if field.name in self.KNOB_WITH_DERIVED_DEFAULT:
+                flat_name = f"FEM_{field.name}"
+                assert hasattr(params, flat_name), f"{flat_name} missing on SimParams"
                 continue
             flat_name = f"FEM_{field.name}"
             assert hasattr(params, flat_name), f"{flat_name} missing on SimParams"
@@ -239,6 +247,38 @@ class TestFEMOptions:
 
         for name, source in self.DERIVED_OPTIONS.items():
             assert getattr(options, name) == getattr(params, source)
+
+    def test_mesh_freq_defaults_to_main_freq(self, fr4):
+        """freq_range says where to plot the S-parameters; sizing the mesh off
+        its top end refines a wide plot window for nothing."""
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        result = InsetFedPatchParams(
+            resonant_freq=2.45e9,
+            span_freq=2.0e9,  # a plot window far wider than the design point
+            backend_engine="FEM",
+            **fr4,
+        )
+
+        options = result.fem_options
+
+        assert options.mesh_freq == result.main_freq
+        assert options.mesh_freq not in result.freq_range
+
+    def test_an_explicit_mesh_freq_wins(self, fr4):
+        """Checking the structure at the top of a wide band is still possible,
+        it just has to be asked for."""
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        result = InsetFedPatchParams(
+            resonant_freq=2.45e9,
+            span_freq=2.0e9,
+            backend_engine="FEM",
+            FEM_mesh_freq=4.45e9,
+            **fr4,
+        )
+
+        assert result.fem_options.mesh_freq == 4.45e9
 
     def test_custom_values_reach_the_bundled_options(self, fr4):
         from simpleEMS.patch_antenna import InsetFedPatchParams

@@ -262,6 +262,21 @@ class TestCheckFarfieldMargin:
 
         _check_farfield_margin(bbox, domain, freq, None)
 
+    def test_padding_built_at_the_mesh_frequency_passes_there(self):
+        """The automatic padding is exactly lambda/4 at the mesh frequency, so
+        a pattern at main_freq sits on the limit and must not be refused over
+        the float round-trip through fem_mesh.json."""
+        freq = 2.45e9
+        # what _build_air_box computes for a 2 mm-thick board
+        pad = max(0.25 * (C0 / freq), 3 * 0.002)
+        bbox = (0, 0, 0, 0.05, 0.05, 0.002)
+        domain = [bbox[i] - pad for i in range(3)] + [
+            bbox[3 + i] + pad for i in range(3)
+        ]
+        bbox, domain = json.loads(json.dumps([list(bbox), domain]))
+
+        _check_farfield_margin(tuple(bbox), tuple(domain), freq, None)
+
     def test_tight_padding_raises(self):
         freq = 2.45e9
         pad = 0.1 * self.quarter_wave(freq)
