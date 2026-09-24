@@ -20,6 +20,11 @@ STEP AP242 export utilities for CSXCAD geometries using CadQuery.
 Converts openEMS CSXCAD structures into STEP format for CAD interoperability.
 Supports box, linear polygon, and cylinder (solid or shell) primitives; any
 other primitive type is reported and skipped.
+
+CSXCAD settles overlapping primitives by priority, which a STEP file has no
+way to express, so a dielectric that outranks the metal it sits in -- a via
+antipad -- is cut out of that conductor for real. See
+:func:`_dielectric_cutters`.
 """
 
 from __future__ import annotations
@@ -137,21 +142,28 @@ def _apply_transform(solid: cq.Workplane, prim: object) -> cq.Workplane:
 
 def _process_property(
     prop: object,
-) -> list[cq.Workplane]:
+) -> list[tuple[cq.Workplane, object]]:
+    """Build every primitive of ``prop`` as ``(solid, primitive)`` pairs.
+
+    The primitive rides along with its solid because the caller needs its
+    priority and its type to resolve overlaps (see
+    :func:`_dielectric_cutters`), and a skipped primitive would otherwise
+    break any attempt to line the two lists up again afterwards.
+    """
     name = prop.GetName()
 
     primitives = prop.GetAllPrimitives()
     if not primitives:
         return []
 
-    solids: list[cq.Workplane] = []
+    solids: list[tuple[cq.Workplane, object]] = []
     for prim in primitives:
         cls = prim.__class__.__name__
 
         if cls == "CSPrimBox":
             start = prim.GetStart()
             stop = prim.GetStop()
-            solids.append(_apply_transform(_make_box(start, stop), prim))
+            solids.append((_apply_transform(_make_box(start, stop), prim), prim))
             console.print(f"[info]  box: {name} ({start} → {stop})[/info]")
 
         elif cls == "CSPrimLinPoly":
@@ -160,7 +172,7 @@ def _process_property(
             normdir = prim.GetNormDir()
             length = prim.GetLength()
             solid = _make_linpoly(x_coords, y_coords, elevation, normdir, length)
-            solids.append(_apply_transform(solid, prim))
+            solids.append((_apply_transform(solid, prim), prim))
             nv = len(x_coords)
             console.print(
                 f"[info]  polygon: {name} ({nv} verts, elev={elevation}, "
@@ -181,7 +193,7 @@ def _process_property(
                 )
             else:
                 solid = _make_cylinder(start, stop, radius)
-            solids.append(_apply_transform(solid, prim))
+            solids.append((_apply_transform(solid, prim), prim))
             console.print(
                 f"[info]  cylinder: {name} ({start} → {stop}, r={radius})[/info]"
             )
@@ -196,6 +208,93 @@ def _process_property(
             )
 
     return solids
+
+
+def _bounds_overlap(first: cq.BoundBox, second: cq.BoundBox) -> bool:
+    """Return True if two CadQuery bounding boxes intersect.
+
+    A cheap gate in front of the boolean: OCC cuts are expensive, and on a
+    real board almost every metal/dielectric pair is nowhere near touching.
+    """
+    return (
+        first.xmin <= second.xmax
+        and second.xmin <= first.xmax
+        and first.ymin <= second.ymax
+        and second.ymin <= first.ymax
+        and first.zmin <= second.zmax
+        and second.zmin <= first.zmax
+    )
+
+
+def _cut_shape(solid: cq.Workplane, prim: object) -> cq.Workplane:
+    """The shape a dielectric primitive removes from the metal it outranks.
+
+    For everything but a shell that is the primitive's own solid. A shell is
+    how :meth:`simpleEMS.components.GenericStructure.create_via` draws an
+    antipad, and there the void is the **whole outer disc**, not the ring: the
+    ring's bore is filled by the via barrel, so cutting only the ring would
+    leave a collar of plane copper hugging the barrel -- which is the short
+    the antipad exists to prevent. The Gerber exporter clears the same disc
+    for the same reason (see
+    :func:`simpleEMS.export_gerber.primitive_cylindrical_shell`).
+    """
+    if prim.__class__.__name__ != "CSPrimCylindricalShell":
+        return solid
+    outer_radius = prim.GetRadius() + prim.GetShellWidth() / 2
+    filled = _make_cylinder(prim.GetStart(), prim.GetStop(), outer_radius)
+    return _apply_transform(filled, prim)
+
+
+def _dielectric_cutters(
+    built: list[tuple[object, list[tuple[cq.Workplane, object]]]],
+) -> list[tuple[int, cq.Workplane]]:
+    """Collect every dielectric solid that can outrank a conductor.
+
+    CSXCAD settles two overlapping primitives by priority: the higher one
+    owns the shared volume. STEP carries no priorities, so an antipad -- a
+    dielectric deliberately placed inside a plane -- would export as a solid
+    intersecting that plane, and the plane would still be whole. Meshed, the
+    copper runs right up to the barrel and the via shorts to the very plane
+    the antipad was there to clear it of.
+
+    Only materials are collected, and only metal is cut by them below. A
+    conductor overlapping a dielectric is the ordinary case -- a trace on a
+    substrate, a barrel through a core -- and is left alone.
+    """
+    cutters: list[tuple[int, cq.Workplane]] = []
+    for prop, solids in built:
+        if prop.__class__.__name__ != "CSPropMaterial":
+            continue
+        for solid, prim in solids:
+            cutters.append((prim.GetPriority(), _cut_shape(solid, prim)))
+    return cutters
+
+
+def _apply_cutters(
+    solid: cq.Workplane,
+    prim: object,
+    cutters: list[tuple[int, cq.Workplane]],
+    name: str,
+) -> cq.Workplane | None:
+    """Remove every higher-priority dielectric that overlaps ``solid``.
+
+    Returns ``None`` if nothing survives, which means a clearance swallowed
+    the conductor whole -- worth saying out loud rather than exporting an
+    empty part.
+    """
+    priority = prim.GetPriority()
+    for cutter_priority, cutter in cutters:
+        if cutter_priority <= priority:
+            continue
+        if not _bounds_overlap(solid.val().BoundingBox(), cutter.val().BoundingBox()):
+            continue
+        solid = solid.cut(cutter)
+        if not solid.solids().vals():
+            console.print(
+                f"[warning]  {name}: a clearance removed the whole solid[/warning]"
+            )
+            return None
+    return solid
 
 
 def _unique_label(name: str, used: set[str]) -> str:
@@ -238,22 +337,31 @@ def _build_assembly(CSX: ContinuousStructure) -> tuple[cq.Assembly, int]:
     used: set[str] = set()
     part_count = 0
 
+    # Build everything first: a conductor cannot be cut by a clearance that
+    # has not been built yet, and CSXCAD gives no guaranteed property order.
+    built: list[tuple[object, list[tuple[cq.Workplane, object]]]] = []
     for prop in CSX.GetAllProperties():
-        cls = prop.__class__.__name__
-        if cls not in physical_types:
+        if prop.__class__.__name__ not in physical_types:
             continue
+        console.print(f"[info]processing {prop.GetName()}[/info]")
+        built.append((prop, _process_property(prop)))
 
-        name = prop.GetName()
-        console.print(f"[info]processing {name}[/info]")
+    cutters = _dielectric_cutters(built)
 
-        solids = _process_property(prop)
+    for prop, solids in built:
         if not solids:
             continue
 
+        name = prop.GetName()
+        is_metal = prop.__class__.__name__ == "CSPropMetal"
         r, g, b, a = prop.GetFillColor()
         color = cq.Color(r / 255, g / 255, b / 255, min(a / 255, 1.0))
 
-        for solid in solids:
+        for solid, prim in solids:
+            if is_metal and cutters:
+                solid = _apply_cutters(solid, prim, cutters, name)
+                if solid is None:
+                    continue
             label = _unique_label(name, used)
             assy.add(solid, name=label, color=color)
             part_count += 1
