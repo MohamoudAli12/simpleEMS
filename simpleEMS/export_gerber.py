@@ -28,17 +28,24 @@ and the substrate footprint becomes the board outline. File names, the
 Gerber plot output.
 
 Box, polygon and extruded-polygon primitives are exported as copper;
-Z-axis cylinders as drills. Other primitive types are skipped.
+Z-axis cylinders as drills; Z-axis cylindrical shells as round clearances.
+Other primitive types are skipped, with a warning naming the type.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
 from CSXCAD import ContinuousStructure
-from CSXCAD.CSPrimitives import CSPrimBox, CSPrimLinPoly, CSPrimPolygon
+from CSXCAD.CSPrimitives import (
+    CSPrimBox,
+    CSPrimCylindricalShell,
+    CSPrimLinPoly,
+    CSPrimPolygon,
+)
 
 from .console import console
 
@@ -50,6 +57,7 @@ __all__ = [
     "gerber_coord",
     "infer_layers",
     "primitive_box",
+    "primitive_cylindrical_shell",
     "primitive_polygon",
     "write_copper_layer",
     "write_drill",
@@ -58,6 +66,11 @@ __all__ = [
 
 # Tolerance (drawing units) for deciding two Z ranges touch.
 _EPS = 1e-6
+
+# Vertices per circle when a round clearance is written as a region. The
+# sagitta of a 60-gon on a 1 mm antipad is under a micron -- far inside any
+# fab tolerance, though not below the file's own 1e-5 mm coordinate step.
+_CIRCLE_SEGMENTS = 60
 
 
 # ---------------------------------------------------------------------
@@ -191,6 +204,17 @@ def gerber_coord(vertices_xy_pos: tuple[float, float]) -> str:
 # ---------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------
+def _circle_points(
+    cx: float, cy: float, radius: float, segments: int = _CIRCLE_SEGMENTS
+) -> list[tuple[float, float]]:
+    """Vertices of a regular polygon approximating a circle, CCW from +x."""
+    step = 2 * math.pi / segments
+    return [
+        (cx + radius * math.cos(index * step), cy + radius * math.sin(index * step))
+        for index in range(segments)
+    ]
+
+
 def _corner_points(prim: object) -> list[list[float]] | None:
     """
     Return the transformed 3D points that bound a primitive.
@@ -219,6 +243,20 @@ def _corner_points(prim: object) -> list[list[float]] | None:
         points = [[x, y, z] for x, y in zip(x0, x1, strict=True) for z in (z0, z1)]
     elif cls == "CSPrimCylinder":
         points = [list(prim.GetStart()), list(prim.GetStop())]
+    # A shell subclasses CSPrimCylinder, so the exact-name dispatch needs it
+    # named separately -- and unlike a barrel, what lands on the layer is the
+    # disc it clears, not the axis it runs along, so it needs a real footprint.
+    elif cls == "CSPrimCylindricalShell":
+        start, stop = prim.GetStart(), prim.GetStop()
+        if abs(stop[0] - start[0]) > _EPS or abs(stop[1] - start[1]) > _EPS:
+            return None  # not along Z: no disc to clear
+        outer_radius = prim.GetRadius() + prim.GetShellWidth() / 2
+        points = [
+            [start[0] + sx * outer_radius, start[1] + sy * outer_radius, z]
+            for sx in (-1, 1)
+            for sy in (-1, 1)
+            for z in (start[2], stop[2])
+        ]
     else:
         return None
 
@@ -296,11 +334,13 @@ def infer_layers(
             prim_cls = prim.__class__.__name__
             points = _corner_points(prim)
             if points is None:
-                if prop_cls == "CSPropMetal":
-                    console.print(
-                        f"[warning]skipping {prim_cls} in {name}: "
-                        "no XY footprint to export[/warning]"
-                    )
+                # Warn for materials too, not just metal: an antipad the
+                # exporter cannot draw is a plane with no clearance in it,
+                # which is exactly the kind of silence worth breaking.
+                console.print(
+                    f"[warning]skipping {prim_cls} in {name}: "
+                    "no XY footprint to export[/warning]"
+                )
                 continue
             lo, hi = _bounds(points)
 
@@ -426,6 +466,46 @@ def primitive_box(file: TextIO, box: CSPrimBox) -> None:
     file.write("G37*\n")
 
 
+def primitive_cylindrical_shell(file: TextIO, shell: CSPrimCylindricalShell) -> None:
+    """
+    Export a Z-axis cylindrical shell as a closed Gerber region.
+
+    The region is the shell's **outer** disc, filled -- not the annulus the
+    primitive describes. A shell is how
+    :meth:`simpleEMS.components.GenericStructure.create_via` draws an antipad,
+    and in the 3D model the hole in it is filled by the via barrel. Gerber has
+    no barrel on this layer: the hole is a line in the drill file. Clearing
+    only the annulus would leave the copper inside it drawn, as an island the
+    plated barrel then bonds to the plane -- shorting the via to the very
+    plane the antipad exists to keep it clear of. So the void is the whole
+    disc.
+
+    Parameters
+    ----------
+    file : file object
+        Open file handle for writing Gerber output.
+    shell : CSPrimCylindricalShell
+        The shell primitive, whose axis must run along Z.
+
+    Returns
+    -------
+    None
+    """
+    start = shell.GetStart()
+    outer_radius = shell.GetRadius() + shell.GetShellWidth() / 2
+    corners = _circle_points(start[0], start[1], outer_radius)
+
+    if shell.HasTransform():
+        transform = shell.GetTransform()
+        corners = [transform.Transform([x, y, start[2]])[:2] for x, y in corners]
+
+    file.write("G36*\n")
+    file.write(gerber_coord(corners[0]) + "D02*\n")
+    for corner in (*corners[1:], corners[0]):
+        file.write(gerber_coord(corner) + "D01*\n")
+    file.write("G37*\n")
+
+
 def primitive_polygon(file: TextIO, poly: CSPrimPolygon | CSPrimLinPoly) -> None:
     """
     Export a CSXCAD polygon primitive as a closed Gerber region.
@@ -493,8 +573,11 @@ def _write_regions(file: TextIO, items: list[tuple[str, Any]]) -> None:
         if name != current:
             file.write(f"%LN{name}*%\n")
             current = name
-        if prim.__class__.__name__ == "CSPrimBox":
+        cls = prim.__class__.__name__
+        if cls == "CSPrimBox":
             primitive_box(file, prim)
+        elif cls == "CSPrimCylindricalShell":
+            primitive_cylindrical_shell(file, prim)
         else:
             primitive_polygon(file, prim)
 
