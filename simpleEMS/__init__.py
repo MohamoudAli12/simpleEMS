@@ -125,6 +125,6 @@ __all__ = [
     "use_light_theme",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "Mohamoud Ali"
 __license__ = "AGPL-3.0-or-later"
