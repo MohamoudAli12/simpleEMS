@@ -23,7 +23,7 @@ import importlib
 
 
 _NAMES_BY_MODULE = {
-    "sim_params": ["GenericParams"],
+    "components": ["GenericParams", "GenericStructure"],
     "microstrip_line": ["MicrostripLine", "MicrostripLineParams"],
     "patch_antenna": [
         "InsetFedPatchAntenna",
@@ -41,6 +41,7 @@ _NAMES_BY_MODULE = {
     "fdtd_import_step": ["simulate_step_FDTD"],
     "fem_backend": ["simulate_step_FEM", "FEMOptions"],
     "fem_radiation": ["FEMNF2FF"],
+    "plot_theme": ["use_dark_theme", "use_light_theme"],
     "sim_tools": [
         "DumpType",
         "SimTools",
@@ -95,6 +96,7 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "GenericParams",
+    "GenericStructure",
     "InsetFedPatchAntenna",
     "ProbeFedPatchAntenna",
     "MicrostripLine",
@@ -119,6 +121,8 @@ __all__ = [
     "simulate_step_FEM",
     "FEMOptions",
     "FEMNF2FF",
+    "use_dark_theme",
+    "use_light_theme",
 ]
 
 __version__ = "0.3.0"
