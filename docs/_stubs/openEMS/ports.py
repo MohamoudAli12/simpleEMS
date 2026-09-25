@@ -4,3 +4,7 @@ class LumpedPort:
 
 class Port:
     pass
+
+
+class CPWPort:
+    pass

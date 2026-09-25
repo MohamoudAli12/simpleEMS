@@ -12,3 +12,11 @@ class CSPrimLinPoly(CSPrimitives):
 
 class CSPrimPolygon(CSPrimitives):
     pass
+
+
+class CSPrimCylinder(CSPrimitives):
+    pass
+
+
+class CSPrimCylindricalShell(CSPrimCylinder):
+    pass

@@ -9,6 +9,7 @@ API
     ifa_antenna
     quarterwave_stub_filter
     microstrip_line
+    components
     standalone_model
     fdtd_import_step
     fem_backend
