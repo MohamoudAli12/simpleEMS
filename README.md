@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/logo/simpleems-logo.svg" alt="simpleEMS logo" width="420">
+  <img class="dark-light" src="https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/logo/simpleems-logo.svg" alt="simpleEMS logo" width="420">
 </p>
 
 # simpleEMS
