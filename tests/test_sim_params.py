@@ -479,8 +479,6 @@ class TestAbstractProperties:
         [
             "freq_range",
             "main_freq",
-            "substrate_width_mm",
-            "substrate_length_mm",
         ],
     )
     def test_base_class_properties_raise_not_implemented(self, name):

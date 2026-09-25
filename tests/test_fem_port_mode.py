@@ -693,8 +693,9 @@ class TestFEMOptionsValidation:
         from simpleEMS.components import GenericParams
 
         params = GenericParams(
-            freq_range=(2e9, 3e9),
-            main_freq=2.45e9,
+            min_freq=2e9,
+            max_freq=3e9,
+            target_freq=2.45e9,
             substrate_eps_r=4.4,
             substrate_tand=0.001,
             substrate_thickness_mm=1.6,
@@ -733,8 +734,9 @@ class TestPortTypeOption:
         from simpleEMS.components import GenericParams
 
         kw = dict(
-            freq_range=(2e9, 3e9),
-            main_freq=2.45e9,
+            min_freq=2e9,
+            max_freq=3e9,
+            target_freq=2.45e9,
             substrate_eps_r=4.4,
             substrate_tand=0.001,
             substrate_thickness_mm=1.6,
