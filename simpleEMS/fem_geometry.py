@@ -742,6 +742,102 @@ def _snapshot_solids(problem: Problem) -> tuple[list, tuple, tuple, dict]:
     return originals, struct, diel_bbox, port_geo
 
 
+def _vertex_bounds(dim: int, tag: int) -> list[float]:
+    """Extents of an entity from its vertices, as ``[x0, y0, z0, x1, y1, z1]``.
+
+    ``getBoundingBox`` pads by the geometry tolerance, so a sheet rebuilt from
+    it overhangs its neighbours by a fraction of a micron and fragments into
+    slivers. The vertices give the exact corners of a flat rectangle.
+    """
+    points = gmsh.model.getBoundary([(dim, tag)], recursive=True)
+    coords = [gmsh.model.getValue(0, point, []) for _, point in points]
+    return [min(c[i] for c in coords) for i in range(3)] + [
+        max(c[i] for c in coords) for i in range(3)
+    ]
+
+
+def _conductor_slabs(problem: Problem, diel_bbox: tuple) -> list:
+    """Record where each conductor is, and where its sheet will be.
+
+    Parameters
+    ----------
+    problem : Problem
+        The FEM problem, supplying each solid's role.
+    diel_bbox : tuple
+        Extents of the dielectrics, which pick each conductor's sheet face.
+
+    Returns
+    -------
+    list
+        One ``(solid_bbox, sheet_bounds)`` entry per conductor: the extents of
+        the solid, and the exact extents of the face that becomes its sheet.
+    """
+    slabs = []
+    for dim, tag in gmsh.model.getEntities(3):
+        spec = problem.solids.get(_short_name(gmsh.model.getEntityName(dim, tag)))
+        if spec and spec.role in ("pec", "lossy_conductor"):
+            face = _footprint_face(tag, diel_bbox)
+            slabs.append((gmsh.model.getBoundingBox(dim, tag), _vertex_bounds(2, face)))
+    return slabs
+
+
+def _snap_port_to_conductor_sheets(
+    face_tag: int, direction: str, conductor_slabs: list
+) -> int:
+    """Stretch a lumped port's ends onto the sheets its conductors became.
+
+    A conductor turns into a sheet on one face of its solid, so a port drawn to
+    the conductor's other face stops a copper thickness short and connects to
+    nothing. An inner plane has dielectric on both faces, so which face it
+    keeps is a tie-break, and a port on either side has to reach it. Only an
+    end inside a conductor's own thickness moves, so a port is never pulled
+    across a dielectric onto a different conductor.
+
+    Parameters
+    ----------
+    face_tag : int
+        The port sheet.
+    direction : str
+        Axis the port's gap runs along, ``"x"``, ``"y"`` or ``"z"``.
+    conductor_slabs : list
+        One ``(solid_bbox, sheet_bounds)`` entry per conductor, from
+        :func:`_conductor_slabs`.
+
+    Returns
+    -------
+    int
+        Tag of the port sheet: the same one if no end moved, else its
+        replacement.
+    """
+    axis = {"x": 0, "y": 1, "z": 2}[direction]
+    bounds = _vertex_bounds(2, face_tag)
+    lateral = [index for index in range(3) if index != axis]
+    moved = False
+    for solid_bbox, sheet_bounds in conductor_slabs:
+        if sheet_bounds[axis + 3] - sheet_bounds[axis] > _FLAT:
+            continue  # this sheet does not lie across the port's gap
+        overlaps = all(
+            bounds[index] <= sheet_bounds[index + 3] + _FLAT
+            and bounds[index + 3] >= sheet_bounds[index] - _FLAT
+            for index in lateral
+        )
+        if not overlaps:
+            continue
+        sheet_position = sheet_bounds[axis]
+        for end in (axis, axis + 3):
+            inside_slab = (
+                solid_bbox[axis] - _FLAT <= bounds[end] <= solid_bbox[axis + 3] + _FLAT
+            )
+            if inside_slab and abs(bounds[end] - sheet_position) > _FLAT:
+                bounds[end] = sheet_position
+                moved = True
+    if not moved:
+        return face_tag
+    flat_axis = min(range(3), key=lambda index: bounds[index + 3] - bounds[index])
+    gmsh.model.occ.remove([(2, face_tag)], recursive=True)
+    return _wave_port_sheet(tuple(bounds), "xyz"[flat_axis])
+
+
 def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) -> list:
     """Replace each thin conductor and port solid with a zero-thickness sheet.
 
@@ -771,6 +867,7 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
                 wave_solids.add(name)
     sheets = []  # (role, name, face_tag)
     metal_solids = []
+    conductor_slabs = _conductor_slabs(problem, diel_bbox)
     for dim, tag in gmsh.model.getEntities(3):
         short = _short_name(gmsh.model.getEntityName(dim, tag))
         spec = problem.solids.get(short)
@@ -794,6 +891,10 @@ def _build_footprint_sheets(problem: Problem, diel_bbox: tuple, port_geo: dict) 
                 )
                 gmsh.model.occ.synchronize()
                 _step_sheet_off_the_dielectric_edge(face_tag, diel_bbox)
+                face_tag = _snap_port_to_conductor_sheets(
+                    face_tag, port_direction.get(short, "z"), conductor_slabs
+                )
+                gmsh.model.occ.synchronize()
                 port_geo[short] = gmsh.model.getBoundingBox(2, face_tag)
             sheets.append((role, short, face_tag))
             metal_solids.append((3, tag))
