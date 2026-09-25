@@ -47,7 +47,8 @@ class SimParams:
     frequency range and inputs provided.
     Subclasses (e.g., InsetFedPatchParams, ProbeFedPatchParams,
     MicrostripLineParams) must define ``freq_range`` and ``main_freq``
-    properties and the substrate dimensions.
+    properties and provide ``substrate_width_mm`` and
+    ``substrate_length_mm``, as properties or as fields.
 
     Parameters
     ----------
@@ -377,44 +378,6 @@ class SimParams:
         if simulation_box.shape == (3,):
             return np.column_stack((-simulation_box / 2, simulation_box / 2))
         return simulation_box
-
-    @property
-    def substrate_width_mm(self) -> float:
-        """
-        Return the substrate width in mm.
-
-        Must be implemented by subclasses.
-
-        Returns
-        -------
-        float
-            Substrate width in mm.
-
-        Raises
-        ------
-        NotImplementedError
-            If the subclass does not define this property.
-        """
-        raise NotImplementedError("subclasses must define substrate width")
-
-    @property
-    def substrate_length_mm(self) -> float:
-        """
-        Return the substrate length in mm.
-
-        Must be implemented by subclasses.
-
-        Returns
-        -------
-        float
-            Substrate length in mm.
-
-        Raises
-        ------
-        NotImplementedError
-            If the subclass does not define this property.
-        """
-        raise NotImplementedError("subclasses must define substrate length")
 
     def __post_init__(self) -> None:
         """Perform common parameter computations after dataclass initialisation."""
