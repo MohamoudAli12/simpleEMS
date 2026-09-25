@@ -5,6 +5,120 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and follo
 
 ---
 
+## v0.4.0 - 25 Sep 2026
+
+A structures-and-export release. It adds a printed inverted-F antenna, building
+blocks for your own structures, an experimental wave port for the FEM backend,
+and dark and light plot themes. The Gerber and STEP exports now handle vias,
+their antipads, inner layers and transformed objects well enough to send a
+design to a board house. A round of FDTD mesher fixes makes simulations smaller
+and more accurate, and scikit-rf is no longer a dependency.
+
+### Added
+- `InvertedFAntenna` / `InvertedFAntennaParams`: a printed inverted-F antenna
+  designed from a target frequency, with an example, a tutorial and API docs
+  (fd9f964, 961cdb5, 7f8e3ac)
+- `GenericParams` / `GenericStructure`: build your own structure from
+  ready-made pieces -- traces, bends, tapers, stubs, vias, coplanar waveguides
+  and ports -- with an example and a "building a custom structure" tutorial
+  (c1e2be2, 9bd6fe7)
+- A `SimParams` subclass can supply `substrate_width_mm` and
+  `substrate_length_mm` as plain fields instead of properties (32fcdd5)
+- Dark and light plot themes, `use_dark_theme()` and `use_light_theme()`, with
+  an API docs page. Plots now default to dark (1035fa8, 5adff82)
+- FEM: an experimental wave port, `FEM_port_type="waveport"`. It solves the
+  mode of the line at the port -- microstrip, coplanar waveguide and so on --
+  instead of driving one fixed field direction. The port sits on the edge of
+  the simulation and sizes itself from the trace and substrate;
+  `FEM_waveport_width_mm` and `FEM_waveport_height_mm` set that size directly,
+  and `FEM_port_mode_*` pick the mode and override its impedance or
+  permittivity. Lumped ports stay the default (9f000ab, ffe29f1, 41b731f)
+- FEM: `FEM_boundary="pec"` closes the model in a shielded box, for
+  transmission lines, filters and other structures that do not radiate. The
+  backend also reports how much signal a line loses (41b731f)
+- FEM: `FEM_mesh_freq` sets the frequency the mesh is sized at; see Changed
+  (81d6483)
+- FEM: `FEM_air_pad_mm` also takes `[x, y, z]` or three `[low, high]` pairs, so
+  each face of the air box gets only the air it needs. Zero puts the boundary
+  right on a ground plane. A single number works as before (76a9b63)
+- FEM: `FEM_max_solve_points` caps the extra solves the sweep spends correcting
+  a physically impossible curve (see Fixed) (43f1335)
+- FEM: the progress output shows the number of frequencies to solve, the time
+  each solve took, the elapsed time, the degrees of freedom and the peak memory
+  (3423bba)
+- `simulate_model()` records an NF2FF box, so a standalone model can plot its
+  radiation pattern and directivity (a20d7cc, 7839433, b669af6)
+- `simulation_box` on `SimParams` sets the FDTD simulation box as sizes or as
+  bounds. The mesher and the field dump both use it; left as `None`, both
+  derive it from the geometry as before (39cb572)
+- `export_touchstone`, simpleEMS's own Touchstone writer and reader. Its data
+  lines match the old scikit-rf output byte for byte.
+  `SimTools.export_touchstone()` takes a new `s_matrix` argument to export
+  every S-parameter of a multi-port network, not only S11 and S21, and returns
+  the path of the file it wrote (6a48784)
+- Via support in the STEP export and, through it, in the FEM backend (d9cbaf0)
+- The simpleEMS logo in the README and the docs header, and figures redrawn on
+  a dark background (4139ef5, 2784643, 3593620, b317cbd, e99e912)
+
+### Changed
+- **Breaking:** removed `SimTools.run_all_post_processing()`. Call the plot and
+  export methods you need directly (b7de19a)
+- **Breaking:** the Gerber export writes one file per copper layer, chosen by
+  the z position of each metal, plus an Excellon drill file and a board outline,
+  instead of writing only the top layer (6504ee6)
+- **Breaking:** `substrate_cells` defaults to 7 instead of 4, and values below 2
+  raise an error. The mesher places that many evenly spaced z-lines through the
+  substrate, counting both faces (07a4531)
+- FEM: the mesh and the air box follow `main_freq` instead of the ends of
+  `freq_range`. Widening the range to see more of a plot no longer makes the
+  mesh finer and the air box bigger (81d6483)
+- The microstrip line's board is now as long as the trace, with a port on each
+  edge, instead of a dielectric wavelength of padding around it: a 3 mm trace
+  used to sit on a 120 x 133 mm board (6d906be)
+- The band-pass filter and the IFA short their stubs to ground with real vias
+  instead of boxes, so the shorts now reach the Gerber export (b76030a,
+  4e5053e)
+- The FDTD simulation box pads by a full wavelength instead of half of one, so
+  the NF2FF box encloses the whole structure instead of cutting into the
+  substrate (a2e93c5)
+- Dropped the `scikit-rf` dependency (59a9b0c)
+
+### Fixed
+- FEM: a sweep could return a curve with more power leaving the structure than
+  entered it, flagged only by a warning. The sweep now spends extra solves to
+  correct itself, stops once they stop helping, and names the setting to change
+  when it cannot. The curves it returns also track the real response more
+  closely (43f1335)
+- FEM: boards with vias failed to simulate, because the mesher left a broken
+  element on the via barrels (d6027e1)
+- FEM: on multilayer boards a port could stop just short of an inner ground
+  plane, so the simulation saw a broken connection and reported a bad match
+  (713ad93)
+- FEM: board loss came out about a fifth too high (41b731f)
+- FDTD: the auto mesher missed the narrow slot beside an inset patch's feed, so
+  the antenna came out badly mismatched. The mesher now places lines on the
+  slot and spends fewer cells elsewhere, so the same simulation is smaller and
+  faster (86895dd)
+- FDTD: above about 25 GHz the mesher packed five z-lines into the 35 um copper
+  instead of one. The 60 GHz patch example now runs 2.3x lighter (3a3f933)
+- FDTD: polygons and curved bends produced so many fine mesh lines that the
+  simulation could not run, and the IFA came out overmeshed (92191dd, 3169c24,
+  fdbbe46)
+- FDTD: the mesher ignored a user-defined simulation box (39cb572)
+- FDTD: the thin-layer collapse could reduce a low-frequency substrate to a
+  single z-line (07a4531)
+- `simulate_model()` on a model with no ports crashed while creating the NF2FF
+  box instead of raising "No ports found" (42c8d79)
+- The Gerber and STEP exports placed rotated or translated objects in their
+  original position, and the STEP export failed on a structure that reused a
+  name (086fa36, 5c83cd6)
+- The antipad around a via never reached the Gerber layers, so a board made
+  from them would have plated the via onto the plane it should pass through,
+  and the STEP export left the planes whole. Both now cut the clearance, and
+  the ground stitching around it stays connected (2843d16, b76df9f)
+
+---
+
 ## v0.3.0 - 09 Aug 2026
 
 Mostly a correctness release for the FEM backend: several results it reported
