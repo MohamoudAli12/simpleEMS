@@ -1298,7 +1298,8 @@ def compute_sim_data(
     -------
     SimData
         Named tuple of ``freqs``, ``s11``, ``s21`` (``None`` for a single-port
-        problem), ``z11``, ``vswr``, ``input_power``, ``port_voltage``,
+        problem), ``s31`` / ``s41`` (``None`` with fewer than three / four
+        ports), ``z11``, ``vswr``, ``input_power``, ``port_voltage``,
         ``port_current``, and ``ref_impedance``. See
         :class:`~simpleEMS.sim_tools.SimData`.
 
@@ -1326,6 +1327,8 @@ def compute_sim_data(
 
     s11 = s[:, 0, 0]
     s21 = s[:, 1, 0] if nports >= 2 else None
+    s31 = s[:, 2, 0] if nports >= 3 else None
+    s41 = s[:, 3, 0] if nports >= 4 else None
     z0 = float(ref_impedances[0]) if ref_impedances.size else charac_imp
     z11 = z0 * (1 + s11) / (1 - s11)  # input impedance from the reflection coeff
     s11_mag = np.clip(np.abs(s11), 0, 0.999)  # prevent division by zero error
@@ -1335,7 +1338,17 @@ def compute_sim_data(
     input_power = 0.5 * np.real(port_voltage * np.conj(port_current))
 
     return SimData(
-        freqs_out, s11, s21, z11, vswr, input_power, port_voltage, port_current, z0
+        freqs_out,
+        s11,
+        s21,
+        s31,
+        s41,
+        z11,
+        vswr,
+        input_power,
+        port_voltage,
+        port_current,
+        z0,
     )
 
 
@@ -1530,7 +1543,8 @@ def simulate_step_FEM(
     -------
     SimData
         Named tuple of ``freqs``, ``s11``, ``s21`` (``None`` for a single-port
-        problem), ``z11``, ``vswr``, ``input_power``, ``port_voltage``,
+        problem), ``s31`` / ``s41`` (``None`` with fewer than three / four
+        ports), ``z11``, ``vswr``, ``input_power``, ``port_voltage``,
         ``port_current``, and ``ref_impedance``. See
         :class:`~simpleEMS.sim_tools.SimData`.
 

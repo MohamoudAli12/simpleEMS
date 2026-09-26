@@ -157,6 +157,10 @@ class SimData(NamedTuple):
         Complex S11 values across the frequency range.
     s21 : NDArray | None
         Complex S21 values (None if single-port).
+    s31 : NDArray | None
+        Complex S31 values (None with fewer than three ports).
+    s41 : NDArray | None
+        Complex S41 values (None with fewer than four ports).
     z11 : NDArray
         Complex Z11 values across the frequency range.
     vswr : NDArray
@@ -178,6 +182,8 @@ class SimData(NamedTuple):
     freqs: NDArray
     s11: NDArray
     s21: NDArray | None
+    s31: NDArray | None
+    s41: NDArray | None
     z11: NDArray
     vswr: NDArray
     input_power: float
@@ -494,11 +500,11 @@ class SimTools:
         from simulation results, for plotting and post-processing.
 
         For the FDTD backend this calls ``CalcPort`` on the given port(s) and
-        derives S11 (and S21 for two-port setups), Z11, VSWR, and input
-        power from the port voltage/current waves. For the FEM backend the
-        ``port`` argument is ignored and results are instead read from the
-        GetDP sweep output previously written to ``output_path`` by
-        ``run_simulation``.
+        derives S11, the transmission terms S21/S31/S41 for each extra port,
+        Z11, VSWR, and input power from the port voltage/current waves. For
+        the FEM backend the ``port`` argument is ignored and results are
+        instead read from the GetDP sweep output previously written to
+        ``output_path`` by ``run_simulation``.
 
         Parameters
         ----------
@@ -506,9 +512,9 @@ class SimTools:
             Simulation setup named tuple returned by ``setup_simulation``;
             supplies ``freqs``, ``backend_engine``, and ``charac_imp``.
         port : LumpedPort or list of LumpedPort
-            The openEMS port object representing a single-port simulation,
-            or a two-element list ``[port1, port2]`` for a two-port
-            simulation. Ignored when ``sim.backend_engine == "FEM"``.
+            The openEMS port object of a single-port simulation, or a list
+            of up to four ports ``[port1, ..., port4]``. The first port is
+            the driven one. Ignored when ``sim.backend_engine == "FEM"``.
         output_path : Path, optional
             Directory the simulation results were written to. Defaults to
             ``cwd`` (FDTD backend) or ``cwd / "Sim_Path"`` (FEM backend, to
@@ -526,6 +532,10 @@ class SimTools:
             - s21 : NDArray or None
                 Complex S21 values across the frequency range, or ``None``
                 for a single-port simulation.
+            - s31 : NDArray or None
+                Complex S31 values, or ``None`` with fewer than three ports.
+            - s41 : NDArray or None
+                Complex S41 values, or ``None`` with fewer than four ports.
             - z11 : NDArray
                 Complex Z11 values across the frequency range.
             - vswr : NDArray
@@ -542,6 +552,11 @@ class SimTools:
             - ref_impedance : float
                 Reference impedance ``charac_imp`` (from ``sim``) that S11
                 and Z11 were computed against.
+
+        Raises
+        ------
+        ValueError
+            If more than four ports are passed.
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
@@ -551,66 +566,64 @@ class SimTools:
 
             return fem_backend.compute_sim_data(sim.freqs, sim.charac_imp, output_path)
 
-        if isinstance(port, list):
-            for p in port:
-                p.CalcPort(str(output_path), sim.freqs, ref_impedance=sim.charac_imp)
-            s11 = port[0].uf_ref / port[0].uf_inc
-            s21 = port[1].uf_ref / port[0].uf_inc
-            z11 = port[0].uf_tot / port[0].if_tot
-            s11_mag = np.abs(s11)
-            s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
-            vswr = (1 + s11_mag) / (1 - s11_mag)
-            input_power = 0.5 * np.real(port[0].uf_tot * np.conj(port[0].if_tot))
-            return SimData(
-                sim.freqs,
-                s11,
-                s21,
-                z11,
-                vswr,
-                input_power,
-                port[0].uf_tot,
-                port[0].if_tot,
-                sim.charac_imp,
+        ports = port if isinstance(port, list) else [port]
+        if len(ports) > 4:
+            raise ValueError(
+                f"compute_sim_data supports up to 4 ports, got {len(ports)}"
             )
-        else:
-            port.CalcPort(str(output_path), sim.freqs, ref_impedance=sim.charac_imp)
-            s21 = None
-            z11 = port.uf_tot / port.if_tot
-            s11 = port.uf_ref / port.uf_inc
-            s11_mag = np.abs(s11)
-            s11_mag = np.clip(s11_mag, 0, 0.999)  # prevent division by zero error
-            vswr = (1 + s11_mag) / (1 - s11_mag)
-            input_power = 0.5 * np.real(port.uf_tot * np.conj(port.if_tot))
-            return SimData(
-                sim.freqs,
-                s11,
-                s21,
-                z11,
-                vswr,
-                input_power,
-                port.uf_tot,
-                port.if_tot,
-                sim.charac_imp,
+        for each_port in ports:
+            each_port.CalcPort(
+                str(output_path), sim.freqs, ref_impedance=sim.charac_imp
             )
+        driven_port = ports[0]
+        s11 = driven_port.uf_ref / driven_port.uf_inc
+        # Port 1 is the only excited port, so every other port's outgoing
+        # wave over port 1's incident wave gives the first S-matrix column.
+        transmission = [
+            each_port.uf_ref / driven_port.uf_inc for each_port in ports[1:]
+        ]
+        transmission += [None] * (3 - len(transmission))
+        s21, s31, s41 = transmission
+        z11 = driven_port.uf_tot / driven_port.if_tot
+        s11_mag = np.clip(np.abs(s11), 0, 0.999)  # prevent division by zero error
+        vswr = (1 + s11_mag) / (1 - s11_mag)
+        input_power = 0.5 * np.real(driven_port.uf_tot * np.conj(driven_port.if_tot))
+        return SimData(
+            sim.freqs,
+            s11,
+            s21,
+            s31,
+            s41,
+            z11,
+            vswr,
+            input_power,
+            driven_port.uf_tot,
+            driven_port.if_tot,
+            sim.charac_imp,
+        )
 
     @staticmethod
     def plot_s_param(
         freqs: NDArray,
         s11: NDArray,
         s21: NDArray | None = None,
+        s31: NDArray | None = None,
+        s41: NDArray | None = None,
         x_label: str = "Frequency",
         y_label: str = "S-parameter (dB)",
         title: str = "S-parameters vs Frequency",
         label_s11: str | None = None,
         label_s21: str | None = None,
+        label_s31: str | None = None,
+        label_s41: str | None = None,
     ) -> None:
         """
-        Plot S-parameters (S11 and optionally S21) against frequency.
+        Plot S-parameters (S11 and optionally S21, S31, S41) against frequency.
 
         Draws onto the current matplotlib axes (call ``plt.figure()``
-        beforehand to start a new figure). Both ``s11`` and ``s21`` are
-        expected as complex/linear values; they are converted to dB
-        (``20*log10(|.|)``) internally before plotting.
+        beforehand to start a new figure). Every S-parameter is expected as
+        complex/linear values; each is converted to dB (``20*log10(|.|)``)
+        internally before plotting.
 
         Parameters
         ----------
@@ -619,8 +632,14 @@ class SimTools:
         s11 : NDArray
             A 1D array of complex (linear) S11 values.
         s21 : NDArray, optional
-            A 1D array of complex (linear) S21 values for two-port
-            networks. If ``None`` (default), only S11 is plotted.
+            A 1D array of complex (linear) S21 values. If ``None``
+            (default), no S21 trace is drawn.
+        s31 : NDArray, optional
+            A 1D array of complex (linear) S31 values. If ``None``
+            (default), no S31 trace is drawn.
+        s41 : NDArray, optional
+            A 1D array of complex (linear) S41 values. If ``None``
+            (default), no S41 trace is drawn.
         x_label : str, optional
             Label for the x-axis. Default is ``"Frequency"``.
         y_label : str, optional
@@ -631,41 +650,35 @@ class SimTools:
             Legend label for the S11 trace. Defaults to ``"S11"``.
         label_s21 : str, optional
             Legend label for the S21 trace. Defaults to ``"S21"``.
+        label_s31 : str, optional
+            Legend label for the S31 trace. Defaults to ``"S31"``.
+        label_s41 : str, optional
+            Legend label for the S41 trace. Defaults to ``"S41"``.
 
         Returns
         -------
         None
             Draws the plot on the current axes; does not return a value.
         """
-        if s21 is not None:
-            if label_s21 is None:
-                label_s21 = "S21"
-
-            s21 = 20 * np.log10(np.abs(s21))
-            s21_lines = plt.plot(freqs, s21, label=label_s21)
-            cursor_s21 = themed_cursor(s21_lines)
-
-            cursor_s21.connect(
+        traces = [
+            (s11, label_s11 or "S11", "S11"),
+            (s21, label_s21 or "S21", "S21"),
+            (s31, label_s31 or "S31", "S31"),
+            (s41, label_s41 or "S41", "S41"),
+        ]
+        for s_param, label, name in traces:
+            if s_param is None:
+                continue
+            s_param_db = 20.0 * np.log10(np.abs(s_param))
+            lines = plt.plot(freqs, s_param_db, label=label)
+            cursor = themed_cursor(lines)
+            cursor.connect(
                 "add",
-                lambda sel: sel.annotation.set_text(
-                    f"Freq={freq_formatter(sel.target[0])}\nS21={sel.target[1]:.2f} dB"
+                lambda sel, name=name: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\n"
+                    f"{name}={sel.target[1]:.2f} dB"
                 ),
             )
-        if label_s11 is None:
-            label_s11 = "S11"
-
-        s11 = 20.0 * np.log10(np.abs(s11))
-
-        s11_lines = plt.plot(freqs, s11, label=label_s11)
-
-        cursor_s11 = themed_cursor(s11_lines)
-
-        cursor_s11.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"Freq={freq_formatter(sel.target[0])}\nS11={sel.target[1]:.2f} dB"
-            ),
-        )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
@@ -731,15 +744,17 @@ class SimTools:
     def plot_phase(
         freqs: NDArray,
         s21: NDArray | None,
+        s31: NDArray | None = None,
+        s41: NDArray | None = None,
         x_label: str = "Frequency",
         y_label: str = "Phase (deg)",
         title: str = "Phase vs Frequency",
     ) -> None:
         """
-        Plot the transmission phase (angle of S21) as a function of frequency.
+        Plot the transmission phase (angle of S21, S31, S41) against frequency.
 
-        Opens a new figure and plots the phase of S21, in degrees, over the
-        given frequency range.
+        Opens a new figure and plots the phase, in degrees, of every
+        transmission term given, one trace each, over the frequency range.
 
         Parameters
         ----------
@@ -747,6 +762,12 @@ class SimTools:
             A 1D array of frequencies (in Hz) to plot on the x-axis.
         s21 : NDArray
             A 1D array of complex S21 values corresponding to each frequency.
+        s31 : NDArray, optional
+            A 1D array of complex S31 values. If ``None`` (default), no S31
+            trace is drawn.
+        s41 : NDArray, optional
+            A 1D array of complex S41 values. If ``None`` (default), no S41
+            trace is drawn.
         x_label : str, optional
             Label for the x-axis. Default is ``"Frequency"``.
         y_label : str, optional
@@ -759,17 +780,19 @@ class SimTools:
         None
             Displays the phase plot in a new figure; does not return a value.
         """
-        phase = np.angle(s21, deg=True)
         plt.figure()
-        lines_phase = plt.plot(freqs, phase, label="Phase (deg)")
-        cursor_phase = themed_cursor(lines_phase)
-
-        cursor_phase.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"Freq={freq_formatter(sel.target[0])}\nPhase={sel.target[1]:.2f} Deg"
-            ),
-        )
+        for s_param, name in [(s21, "S21"), (s31, "S31"), (s41, "S41")]:
+            if s_param is None:
+                continue
+            lines = plt.plot(freqs, np.angle(s_param, deg=True), label=name)
+            cursor = themed_cursor(lines)
+            cursor.connect(
+                "add",
+                lambda sel, name=name: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\n"
+                    f"{name} phase={sel.target[1]:.2f} Deg"
+                ),
+            )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
