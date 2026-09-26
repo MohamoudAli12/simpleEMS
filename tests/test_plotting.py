@@ -26,6 +26,8 @@ from simpleEMS.sim_tools import SimTools  # noqa: E402
 FREQS = np.linspace(1e9, 3e9, 101)
 S11 = 0.3 * np.exp(-1j * FREQS / 1e9)
 S21 = 0.9 * np.exp(-2j * FREQS / 1e9)
+S31 = 0.5 * np.exp(-3j * FREQS / 1e9)
+S41 = 0.1 * np.exp(-4j * FREQS / 1e9)
 Z11 = 50 + 10j * np.sin(FREQS / 1e9)
 VSWR = (1 + np.abs(S11)) / (1 - np.abs(S11))
 
@@ -82,6 +84,39 @@ class TestPlotSParam:
         assert "ref" in labels
         assert "thru" in labels
 
+    @pytest.mark.parametrize(
+        ("transmission", "expected_labels"),
+        [
+            ({"s21": S21}, ["S11", "S21"]),
+            ({"s21": S21, "s31": S31}, ["S11", "S21", "S31"]),
+            ({"s21": S21, "s31": S31, "s41": S41}, ["S11", "S21", "S31", "S41"]),
+            ({"s41": S41}, ["S11", "S41"]),
+        ],
+        ids=["two-port", "three-port", "four-port", "s41-only"],
+    )
+    def test_draws_one_trace_per_given_s_parameter(self, transmission, expected_labels):
+        SimTools.plot_s_param(FREQS, S11, **transmission)
+
+        labels = [line.get_label() for line in current_lines()]
+
+        assert labels == expected_labels
+
+    def test_s41_is_plotted_in_decibels(self):
+        SimTools.plot_s_param(FREQS, S11, S21, S31, S41)
+
+        line = current_lines()[3]
+
+        assert line.get_ydata() == pytest.approx(20 * np.log10(np.abs(S41)))
+
+    def test_custom_s31_and_s41_labels_reach_the_legend(self):
+        SimTools.plot_s_param(
+            FREQS, S11, s31=S31, s41=S41, label_s31="coupled", label_s41="isolated"
+        )
+
+        labels = [line.get_label() for line in current_lines()]
+
+        assert labels == ["S11", "coupled", "isolated"]
+
     def test_repeated_calls_overlay_on_one_figure(self):
         """``param_sweep`` relies on this to build a comparison plot."""
         SimTools.plot_s_param(FREQS, S11, label_s11="a")
@@ -126,6 +161,30 @@ class TestOtherPlots:
         values = current_lines()[0].get_ydata()
 
         assert np.all(np.abs(values) <= 360.0)
+
+    @pytest.mark.parametrize(
+        ("transmission", "expected_labels"),
+        [
+            ((S21,), ["S21"]),
+            ((S21, S31), ["S21", "S31"]),
+            ((S21, S31, S41), ["S21", "S31", "S41"]),
+        ],
+        ids=["s21", "s21-s31", "s21-s31-s41"],
+    )
+    def test_phase_draws_one_trace_per_s_parameter(self, transmission, expected_labels):
+        SimTools.plot_phase(FREQS, *transmission)
+
+        labels = [line.get_label() for line in current_lines()]
+
+        assert len(plt.get_fignums()) == 1
+        assert labels == expected_labels
+
+    def test_s31_phase_matches_its_angle(self):
+        SimTools.plot_phase(FREQS, S21, S31)
+
+        values = current_lines()[1].get_ydata()
+
+        assert values == pytest.approx(np.angle(S31, deg=True))
 
     def test_group_delay_opens_a_figure(self):
         SimTools.plot_group_delay(FREQS, S21)

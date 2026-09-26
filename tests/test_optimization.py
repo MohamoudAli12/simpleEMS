@@ -209,6 +209,8 @@ class TestParamSweep:
                 FREQS,
                 notch_at(2.45e9),
                 None,
+                None,
+                None,
                 np.ones_like(FREQS) * 50j,
                 np.ones_like(FREQS),
                 1.0,

@@ -147,7 +147,17 @@ def fake_sim_data(sim=None, port=None, output_path=None, **kwargs):
     vswr = (1 + np.abs(s11)) / (1 - np.abs(s11))
     z11 = 50 * (1 + s11) / (1 - s11)
     return SimData(
-        freqs, s11, s21, z11, vswr, 1.0, np.ones_like(s11), np.ones_like(s11), 50.0
+        freqs,
+        s11,
+        s21,
+        None,
+        None,
+        z11,
+        vswr,
+        1.0,
+        np.ones_like(s11),
+        np.ones_like(s11),
+        50.0,
     )
 
 
