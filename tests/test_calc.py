@@ -22,6 +22,7 @@ from simpleEMS.calc import (  # noqa: E402
     microstrip_impedance,
     microstrip_width_from_impedance,
     patch_dims,
+    ungrounded_strip_eps_eff,
 )
 
 
@@ -368,3 +369,45 @@ class TestPatchDims:
     def test_unreachable_impedance_propagates_value_error(self):
         with pytest.raises(ValueError):
             patch_dims(2.45e9, 4.4, 1.6e-3, 5000, 0.035)
+
+
+# ---------------------------------------------------------------------
+# ungrounded_strip_eps_eff
+# ---------------------------------------------------------------------
+class TestUngroundedStripEpsEff:
+    @pytest.mark.parametrize(
+        "eps_r, thickness_mm, width_mm, frequency, simulated",
+        [
+            (4.4, 1.6, 1.0, 1.880e9, 1.763),
+            (2.2, 0.5, 1.0, 0.950e9, 1.138),
+            (10.2, 1.6, 1.0, 1.557e9, 2.569),
+            (4.4, 3.2, 4.0, 1.817e9, 1.806),
+        ],
+        ids=["fr4-1.6mm", "ptfe-thin-low-freq", "ceramic", "fr4-wide-strip"],
+    )
+    def test_matches_openems_dipole_sweep(
+        self, eps_r, thickness_mm, width_mm, frequency, simulated
+    ):
+        """Points from the openEMS sweep the coefficients were fitted to."""
+        predicted = ungrounded_strip_eps_eff(width_mm, thickness_mm, eps_r, frequency)
+        frequency_error = np.sqrt(simulated / predicted) - 1
+
+        assert abs(frequency_error) < 0.04
+
+    def test_thin_substrate_tends_to_air(self):
+        assert ungrounded_strip_eps_eff(1.0, 1e-6, 4.4, 2.45e9) == pytest.approx(
+            1.0, abs=1e-3
+        )
+
+    def test_thick_substrate_tends_to_half_space_limit(self):
+        assert ungrounded_strip_eps_eff(1.0, 1e3, 4.4, 2.45e9) == pytest.approx(
+            (4.4 + 1) / 2, rel=1e-3
+        )
+
+    @pytest.mark.parametrize("eps_r", [2.2, 4.4, 10.2], ids=["2.2", "4.4", "10.2"])
+    def test_rises_with_frequency_and_stays_below_microstrip(self, eps_r):
+        low = ungrounded_strip_eps_eff(1.0, 1.6, eps_r, 1e9)
+        high = ungrounded_strip_eps_eff(1.0, 1.6, eps_r, 6e9)
+        _, grounded = microstrip_impedance(1.0, 1.6, 0.035, eps_r, 6e9)
+
+        assert 1 < low < high < (eps_r + 1) / 2 < grounded
