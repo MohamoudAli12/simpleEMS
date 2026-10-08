@@ -15,12 +15,14 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Calculation utilities for microstrip patch antenna design.
+Calculation utilities for microstrip patch antenna, printed dipole and
+monopole, and coupler design.
 
 Provides functions for computing patch dimensions, microstrip line
-width from target impedance, phase shift lengths, conductance, and
-inset depths. All formulas follow standard references (Balanis,
-Hammerstad-Jensen).
+width from target impedance, phase shift lengths, conductance, inset
+depths, branch-line hybrid arm impedances, resonant dipole length, and
+the effective permittivity of a strip on an ungrounded substrate. All
+formulas follow standard references (Balanis, Pozar, Hammerstad-Jensen).
 """
 
 from typing import NamedTuple
@@ -241,6 +243,137 @@ def microstrip_width_from_impedance(
     )
 
     return mid_w, er_eff
+
+
+def branch_line_hybrid_impedances(charac_imp: float) -> tuple[float, float]:
+    """
+    Compute the arm impedances of a 3 dB quadrature (branch-line) hybrid.
+
+    The series arms, which join the input to the through port and the
+    isolated to the coupled port, carry ``Z0 / sqrt(2)``. The shunt arms,
+    which join the two ports on each side, carry ``Z0``. All four arms are
+    a quarter wavelength long at the design frequency.
+
+    Parameters
+    ----------
+    charac_imp : float
+        Characteristic impedance ``Z0`` of the port lines, in ohms.
+
+    Returns
+    -------
+    series_arm_imp : float
+        Characteristic impedance of the series arms, in ohms.
+    shunt_arm_imp : float
+        Characteristic impedance of the shunt arms, in ohms.
+
+    Notes
+    -----
+    Refer to Pozar, *Microwave Engineering* (4th ed.), section 7.5,
+    Figure 7.21.
+    """
+    series_arm_imp = charac_imp / np.sqrt(2)
+    shunt_arm_imp = charac_imp
+    return series_arm_imp, shunt_arm_imp
+
+
+def dipole_resonant_length_mm(
+    frequency: float,
+    eps_eff: float = 1.0,
+    length_wavelengths: float = 0.47,
+) -> float:
+    """
+    Compute the total tip-to-tip length of a resonant half-wave dipole.
+
+    A resonant dipole is slightly shorter than half a wavelength; 0.47
+    wavelengths is a good first guess. On a printed dipole the wave travels
+    along the arms at ``v = c / sqrt(eps_eff)``, so the length scales with
+    the guided wavelength ``v / f``.
+
+    Parameters
+    ----------
+    frequency : float
+        Resonant frequency in Hz.
+    eps_eff : float, optional
+        Effective relative permittivity around the arms. Default 1.0, a
+        dipole in free space.
+    length_wavelengths : float, optional
+        Total length as a fraction of the guided wavelength. Default 0.47.
+
+    Returns
+    -------
+    float
+        Total dipole length in mm.
+
+    Notes
+    -----
+    Refer to R. Zingg, *Printed Dipole Antenna*, eqs. (I-1) and (I-2), and
+    Balanis, *Antenna Theory* (3rd ed.), section 4.6, eq. (4-93a).
+    """
+    guided_wavelength_m = C0 / (frequency * np.sqrt(eps_eff))
+    return m_to_mm(length_wavelengths * guided_wavelength_m)
+
+
+def ungrounded_strip_eps_eff(
+    strip_width_mm: float,
+    substrate_thickness_mm: float,
+    eps_r: float,
+    frequency: float,
+) -> float:
+    """
+    Compute the effective permittivity of a radiating strip on an ungrounded slab.
+
+    A printed dipole or monopole arm has no ground plane under it, so most of
+    its field spreads into the air and only a fraction runs through the
+    substrate. Transmission-line formulas (microstrip, coplanar strips)
+    assume a nearby return conductor that pulls the field into the
+    substrate, and overestimate ``eps_eff`` for such an arm. This function
+    instead uses an empirical fit::
+
+        eps_eff = 1 + (eps_r - 1) / 2
+                  * tanh(5.33 (h / lambda0)**0.47 (h / w)**0.18 eps_r**-0.24)
+
+    It tends to 1 as the substrate thins and to the half-space limit
+    ``(eps_r + 1) / 2`` as it thickens.
+
+    Parameters
+    ----------
+    strip_width_mm : float
+        Width ``w`` of the strip in mm.
+    substrate_thickness_mm : float
+        Substrate thickness ``h`` in mm.
+    eps_r : float
+        Substrate relative permittivity.
+    frequency : float
+        Frequency in Hz; sets the free-space wavelength ``lambda0``.
+
+    Returns
+    -------
+    float
+        Effective relative permittivity, such that a strip cut to a fraction
+        of ``lambda0 / sqrt(eps_eff)`` resonates as that fraction of
+        ``lambda0`` does in air.
+
+    Notes
+    -----
+    The coefficients come from 87 openEMS simulations of a centre-fed strip
+    dipole, each solved on the slab and in air, with
+    ``eps_eff = (f_air / f_slab)**2`` as in the simplified model for
+    antennas on ungrounded substrates published on antennasimulator.com.
+    The fit spans ``eps_r`` 2.2-10.2, ``h`` 0.5-3.2 mm, ``w`` 0.5-4 mm and
+    resonances of 0.7-5.4 GHz, with the substrate extending 10 mm past the
+    copper. Over that range it predicts the resonant frequency to 1.8 %
+    rms (6.2 % worst case, for thick high-``eps_r`` slabs), and 1.5 % rms
+    on held-out cases. A wider substrate margin raises ``eps_eff``
+    slightly: about 1 % lower resonance at 20 mm or more.
+    """
+    thickness_wavelengths = mm_to_m(substrate_thickness_mm) * frequency / C0
+    argument = (
+        5.33
+        * thickness_wavelengths**0.47
+        * (substrate_thickness_mm / strip_width_mm) ** 0.18
+        * eps_r**-0.24
+    )
+    return 1 + (eps_r - 1) / 2 * np.tanh(argument)
 
 
 def conductance_G1(patch_width: float, frequency: float) -> float:
