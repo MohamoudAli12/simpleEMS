@@ -62,6 +62,12 @@ class InvertedFAntennaParams(SimParams):
     via_diameter_mm : float, optional
         Finished outer diameter of the shorting via, in millimeters. Must fit
         inside the shorting leg's overlap with the ground plane. Default 0.6.
+    feed_spacing_mm : float, optional
+        Distance in x between the shorting leg and the feed arm, in
+        millimeters. It sets the input resistance: moving the feed towards
+        the short lowers it. Must leave the feed arm clear of the shorting
+        leg and on the radiating tip. Default is ``None``, which uses
+        ``rad_tip_length_mm / feed_spacing_factor``.
 
     Attributes
     ----------
@@ -70,18 +76,14 @@ class InvertedFAntennaParams(SimParams):
     rad_tip_width_mm : float
         Width of the radiating tip (y-direction) in millimeters.
     short_tip_length_mm : float
-        Length of the shorting leg (y-direction) in millimeters.
+        Length of the shorting leg (y-direction) in millimeters; set to
+        ``lambda_eff / 24`` so the antenna height scales with frequency.
     short_tip_width_mm : float
         Width of the shorting leg (x-direction) in millimeters; equal to
         `rad_tip_width_mm`.
     feed_spacing_factor : int
-        Divisor applied to `rad_tip_length_mm` to derive `feed_spacing_mm`.
-    feed_spacing_mm : float
-        Distance in x between the shorting leg and the feed arm, in
-        millimeters.
-    feed_line_length_mm : float
-        Length of the feed line, in millimeters; equal to
-        `short_tip_length_mm`.
+        Divisor applied to `rad_tip_length_mm` to derive `feed_spacing_mm`
+        when the caller does not give one.
     lambda_eff : float
         Free-space wavelength at `resonant_freq`, in meters.
     rad_tip_total_length_mm : float
@@ -94,9 +96,9 @@ class InvertedFAntennaParams(SimParams):
 
     Notes
     -----
-    `short_tip_length_mm`, `rad_tip_width_mm`, and `feed_spacing_mm` are
-    fixed starting values; the feed spacing in particular sets the input
-    match and is meant to be tuned.
+    `rad_tip_width_mm` and the default `feed_spacing_mm` are starting
+    values; the feed spacing in particular sets the input match and is
+    meant to be tuned through the `feed_spacing_mm` argument.
 
     As a subclass of `SimParams`, this class also accepts all of
     `SimParams`'s constructor arguments (e.g. `substrate_eps_r`,
@@ -107,15 +109,14 @@ class InvertedFAntennaParams(SimParams):
     resonant_freq: float
     span_freq: float
     via_diameter_mm: float = 0.6
+    feed_spacing_mm: float | None = None
     rad_tip_length_mm: float = field(init=False)
     rad_tip_width_mm: float = field(init=False)
     short_tip_length_mm: float = field(init=False)
     short_tip_width_mm: float = field(init=False)
-    feed_spacing_mm: float = field(init=False)
     lambda_eff: float = field(init=False)
     rad_tip_total_length_mm: float = field(init=False)
     feed_spacing_factor: int = field(init=False)
-    feed_line_length_mm: float = field(init=False)
 
     @property
     def freq_range(self) -> tuple[float, float]:
@@ -178,28 +179,41 @@ class InvertedFAntennaParams(SimParams):
         """
         Compute all derived geometric parameters for the IFA.
 
-        Sets the fixed starting values (`rad_tip_width_mm`,
-        `short_tip_length_mm`), splits a quarter wavelength at the resonant
-        frequency between the shorting leg and the radiating tip, and
-        derives `feed_spacing_mm` and `feed_line_length_mm` from those.
+        Sets the trace width, scales the shorting leg height with the
+        wavelength, splits a quarter wavelength at the resonant frequency
+        between the shorting leg and the radiating tip, and derives
+        `feed_spacing_mm` from those unless the caller gave one.
 
         Returns
         -------
         None
+
+        Raises
+        ------
+        ValueError
+            If `feed_spacing_mm` puts the feed arm on the shorting leg or
+            past the end of the radiating tip.
         """
         self.lambda_eff = C0 / (self.resonant_freq)
         self.rad_tip_total_length_mm = m_to_mm(self.lambda_eff / 4)
         self.rad_tip_width_mm = 1.0
-        self.short_tip_length_mm = 5.0
+        self.short_tip_length_mm = m_to_mm(self.lambda_eff) / 24
         self.rad_tip_length_mm = (
             self.rad_tip_total_length_mm
             - self.short_tip_length_mm
             - self.rad_tip_width_mm
         )
         self.feed_spacing_factor = 3
-        self.feed_spacing_mm = self.rad_tip_length_mm / self.feed_spacing_factor
+        if self.feed_spacing_mm is None:
+            self.feed_spacing_mm = self.rad_tip_length_mm / self.feed_spacing_factor
         self.short_tip_width_mm = self.rad_tip_width_mm
-        self.feed_line_length_mm = self.short_tip_length_mm
+        max_feed_spacing_mm = self.rad_tip_length_mm - self.rad_tip_width_mm
+        if not self.short_tip_width_mm < self.feed_spacing_mm <= max_feed_spacing_mm:
+            raise ValueError(
+                f"feed_spacing_mm must be in ({self.short_tip_width_mm}, "
+                f"{max_feed_spacing_mm:.3f}] to keep the feed arm clear of the "
+                f"shorting leg and on the radiating tip, got {self.feed_spacing_mm}"
+            )
         self._round_outputs()
 
     def _round_outputs(self) -> None:
@@ -219,7 +233,6 @@ class InvertedFAntennaParams(SimParams):
             "rad_tip_length_mm",
             "short_tip_width_mm",
             "short_tip_length_mm",
-            "feed_line_length_mm",
             "feed_spacing_mm",
             "lambda0",
             "FDTD_mesh_resolution",
@@ -436,7 +449,7 @@ class InvertedFAntenna(SimTools):
         ]
         excite_stop = [
             self.params.feed_spacing_mm + self.params.rad_tip_width_mm,
-            self.params.feed_line_length_mm,
+            self.params.short_tip_length_mm,
             self.params.substrate_thickness_mm + self.params.copper_thickness_mm,
         ]
         excite_line.AddBox(priority=6, start=excite_start, stop=excite_stop)
