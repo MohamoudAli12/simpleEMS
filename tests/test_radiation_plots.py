@@ -147,28 +147,37 @@ def figures():
 # plot_2d_rad_pattern
 # ---------------------------------------------------------------------
 class TestPlot2dRadPattern:
-    def test_opens_one_figure_with_two_polar_axes(self, nf2ff, tmp_path, figures):
-        """The xz and xy cuts are drawn side by side in one figure."""
+    def test_opens_one_figure_with_three_polar_axes(self, nf2ff, tmp_path, figures):
+        """The xz, yz and xy cuts are drawn side by side in one figure."""
         SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
 
         assert len(figures.get_fignums()) == 1
-        assert len(figures.gcf().axes) == 2
+        assert len(figures.gcf().axes) == 3
 
-    def test_both_axes_are_polar(self, nf2ff, tmp_path, figures):
+    def test_every_axis_is_polar(self, nf2ff, tmp_path, figures):
         SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
 
         assert all(ax.name == "polar" for ax in figures.gcf().axes)
 
-    def test_asks_for_both_principal_planes(self, nf2ff, tmp_path):
+    def test_asks_for_all_three_principal_planes(self, nf2ff, tmp_path):
         SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
 
-        first, second = nf2ff.calls
+        xz_cut, yz_cut, xy_cut = nf2ff.calls
         # xz cut: theta swept at phi = 0
-        assert first["phi"].tolist() == [0]
-        assert first["theta"].min() == -180.0
+        assert xz_cut["phi"].tolist() == [0]
+        assert xz_cut["theta"].min() == -180.0
+        # yz cut: theta swept at phi = 90
+        assert yz_cut["phi"].tolist() == [90]
+        assert yz_cut["theta"].min() == -180.0
         # xy cut: phi swept at theta = 90
-        assert second["theta"].tolist() == [90]
-        assert second["phi"].min() == -180.0
+        assert xy_cut["theta"].tolist() == [90]
+        assert xy_cut["phi"].min() == -180.0
+
+    def test_each_cut_writes_its_own_file(self, nf2ff, tmp_path):
+        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+
+        outfiles = [call["outfile"] for call in nf2ff.calls]
+        assert outfiles == ["nf2ff_xz.h5", "nf2ff_yz.h5", "nf2ff_xy.h5"]
 
     def test_sweeps_a_full_circle(self, nf2ff, tmp_path):
         SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
@@ -196,7 +205,23 @@ class TestPlot2dRadPattern:
         SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
 
         labels = [ax.lines[0].get_label() for ax in figures.gcf().axes]
-        assert labels == ["xz-plane", "xy-plane"]
+        assert labels == ["xz-plane", "yz-plane", "xy-plane"]
+
+    def test_the_radial_axis_spans_the_dynamic_range(self, nf2ff, tmp_path, figures):
+        """The axis is anchored to the peak, not to the pattern minimum, so an
+        omnidirectional cut draws as a circle instead of filling the plot."""
+        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path, dynamic_range_db=20)
+
+        for ax in figures.gcf().axes:
+            assert ax.get_ylim() == pytest.approx((-20.0, 0.0))
+
+    def test_deep_nulls_clip_at_the_axis_floor(self, nf2ff, tmp_path, figures):
+        """The fake pattern has a true null at theta = 180 degrees; it must
+        land on the floor rather than wrap through the centre."""
+        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+
+        ydata = figures.gcf().axes[0].lines[0].get_ydata()
+        assert np.min(ydata) == pytest.approx(-30.0)
 
     def test_the_frequency_is_in_the_title(self, nf2ff, tmp_path, figures):
         SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
@@ -278,9 +303,9 @@ class TestPlot2dDirectivity:
         direction = float(annotation.split("Main Lobe Direction =")[1].split("°")[0])
         assert direction == pytest.approx(0.0)
 
-    def test_a_pattern_with_no_half_power_point_is_rejected(self, tmp_path):
-        """An isotropic pattern never drops 3 dB, so no beamwidth exists and
-        the annotation would otherwise be nonsense."""
+    def test_an_omnidirectional_cut_has_no_beamwidth(self, tmp_path, figures):
+        """An isotropic pattern never drops 3 dB, so no beamwidth exists; the
+        plot still reports the main lobe but leaves the HPBW out."""
 
         class Isotropic(FakeNF2FF):
             def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):  # noqa: N802
@@ -296,8 +321,40 @@ class TestPlot2dDirectivity:
                     phi=np.deg2rad(phi_deg),
                 )
 
-        with pytest.raises(ValueError, match="HPBW could not be determined"):
-            SimTools.plot_2d_directivity(Isotropic(), 2.45e9, tmp_path)
+        SimTools.plot_2d_directivity(Isotropic(), 2.45e9, tmp_path)
+
+        texts = [t.get_text() for t in figures.gcf().axes[0].texts]
+        assert any("Main Lobe Direction" in t for t in texts)
+        assert not any("HPBW" in t for t in texts)
+
+    def test_the_beamwidth_wraps_through_180_degrees(self, tmp_path, figures):
+        """A backward lobe peaks at theta = 180 deg, the last sample of the
+        sweep; its -3 dB crossings lie on both sides of +-180 deg, and the
+        beamwidth matches the broadside case of about 131 deg."""
+
+        class Backward(FakeNF2FF):
+            def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):  # noqa: N802
+                theta_deg = np.atleast_1d(np.asarray(theta, dtype=float))
+                phi_deg = np.atleast_1d(np.asarray(phi, dtype=float))
+                # The floor keeps the null at theta = 0 finite in dB.
+                pattern = np.sin(np.deg2rad(theta_deg) / 2) ** 2 + 1e-6
+                shape = (theta_deg.size, phi_deg.size)
+                return FakeFarField(
+                    E_norm=np.broadcast_to(pattern[:, None], shape),
+                    Dmax=np.array([4.0]),
+                    Prad=np.array([1.0]),
+                    P_rad=np.ones(shape),
+                    theta=np.deg2rad(theta_deg),
+                    phi=np.deg2rad(phi_deg),
+                )
+
+        SimTools.plot_2d_directivity(Backward(), 2.45e9, tmp_path)
+
+        annotation = next(
+            t.get_text() for t in figures.gcf().axes[0].texts if "HPBW" in t.get_text()
+        )
+        value = float(annotation.split("=")[1].split("°")[0])
+        assert value == pytest.approx(130.8, abs=1.0)
 
     def test_an_array_of_frequencies_is_rejected(self, nf2ff, tmp_path):
         with pytest.raises(TypeError, match="only one frequency"):
