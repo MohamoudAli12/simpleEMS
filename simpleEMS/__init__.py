@@ -25,6 +25,10 @@ import importlib
 _NAMES_BY_MODULE = {
     "components": ["GenericParams", "GenericStructure"],
     "microstrip_line": ["MicrostripLine", "MicrostripLineParams"],
+    "coupler": [
+        "QuadratureBranchLineHybridCoupler",
+        "QuadratureBranchLineHybridCouplerParams",
+    ],
     "patch_antenna": [
         "InsetFedPatchAntenna",
         "InsetFedPatchParams",
@@ -103,6 +107,8 @@ __all__ = [
     "InsetFedPatchParams",
     "ProbeFedPatchParams",
     "MicrostripLineParams",
+    "QuadratureBranchLineHybridCoupler",
+    "QuadratureBranchLineHybridCouplerParams",
     "QuarterWaveFilterParams",
     "BandStopQuarterWaveFilter",
     "BandPassQuarterWaveFilter",
