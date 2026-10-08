@@ -65,6 +65,7 @@ from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
 from .export_touchstone import write_touchstone
 from .fdtd_mesh import auto_simulation_bounds, geometry_extent
 from .fem_backend import FEMOptions
+from .fem_field_dump import FieldDumpRequest
 from .plot_theme import HIGHLIGHT, style_background_plotter, themed_cursor
 from .sim_params import SimParams
 
@@ -210,6 +211,12 @@ class SimSetup(NamedTuple):
     FEM_options : FEMOptions | None
         Global FEM solver/mesh options (boundary, symmetry, fe_order, mesh
         tuning, port type, num_solve_points). ``None`` for FDTD.
+    charac_imp : float
+        Reference impedance of the ports, in ohms.
+    FEM_field_dumps : list[FieldDumpRequest] | None
+        Field dumps :meth:`SimTools.add_field_dump` queued for the FEM
+        backend to write after its sweep. ``None`` for FDTD, where the dumps
+        live in ``CSX``.
     """
 
     CSX: ContinuousStructure
@@ -218,6 +225,7 @@ class SimSetup(NamedTuple):
     backend_engine: str = "FDTD"
     FEM_options: FEMOptions | None = None
     charac_imp: float = 50
+    FEM_field_dumps: list[FieldDumpRequest] | None = None
 
 
 def setup_simulation(
@@ -252,7 +260,8 @@ def setup_simulation(
     SimSetup
         Named tuple with ``CSX`` (CSXCAD geometry), ``FDTD`` (openEMS FDTD
         object), ``freqs`` (frequency array), ``backend_engine``,
-        ``FEM_options`` (``None`` for FDTD), and ``charac_imp``.
+        ``FEM_options`` (``None`` for FDTD), ``charac_imp``, and
+        ``FEM_field_dumps`` (an empty list for FEM, ``None`` for FDTD).
     """
     if FDTD_boundary is None:
         FDTD_boundary = [
@@ -286,6 +295,7 @@ def setup_simulation(
         backend_engine=params.backend_engine,
         FEM_options=FEM_options,
         charac_imp=params.charac_imp,
+        FEM_field_dumps=[] if params.backend_engine == "FEM" else None,
     )
 
 
@@ -425,7 +435,9 @@ class SimTools:
         call) and rebuilding if they have -- so a sweep/optimize loop that
         calls this directly, varying the geometry across iterations into
         the same ``output_path``, still gets a fresh mesh each time the
-        geometry actually changes.
+        geometry actually changes. The FEM backend then writes any field
+        dumps :meth:`add_field_dump` queued, with one extra solve per dump
+        frequency.
 
         Parameters
         ----------
@@ -452,6 +464,10 @@ class SimTools:
                 output_path,
                 FEM_options=sim.FEM_options,
             )
+            if sim.FEM_field_dumps:
+                from . import fem_field_dump
+
+                fem_field_dump.write_field_dumps(sim.FEM_field_dumps, output_path)
             return
 
         cwd = os.getcwd()
