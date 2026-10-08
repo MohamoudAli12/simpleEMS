@@ -63,7 +63,7 @@ from .console import console
 from .export_gerber import export_gerber
 from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
 from .export_touchstone import write_touchstone
-from .fdtd_mesh import auto_simulation_bounds, geometry_extent
+from .fdtd_mesh import Mesh, auto_simulation_bounds, geometry_extent
 from .fem_backend import FEMOptions
 from .fem_field_dump import FieldDumpRequest
 from .plot_theme import HIGHLIGHT, style_background_plotter, themed_cursor
@@ -1025,13 +1025,16 @@ class SimTools:
         freq: float,
         output_path: Path | None = None,
         read_cached: bool = False,
+        dynamic_range_db: float = 30.0,
     ) -> None:
         """
         Plot the 2D E-field radiation pattern at a specified frequency.
 
-        Computes far-field E-field cuts in the xz-plane (phi=0) and
-        xy-plane (theta=90) from NF2FF data and plots both as normalized
-        polar patterns (in dB) side by side.
+        Computes far-field E-field cuts in the xz-plane (phi=0), the
+        yz-plane (phi=90) and the xy-plane (theta=90) from NF2FF data and
+        plots each as a normalized polar pattern (in dB) side by side. The
+        three cuts hold both principal planes of any antenna whose axis
+        lies along x, y or z: its E-plane and its omnidirectional H-plane.
 
         Parameters
         ----------
@@ -1047,6 +1050,11 @@ class SimTools:
         read_cached : bool, optional
             If True, read cached NF2FF results instead of re-computing.
             Default is False.
+        dynamic_range_db : float, optional
+            Span of each radial axis below the 0 dB peak. The axis starts at
+            ``-dynamic_range_db``, so an omnidirectional cut draws as a
+            near-circle rather than filling the plot, and deeper nulls clip
+            at the axis floor. Default is 30.
 
         Returns
         -------
@@ -1068,87 +1076,63 @@ class SimTools:
                 "for radiation pattern calculation"
             )
 
-        theta = np.arange(-180.0, 181.0, 2.0)
+        sweep = np.arange(-180.0, 181.0, 2.0)
         console.print("Calculating 2D Radiation Pattern.........", style="info")
-        nf2ff_res_phi0 = nf2ff.CalcNF2FF(
-            output_path,
-            freq,
-            theta,
-            0,
-            read_cached=read_cached,
-            outfile="nf2ff_xz.h5",
-            verbose=0,
-        )
+        plt.figure(figsize=(15, 5))
 
-        plt.figure()
-        ax = plt.subplot(121, polar=True)
+        # (label, theta, phi, swept angle name, outfile) for each cut
+        cuts = [
+            ("xz-plane", sweep, 0, "theta", "nf2ff_xz.h5"),
+            ("yz-plane", sweep, 90, "theta", "nf2ff_yz.h5"),
+            ("xy-plane", 90, sweep, "phi", "nf2ff_xy.h5"),
+        ]
+        for subplot_index, (label, theta, phi, sweep_name, outfile) in enumerate(
+            cuts, 1
+        ):
+            nf2ff_result = nf2ff.CalcNF2FF(
+                output_path,
+                freq,
+                theta,
+                phi,
+                read_cached=read_cached,
+                outfile=outfile,
+                verbose=0,
+            )
 
-        efield = np.squeeze(nf2ff_res_phi0.E_norm)
-        efield_norm = efield / np.max(efield)
-        efield_norm_dB = 20 * np.log10(efield_norm)
+            ax = plt.subplot(1, len(cuts), subplot_index, polar=True)
 
-        lines = ax.plot(
-            np.deg2rad(theta),
-            efield_norm_dB,
-            linewidth=2,
-            label="xz-plane",
-        )
+            efield = np.squeeze(nf2ff_result.E_norm)
+            efield_norm_dB = 20 * np.log10(efield / np.max(efield))
 
-        cursor = themed_cursor(lines)
-        cursor.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"theta={np.rad2deg(sel.target[0]):.2f}°"
-                f"\ne_field = {sel.target[1]:.2f} dB"
-            ),
-        )
+            # Clip deeper nulls to the floor so they don't wrap through the
+            # centre of the polar axis.
+            lines = ax.plot(
+                np.deg2rad(sweep),
+                np.maximum(efield_norm_dB, -dynamic_range_db),
+                linewidth=2,
+                label=label,
+            )
+            ax.set_rlim(-dynamic_range_db, 0)
 
-        ax.grid(True)
-        ax.set_xlabel("theta (deg)")
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-        ax.legend()
+            cursor = themed_cursor(lines)
+            cursor.connect(
+                "add",
+                lambda sel, sweep_name=sweep_name: sel.annotation.set_text(
+                    f"{sweep_name}={np.rad2deg(sel.target[0]):.2f}°"
+                    f"\ne_field = {sel.target[1]:.2f} dB"
+                ),
+            )
 
-        phi = theta
-        nf2ff_res_theta90 = nf2ff.CalcNF2FF(
-            output_path,
-            freq,
-            90,
-            phi,
-            read_cached=read_cached,
-            outfile="nf2ff_xy.h5",
-        )
+            ax.grid(True)
+            ax.set_xlabel(f"{sweep_name} (deg)")
+            ax.set_theta_zero_location("N")
+            ax.set_theta_direction(-1)
+            ax.legend()
 
-        ax = plt.subplot(122, polar=True)
-
-        efield = np.squeeze(nf2ff_res_theta90.E_norm)
-        efield_norm = efield / np.max(efield)
-        efield_norm_dB = 20 * np.log10(efield_norm)
-
-        lines = ax.plot(
-            np.deg2rad(phi),
-            efield_norm_dB,
-            linewidth=2,
-            label="xy-plane",
-        )
-
-        cursor = themed_cursor(lines)
-        cursor.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"phi={np.rad2deg(sel.target[0]):.2f}°\n efield= {sel.target[1]:.2f} dB"
-            ),
-        )
-
-        ax.grid(True)
-        ax.set_xlabel("phi (deg)")
         plt.suptitle(
             f"Radiation Pattern at: {freq_formatter(freq)}",
             fontsize=14,
         )
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-        ax.legend()
 
     @staticmethod
     def plot_2d_directivity(
@@ -1156,6 +1140,7 @@ class SimTools:
         freq: float,
         output_path: Path | None = None,
         read_cached: bool = False,
+        dynamic_range_db: float = 30.0,
     ) -> None:
         """
         Plot the 2D directivity pattern (xz-plane, phi=0) at a specified
@@ -1163,7 +1148,9 @@ class SimTools:
 
         Computes directivity (in dBi) from NF2FF E-field data, plots it as
         a polar pattern, and marks the -3 dB beamwidth, main-lobe direction,
-        and peak magnitude around the pattern's maximum.
+        and peak magnitude around the pattern's maximum. The beamwidth search
+        wraps through +-180 degrees; an omnidirectional cut, which never drops
+        3 dB, gets no beamwidth marker.
 
         Parameters
         ----------
@@ -1179,6 +1166,11 @@ class SimTools:
         read_cached : bool, optional
             If True, read cached NF2FF results instead of re-computing.
             Default is False.
+        dynamic_range_db : float, optional
+            Span of the radial axis below the peak directivity, in dB. The
+            axis starts at ``peak - dynamic_range_db``, so an omnidirectional
+            cut draws as a near-circle rather than filling the plot, and
+            deeper nulls clip at the axis floor. Default is 30.
 
         Returns
         -------
@@ -1189,9 +1181,6 @@ class SimTools:
         ------
         TypeError
             If ``freq`` is not a scalar (e.g. an array of frequencies).
-        ValueError
-            If the -3 dB HPBW crossings cannot be found on either side of
-            the peak.
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
@@ -1202,7 +1191,8 @@ class SimTools:
                 "for directivity calculation"
             )
 
-        theta = np.arange(-180.0, 181.0, 0.1)
+        # 0.1° steps from -180° to 180°; 180° repeats -180° so the curve closes.
+        theta = np.linspace(-180.0, 180.0, 3601)
         console.print("Calculating 2D Directivity.........", style="info")
         nf2ff_res_phi0 = nf2ff.CalcNF2FF(
             output_path,
@@ -1224,69 +1214,81 @@ class SimTools:
         max_directivity_db = 10.0 * np.log10(nf2ff_res_phi0.Dmax)
         directivity_dbi = e_field_norm_db + max_directivity_db
 
+        # Anchor the radial axis to the peak, not to the pattern minimum, and
+        # clip deeper nulls to the floor so they don't wrap through the centre.
+        r_min = np.max(directivity_dbi) - dynamic_range_db
         lines = ax.plot(
             np.deg2rad(theta),
-            directivity_dbi,
+            np.maximum(directivity_dbi, r_min),
             linewidth=2,
             label="xz-plane",
         )
 
         # ---- HPBW calculation ----
-        peak_idx = np.argmax(directivity_dbi)
+        # The cut is a full circle: drop the last sample, which repeats the
+        # first direction, then roll it so the peak sits in the middle and the
+        # −3 dB search can pass through ±180°.
+        theta_step = theta[1] - theta[0]
+        pattern = directivity_dbi[:-1]
+        peak_idx = np.argmax(pattern)
         peak_theta = theta[peak_idx]
-        peak_val = directivity_dbi[peak_idx]
+        peak_val = pattern[peak_idx]
 
         # Half-power level (−3 dB)
         hpbw_level = peak_val - 3.0
+
+        centre_idx = pattern.size // 2
+        centred_pattern = np.roll(pattern, centre_idx - peak_idx)
+
         # Find −3 dB crossings
-        left_idx = np.where(directivity_dbi[:peak_idx] <= hpbw_level)[0]
-        right_idx = np.where(directivity_dbi[peak_idx:] <= hpbw_level)[0]
+        left_idx = np.where(centred_pattern[:centre_idx] <= hpbw_level)[0]
+        right_idx = np.where(centred_pattern[centre_idx:] <= hpbw_level)[0]
 
-        if len(left_idx) == 0 or len(right_idx) == 0:
-            raise ValueError("HPBW could not be determined")
-
-        left_theta = theta[left_idx[-1]]
-        right_theta = theta[peak_idx + right_idx[0]]
-
-        hpbw = right_theta - left_theta
-
-        r_min = np.min(directivity_dbi)
         ax.set_rlim(r_min)
-        ax.plot(
-            [np.deg2rad(left_theta), np.deg2rad(left_theta)],
-            [r_min, directivity_dbi[left_idx[-1]]],
-            "--",
-            color=HIGHLIGHT,
-            linewidth=1,
-        )
-        ax.plot(
-            [np.deg2rad(right_theta), np.deg2rad(right_theta)],
-            [r_min, directivity_dbi[peak_idx + right_idx[0]]],
-            "--",
-            color=HIGHLIGHT,
-            linewidth=1,
-        )
-        ax.plot(
-            [np.deg2rad(peak_theta), np.deg2rad(peak_theta)],
-            [r_min, hpbw_level],
-            "--",
-            color=HIGHLIGHT,
-            linewidth=1,
-        )
-        # HPBW arc
-        hpbw_arc = np.linspace(left_theta, right_theta, 360)
-        ax.plot(
-            np.deg2rad(hpbw_arc),
-            hpbw_level * np.ones_like(hpbw_arc),
-            color=HIGHLIGHT,
-            linewidth=2,
-        )
+        annotation = ""
+
+        # An omnidirectional cut never drops 3 dB, so it has no beamwidth.
+        if len(left_idx) > 0 and len(right_idx) > 0:
+            left_theta = peak_theta - (centre_idx - left_idx[-1]) * theta_step
+            right_theta = peak_theta + right_idx[0] * theta_step
+            hpbw = right_theta - left_theta
+
+            ax.plot(
+                [np.deg2rad(left_theta), np.deg2rad(left_theta)],
+                [r_min, centred_pattern[left_idx[-1]]],
+                "--",
+                color=HIGHLIGHT,
+                linewidth=1,
+            )
+            ax.plot(
+                [np.deg2rad(right_theta), np.deg2rad(right_theta)],
+                [r_min, centred_pattern[centre_idx + right_idx[0]]],
+                "--",
+                color=HIGHLIGHT,
+                linewidth=1,
+            )
+            ax.plot(
+                [np.deg2rad(peak_theta), np.deg2rad(peak_theta)],
+                [r_min, hpbw_level],
+                "--",
+                color=HIGHLIGHT,
+                linewidth=1,
+            )
+            # HPBW arc
+            hpbw_arc = np.linspace(left_theta, right_theta, 360)
+            ax.plot(
+                np.deg2rad(hpbw_arc),
+                hpbw_level * np.ones_like(hpbw_arc),
+                color=HIGHLIGHT,
+                linewidth=2,
+            )
+            annotation = f"HPBW (3dB) = {hpbw:.2f}°\n"
+
         main_lobe_mag = np.round(np.max(directivity_dbi), 2)
         ax.text(
             1.0,
             0.1,
-            f"HPBW (3dB) = {hpbw:.2f}°"
-            f"\nMain Lobe Direction = {peak_theta:.2f}°"
+            f"{annotation}Main Lobe Direction = {peak_theta:.2f}°"
             f"\nMain Lobe Magnitude = {main_lobe_mag:.2f} dBi",
             transform=ax.transAxes,
             fontsize=12,
@@ -1707,26 +1709,71 @@ class SimTools:
         Returns
         -------
         None
+
+        Raises
+        ------
+        ValueError
+            Under the FEM backend, if ``dump_type`` is not
+            ``efield_frequency``, ``hfield_frequency`` or
+            ``current_density_frequency``.
+
+        Notes
+        -----
+        The FEM backend queues the dump on ``sim``, and :meth:`run_simulation`
+        writes it after the sweep in the same files an openEMS
+        frequency-domain dump produces: 21 phase frames
+        (``<prefix>_f=<freq>_p=<degrees>.vtr``) that ParaView animates, plus
+        ``_abs`` and ``_arg`` files. The field is sampled on the FDTD mesh
+        lines inside the box -- the grid already in ``sim.CSX`` if
+        ``create_mesh`` built one, or else the one the FDTD auto-mesher would
+        build -- so the dump box has the same straight faces as in openEMS.
         """
-        if params.backend_engine == "FEM":
-            import warnings
-
-            warnings.warn(
-                """\nField dump is not implemented in FEM engine, 
-                use FDTD engine for field dump\n""",
-                UserWarning,
-                stacklevel=2,
-            )
-            return
-        if output_path is None:
-            output_path = Path.cwd() / "Sim_Path"
-
         simulation_bounds = params.simulation_bounds
         if simulation_bounds is None:
             simulation_bounds = auto_simulation_bounds(
                 geometry_extent(sim.CSX), params.lambda0
             )
         copper_top = params.substrate_thickness_mm + params.copper_thickness_mm
+        if dump_freq is None:
+            dump_freq = params.main_freq
+
+        if params.backend_engine == "FEM":
+            if dump_type not in (
+                DumpType.efield_frequency,
+                DumpType.hfield_frequency,
+                DumpType.current_density_frequency,
+            ):
+                raise ValueError(
+                    f"the FEM backend cannot dump {dump_type.name}; use "
+                    "efield_frequency, hfield_frequency or "
+                    "current_density_frequency"
+                )
+            box_mm = (
+                simulation_bounds[0][0],
+                simulation_bounds[1][0],
+                0.0,
+                simulation_bounds[0][1],
+                simulation_bounds[1][1],
+                copper_top,
+            )
+            grid = sim.CSX.GetGrid()
+            if not all(len(grid.GetLines(axis)) for axis in range(3)):
+                Mesh(sim.CSX, params)
+            sim.FEM_field_dumps.append(
+                FieldDumpRequest(
+                    prefix=dump_type.value[1],
+                    freq=float(dump_freq),
+                    box=tuple(value * params.unit for value in box_mm),
+                    lines=tuple(
+                        tuple(float(line) * params.unit for line in grid.GetLines(axis))
+                        for axis in range(3)
+                    ),
+                )
+            )
+            return
+
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
 
         # TODO Add appropriate dump mode based on openEMS docs
         dump_path = output_path / "field_dump"
@@ -1742,8 +1789,6 @@ class SimTools:
         stop = [simulation_bounds[0][1], simulation_bounds[1][1], copper_top]
         dump.AddBox(start=start, stop=stop)
         if dump_type.value[0] >= 10:
-            if dump_freq is None:
-                dump_freq = params.main_freq
             dump.AddFrequency(dump_freq)
 
     @staticmethod
