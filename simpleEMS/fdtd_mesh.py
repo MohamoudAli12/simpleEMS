@@ -705,11 +705,26 @@ def _sort_bounded_types(
 
 def _factor_for_num(num: int, smaller_spacing: float, dist: float) -> float:
     """Solve for the geometric growth factor that spans ``dist`` in exactly
-    ``num`` steps starting from ``smaller_spacing``."""
-    roots = scipy.optimize.fsolve(
-        func=_geom_dist_zero, x0=1.5, args=(num, smaller_spacing, dist)
+    ``num`` steps starting from ``smaller_spacing``.
+
+    The series length rises steadily with the factor, so the root sits
+    inside a bracket that is known up front, and a bracketed solve always
+    finds it. An open-ended solve from a fixed starting guess does not: for a
+    steep or long series the sum overflows near the guess, the solver stalls
+    there, and :func:`_geom_series` never leaves its loop.
+
+    With fewer than two lines there is no step to grow, so the factor is
+    arbitrary; it stays at 1.5, the value the mesher has always used there.
+    """
+    if num < 2:
+        return 1.5
+    # zero factor spans nothing; this one spans at least ``dist`` because its
+    # last step alone is ``dist`` (and with ``dist`` below one spacing, the
+    # uniform series already overshoots); the margin absorbs rounding
+    upper = 1.01 * max(1.0, (dist / smaller_spacing) ** (1 / (num - 1)))
+    return scipy.optimize.brentq(
+        _geom_dist_zero, 0.0, upper, args=(num, smaller_spacing, dist)
     )
-    return roots[0]
 
 
 def _factor_ubound(num: int, ratio: float, max_factor: float) -> float:
@@ -846,6 +861,13 @@ def _lines_const_factor_in_bounds(
         min_num=min_lines,
         max_factor=smooth,
     )
+
+    # Below 1 the interval is too short for min_lines even at the finer
+    # spacing, and a shrinking series would steepen past ``smooth`` toward
+    # the coarse end. Every cell is finer than both targets anyway, so space
+    # the lines evenly instead.
+    if factor < 1:
+        return np.linspace(lower, upper, num_lines)
 
     powers = np.arange(1, num_lines, 1)
     if lower_spacing < upper_spacing:
