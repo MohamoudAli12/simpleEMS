@@ -9,6 +9,7 @@ wheels/
 
 # Test artefacts
 .pytest_cache/
+.hypothesis/
 .coverage
 coverage.xml
 htmlcov/

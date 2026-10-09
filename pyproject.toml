@@ -36,6 +36,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "bump-my-version==1.4.1",
+    "hypothesis==6.168.5",
     "myst-parser==5.0.0",
     "prek==0.3.13",
     "pydata-sphinx-theme==0.16.1",
