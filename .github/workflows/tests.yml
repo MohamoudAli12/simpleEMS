@@ -37,12 +37,14 @@ jobs:
       # dlopen()s them at import time, none of which the runner image ships.
       # Without them `import gmsh` raises OSError and every module that reaches
       # the FEM meshing code fails to collect. libglu1-mesa and libxft2 pull in
-      # libGL/libX11 and libXrender/libfontconfig respectively.
-      - name: Install the system libraries gmsh links against
+      # libGL/libX11 and libXrender/libfontconfig respectively. The PyQt6 wheel's
+      # QtGui also links libEGL and libxkbcommon, which the plot-theme tests need
+      # to build a real QPalette.
+      - name: Install the system libraries gmsh and PyQt6 link against
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libglu1-mesa libxcursor1 libxinerama1 libxft2
+            libglu1-mesa libxcursor1 libxinerama1 libxft2 libegl1 libxkbcommon0
 
       - name: Install package with dev dependencies
         run: pip install -e ".[dev]"
@@ -97,14 +99,14 @@ jobs:
           sudo apt-get install -y build-essential cmake git libhdf5-dev \
             libvtk9-dev libboost-all-dev libcgal-dev libtinyxml-dev \
             qtbase5-dev libvtk9-qt-dev \
-            libglu1-mesa libxcursor1 libxinerama1 libxft2
+            libglu1-mesa libxcursor1 libxinerama1 libxft2 libegl1 libxkbcommon0
 
       - name: Cache the openEMS install
         id: cache-openems
         uses: actions/cache@v4
         with:
           path: ~/opt/openEMS
-          key: openems-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          key: openems-${{ runner.os }}-csxcad-wrapper-fix-${{ hashFiles('pyproject.toml') }}
 
       - name: Cache the getdp install
         id: cache-getdp
@@ -147,23 +149,18 @@ jobs:
 
       # Anything whose dependency is still genuinely missing skips itself
       # rather than failing the job.
-      #
-      # Deliberately NOT run under --cov. This job fails intermittently once
-      # enough structures have been built and torn down in one process: a
-      # property comes back whose Python wrapper class disagrees with its own
-      # GetTypeString(), and the test that reads it dies on a missing method.
-      # The cause is in the CSXCAD bindings, which cache one wrapper per
-      # property keyed by the raw C++ pointer (CSProperties._instances) and
-      # never evict an entry when the property is freed -- so a property
-      # allocated on a dead one's address is handed the dead one's wrapper.
-      # That is an upstream fix, not one to make here. Coverage tracing
-      # perturbs allocation timing enough to make it far more likely --
-      # measured at 3 failures in 15 instrumented runs of
-      # tests/test_fdtd_standalone_model.py, versus none in 12 uninstrumented
-      # ones. The `unit` job above reports coverage for everything that does
-      # not need CSXCAD, and is stable.
       - name: Run the full suite
         env:
           MPLBACKEND: Agg
           HYPOTHESIS_PROFILE: ci
-        run: pytest -ra
+        run: >-
+          pytest -ra --cov=simpleEMS
+          --cov-report=term-missing --cov-report=html:htmlcov
+
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-suite-coverage
+          path: htmlcov/
+          if-no-files-found: ignore
