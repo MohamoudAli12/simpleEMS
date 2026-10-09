@@ -292,8 +292,18 @@ class TestErrors:
             ("one.s1p", "# HZ Y RI R 50\n1 0 0\n", "S-parameter"),
             ("two.s2p", "# HZ S RI R 50\n1 0 0 0 0\n", "whole"),
             ("one.s1p", "# HZ S RI R 50\n", "whole"),
+            ("one.s1p", "# HZ S RI R 0\n1 0 0\n", "reference impedance"),
+            ("one.s1p", "# HZ S RI R\n1 0 0\n", "reference impedance"),
         ],
-        ids=["wrong-extension", "touchstone-2", "y-parameters", "truncated", "empty"],
+        ids=[
+            "wrong-extension",
+            "touchstone-2",
+            "y-parameters",
+            "truncated",
+            "empty",
+            "zero-impedance",
+            "missing-impedance",
+        ],
     )
     def test_reader_rejects_bad_files(self, tmp_path, name, text, message):
         with pytest.raises(ValueError, match=message):

@@ -1133,3 +1133,222 @@ class TestPortKindFromGeometry:
 
         _roles, _diel, ports, _sigma = _csx_roles(self._csx(1, 100.0), 2.45e9)
         assert ports["port_resist_1"][0] == 100.0
+
+
+# ---------------------------------------------------------------------
+# Parser and sampling edge cases
+# ---------------------------------------------------------------------
+class TestEdgeCases:
+    def test_a_solution_header_cut_off_at_the_end_is_ignored(self, tmp_path):
+        res = tmp_path / "m.res"
+        res.write_text(
+            "$Solution  /* DofData #0 */\n0 94.4 0 0\n0.1 0.2\n$EndSolution\n$Solution"
+        )
+
+        assert read_eigenvalues(res) == [pytest.approx(94.4)]
+
+    def test_a_point_outside_every_triangle_samples_zero(self):
+        from simpleEMS.fem_port_mode import _locate_and_sample
+
+        coords = np.array([[[0, 0, 0], [1, 0, 0], [0, 1, 0]]], dtype=float)
+        values = np.ones((1, 3, 3), dtype=complex)
+
+        sampled = _locate_and_sample(coords, values, np.array([[0.2, 0.2], [5, 5]]))
+
+        assert sampled[0] == pytest.approx([1, 1, 1])
+        assert sampled[1] == pytest.approx([0, 0, 0])
+
+    def test_no_voltage_runs_along_the_port_normal(self):
+        from simpleEMS.fem_port_mode import _modal_voltage
+
+        coords = np.zeros((1, 3, 3))
+        values = np.ones((1, 3, 3), dtype=complex)
+
+        assert _modal_voltage(coords, values, make_setup(prop_axis=1), "y") == 0j
+
+
+# ---------------------------------------------------------------------
+# extract_cross_section, on a hand-built mesh
+# ---------------------------------------------------------------------
+def _port_face_mesh(path, quads_in_port=True, triangles_in_port=True):
+    """A port face in the z = 0 plane, as the 3D mesh would hold it.
+
+    The left square is triangles, the right one quadrangles. Only triangles
+    belong to the port; the quadrangles are there to be skipped, in the port
+    group and in the PEC group.
+    """
+    if gmsh.isInitialized():
+        gmsh.finalize()
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("face")
+        occ = gmsh.model.occ
+        triangles = occ.addRectangle(0, 0, 0, 1, 1)
+        quads = occ.addRectangle(2, 0, 0, 1, 1)
+        occ.synchronize()
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 0.5)
+        gmsh.model.mesh.setRecombine(2, quads)
+        gmsh.model.mesh.generate(2)
+        port_surfaces = []
+        if triangles_in_port:
+            port_surfaces.append(triangles)
+        if quads_in_port:
+            port_surfaces.append(quads)
+        gmsh.model.addPhysicalGroup(2, port_surfaces, port_region(1))
+        gmsh.model.addPhysicalGroup(2, [quads], PEC)
+        gmsh.option.setNumber("Mesh.SaveAll", 0)
+        gmsh.write(str(path))
+    finally:
+        gmsh.finalize()
+
+
+def _port_mesh():
+    return PortMesh(
+        number=1,
+        region=port_region(1),
+        direction="y",
+        z0=50.0,
+        gap=1e-3,
+        width=1e-3,
+        center=(0.5, 0.5, 0),
+        kind="wave",
+        prop_dir="z",
+    )
+
+
+class TestExtractCrossSection:
+    def test_only_the_triangles_of_the_port_are_kept(self, tmp_path):
+        from simpleEMS.fem_port_mode import extract_cross_section
+
+        msh = tmp_path / "face.msh"
+        _port_face_mesh(msh)
+        gmsh.initialize()  # a stale session is replaced, not reused
+
+        section = extract_cross_section(
+            msh, _port_mesh(), 2, {}, {}, tmp_path / "section.msh"
+        )
+
+        assert not gmsh.isInitialized()
+        assert section.nodes[:, 0].max() <= 1.0 + 1e-12
+        assert section.areas.sum() == pytest.approx(1.0)
+
+    def test_a_dielectric_without_a_region_tag_is_left_as_air(self, tmp_path):
+        from simpleEMS.fem_port_mode import extract_cross_section
+
+        msh = tmp_path / "face.msh"
+        _port_face_mesh(msh)
+        everywhere = (-10, -10, -10, 10, 10, 10)
+
+        extract_cross_section(
+            msh,
+            _port_mesh(),
+            2,
+            {"substrate": everywhere, "orphan": everywhere},
+            {"substrate": dielectric_region(0)},
+            tmp_path / "section.msh",
+        )
+
+        gmsh.initialize()
+        try:
+            gmsh.open(str(tmp_path / "section.msh"))
+            groups = {tag for _dim, tag in gmsh.model.getPhysicalGroups(2)}
+        finally:
+            gmsh.finalize()
+        assert dielectric_region(0) in groups
+
+    def test_a_port_of_quadrangles_alone_is_refused(self, tmp_path):
+        from simpleEMS.fem_port_mode import extract_cross_section
+
+        msh = tmp_path / "face.msh"
+        _port_face_mesh(msh, triangles_in_port=False)
+
+        with pytest.raises(RuntimeError, match="holds no triangles"):
+            extract_cross_section(
+                msh, _port_mesh(), 2, {}, {}, tmp_path / "section.msh"
+            )
+
+
+# ---------------------------------------------------------------------
+# solve_port_mode, with GetDP replaced by the files it would write
+# ---------------------------------------------------------------------
+UNIT_SQUARE = [
+    [(0, 0, 0), (1, 0, 0), (1, 1, 0)],
+    [(0, 0, 0), (1, 1, 0), (0, 1, 0)],
+]
+
+
+def _mode_view(steps):
+    """A two-triangle ``VT`` view; ``steps`` is one field vector per step."""
+    lines = ['View "et" {']
+    for triangle in UNIT_SQUARE:
+        coords = ",".join(str(float(c)) for node in triangle for c in node)
+        values = ",".join(
+            str(float(c)) for step in steps for _ in range(3) for c in step
+        )
+        lines.append(f"VT({coords}){{{values}}};")
+    lines.append("};")
+    return "\n".join(lines)
+
+
+@pytest.fixture
+def fake_mode_solve(monkeypatch, tmp_path):
+    """Stand in for GetDP: write the given eigenvalues and mode view."""
+    from simpleEMS import fem_solver
+
+    def install(betas, steps):
+        def run_getdp(pro_path, msh_path, workdir, parameters, *args, **kwargs):
+            solutions = "".join(
+                f"$Solution\n0 {beta} 0 0\n0 0\n$EndSolution\n" for beta in betas
+            )
+            (Path(workdir) / f"{Path(pro_path).stem}.res").write_text(solutions)
+            (Path(workdir) / "output" / "et_1.pos").write_text(_mode_view(steps))
+
+        monkeypatch.setattr(fem_solver, "run_getdp", run_getdp)
+        return make_setup(
+            pro_path=str(tmp_path / "mode_1.pro"),
+            eps_max=1.0,
+            prop_axis=2,
+            axes=(0, 1),
+            bounds=(0.0, 0.0, 1.0, 1.0),
+            direction="y",
+        )
+
+    return install
+
+
+FREQ = 1e9
+K0 = 2 * math.pi * FREQ / C0
+
+
+class TestSolvePortModeChecks:
+    def test_an_impedance_override_is_used_as_given(self, fake_mode_solve, tmp_path):
+        import dataclasses
+
+        setup = fake_mode_solve([0.9 * K0], [(0, 1, 0), (0, 0, 0)])
+        setup = dataclasses.replace(setup, zc_override=42.0)
+
+        mode = fem_port_mode.solve_port_mode(setup, FREQ, tmp_path, verbose=False)
+
+        assert mode.zc == pytest.approx(42.0)
+        assert mode.beta.real == pytest.approx(0.9 * K0)
+
+    def test_a_solve_without_eigenvalues_is_an_error(self, fake_mode_solve, tmp_path):
+        setup = fake_mode_solve([], [(0, 1, 0), (0, 0, 0)])
+
+        with pytest.raises(RuntimeError, match="wrote no eigenvalues"):
+            fem_port_mode.solve_port_mode(setup, FREQ, tmp_path, verbose=False)
+
+    def test_a_view_short_of_the_modes_steps_is_an_error(
+        self, fake_mode_solve, tmp_path
+    ):
+        setup = fake_mode_solve([0.9 * K0], [(0, 1, 0)])
+
+        with pytest.raises(RuntimeError, match="holds 1 step"):
+            fem_port_mode.solve_port_mode(setup, FREQ, tmp_path, verbose=False)
+
+    def test_a_mode_with_no_field_is_an_error(self, fake_mode_solve, tmp_path):
+        setup = fake_mode_solve([0.9 * K0], [(0, 0, 0), (0, 0, 0)])
+
+        with pytest.raises(RuntimeError, match="carries no power"):
+            fem_port_mode.solve_port_mode(setup, FREQ, tmp_path, verbose=False)

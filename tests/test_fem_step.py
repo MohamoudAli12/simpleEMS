@@ -349,6 +349,7 @@ class TestSimulateStepFEM:
                 str(step),
                 np.linspace(2e9, 3e9, 11),
                 output_path=tmp_path / "out",
+                show_mesh=False,  # the viewer blocks until its window is closed
                 run=False,
             )
 
@@ -363,6 +364,7 @@ class TestSimulateStepFEM:
                 str(step),
                 np.linspace(2e9, 3e9, 11),
                 output_path=tmp_path / "out",
+                show_mesh=False,  # the viewer blocks until its window is closed
                 run=False,
             )
 
@@ -391,6 +393,7 @@ class TestMeshing:
                 np.linspace(2e9, 3e9, 5),
                 dielectrics={"substrate": (4.4, 0.001)},
                 output_path=out,
+                show_mesh=False,  # the viewer blocks until its window is closed
                 run=False,
                 verbose=False,
                 FEM_num_solve_points=4,
@@ -413,6 +416,67 @@ class TestMeshing:
 
         assert Path(meta["msh_path"]).is_file()
         assert Path(meta["pro_path"]).is_file()
+
+    def test_a_lossy_conductor_becomes_a_surface_impedance(self, named_step, tmp_path):
+        from pathlib import Path
+
+        meta = self.mesh_only(
+            named_step,
+            tmp_path / "out",
+            pec=["ground"],
+            lossy_conductor={"trace": 5.8e7},
+        )
+
+        pro = Path(meta["pro_path"]).read_text(encoding="utf-8")
+        assert "Imped_0" in pro
+        assert "sigma=5.8e+07" in pro
+
+    def test_the_mesh_viewer_shows_the_regions(self, named_step, tmp_path, monkeypatch):
+        """``show_mesh`` opens a PyVista window; a stand-in plotter records
+        what it would have shown, so no window ever opens."""
+        import pyvista as pv
+
+        msh_path = tmp_path / "out" / "structure.msh"
+        msh_path.parent.mkdir()
+        grid = pv.ImageData(dimensions=(2, 2, 2)).cast_to_unstructured_grid()
+        grid.cell_data["CellEntityIds"] = np.array([1])
+        grid.save(msh_path.with_suffix(".vtk"))
+        shown = []
+
+        class RecordingPlotter:
+            def add_mesh(self, mesh, **kwargs):
+                shown.append(kwargs)
+
+            def add_axes(self):
+                pass
+
+            def view_xy(self):
+                pass
+
+            def show(self):
+                shown.append("shown")
+
+        monkeypatch.setattr(
+            "simpleEMS.fem_backend._mesh_problem",
+            lambda prob, output_path, verbose: str(msh_path),
+        )
+        monkeypatch.setattr(pv, "Plotter", RecordingPlotter)
+
+        with pytest.raises(RuntimeError, match="FEM results not found"):
+            simulate_step_FEM(
+                str(named_step),
+                np.linspace(2e9, 3e9, 5),
+                dielectrics={"substrate": (4.4, 0.001)},
+                output_path=tmp_path / "out",
+                run=False,
+                show_mesh=True,
+                mesh_style="surface",
+                verbose=False,
+            )
+
+        assert shown[0]["scalars"] == "CellEntityIds"
+        assert shown[0]["show_edges"] is True
+        assert shown[-1] == "shown"
 
     def test_the_port_is_recorded(self, named_step, tmp_path):
         meta = self.mesh_only(named_step, tmp_path / "out")
@@ -583,6 +647,7 @@ def test_a_step_file_solves_end_to_end(named_step, tmp_path):
         freqs,
         dielectrics={"substrate": (4.4, 0.001)},
         output_path=tmp_path / "out",
+        show_mesh=False,  # the viewer blocks until its window is closed
         verbose=False,
         FEM_num_solve_points=4,
         FEM_elems_per_wavelength=4.0,

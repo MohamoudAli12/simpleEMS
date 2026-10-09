@@ -501,3 +501,76 @@ class TestOptions:
         content = write(make_problem(), mesh, tmp_path)
 
         assert "350" in content
+
+
+# ---------------------------------------------------------------------
+# write_mode_problem
+# ---------------------------------------------------------------------
+class TestWriteModeProblem:
+    @pytest.fixture
+    def pro_text(self, tmp_path):
+        from simpleEMS.fem_backend import FEMOptions, PortSpec, Problem, SolidSpec
+        from simpleEMS.fem_geometry import Mesh, PortMesh
+        from simpleEMS.fem_materials import (
+            ABC,
+            AIR,
+            PEC,
+            Dielectric,
+            dielectric_region,
+            port_region,
+        )
+
+        problem = Problem(
+            step_file="s.step",
+            name="sec",
+            solids={
+                "port_1": SolidSpec("port_1", "port"),
+                "substrate": SolidSpec(
+                    "substrate", "dielectric", Dielectric(4.4, 0.02, mu_r=2.0)
+                ),
+            },
+            ports=[PortSpec("port_1", 1, 50.0, "z", "wave", "y")],
+            freqs=np.array([1e9]),
+            options=FEMOptions(),
+        )
+        mesh = Mesh(
+            msh_path=str(tmp_path / "sec.msh"),
+            dielectric_regions={"substrate": dielectric_region(0)},
+            air_region=AIR,
+            pec_region=PEC,
+            port_regions={
+                1: PortMesh(
+                    number=1,
+                    region=port_region(1),
+                    direction="z",
+                    z0=50.0,
+                    gap=1.6e-3,
+                    width=3e-3,
+                    center=(0, 0, 0),
+                    kind="wave",
+                    prop_dir="y",
+                )
+            },
+            abc_region=ABC,
+            boundary="silver_muller",
+            bbox=(0, 0, 0, 1, 1, 1),
+            box_bbox=(0, 0, 0, 1, 1, 1),
+        )
+        pro = fem_formulation.write_mode_problem(problem, mesh, 1, tmp_path)
+        return Path(pro).read_text()
+
+    def test_declares_each_dielectric_region(self, pro_text):
+        from simpleEMS.fem_materials import dielectric_region
+
+        assert f"Diel_substrate = Region[{dielectric_region(0)}];" in pro_text
+
+    def test_the_permittivity_carries_the_loss(self, pro_text):
+        """The mode sees the lossy line, so beta picks up the attenuation."""
+        line = next(line for line in pro_text.splitlines() if "epsR[Diel_" in line)
+
+        assert "Complex[4.4" in line
+        assert "-0.088" in line
+
+    def test_the_reluctivity_is_one_over_mu_r(self, pro_text):
+        assert "nuR[Diel_substrate] = 0.5" in pro_text
+        assert "nuR[Air] = 1.;" in pro_text

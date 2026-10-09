@@ -1,7 +1,8 @@
 """Tests for the matplotlib and PyVista themes in ``simpleEMS.plot_theme``.
 
-Everything runs on the Agg backend (``conftest.py``), so the Qt palette code is
-only checked for staying out of the way when there is no Qt window.
+Everything runs on the Agg backend (``conftest.py``). The Qt palette code runs
+against stand-in windows that hold a real ``QPalette``, so no window ever
+opens.
 """
 
 import importlib
@@ -149,3 +150,146 @@ class TestFigureWindowHook:
         figure = plt.figure()
 
         plot_theme._style_figure_window(figure)
+
+
+class FakeMenu:
+    def __init__(self):
+        self.palette = None
+
+    def setPalette(self, palette):  # noqa: N802 - matches Qt
+        self.palette = palette
+
+
+class FakeWindow:
+    """Just enough of a Qt window for the palette code: a real ``QPalette``."""
+
+    def __init__(self):
+        from matplotlib.backends.qt_compat import QtGui
+
+        self._palette = QtGui.QPalette()
+        self.applied = None
+        self.menus = [FakeMenu(), FakeMenu()]
+
+    def palette(self):
+        return self._palette
+
+    def setPalette(self, palette):  # noqa: N802 - matches Qt
+        self.applied = palette
+
+    def findChildren(self, widget_type):  # noqa: N802 - matches Qt
+        return self.menus
+
+
+def palette_color(palette, role_name):
+    from matplotlib.backends.qt_compat import QtGui
+
+    return palette.color(getattr(QtGui.QPalette.ColorRole, role_name)).name()
+
+
+class TestDarkQtPalette:
+    @pytest.mark.parametrize(
+        ("role_name", "color"),
+        [
+            ("Window", plot_theme.SURFACE),
+            ("Base", plot_theme.SURFACE),
+            ("WindowText", plot_theme.SECONDARY_TEXT),
+            ("Text", plot_theme.PRIMARY_TEXT),
+            ("Highlight", plot_theme.SERIES_COLORS[0]),
+        ],
+        ids=["window", "base", "window-text", "text", "highlight"],
+    )
+    def test_sets_the_dark_colours(self, role_name, color):
+        window = FakeWindow()
+
+        plot_theme._apply_dark_qt_palette(window)
+
+        assert palette_color(window.applied, role_name) == color.lower()
+
+    def test_menus_get_the_palette_too(self):
+        """Drop-down menus are their own windows and do not inherit it."""
+        window = FakeWindow()
+
+        plot_theme._apply_dark_qt_palette(window)
+
+        assert all(menu.palette is window.applied for menu in window.menus)
+
+
+class TestStyleFigureWindow:
+    class FakeAction:
+        def __init__(self):
+            self.icon = None
+
+        def setIcon(self, icon):  # noqa: N802 - matches Qt
+            self.icon = icon
+
+    @pytest.fixture
+    def figure(self):
+        home = self.FakeAction()
+        toolbar = SimpleNamespace(
+            toolitems=[
+                ("Home", "Reset", "home", "home"),
+                (None, None, None, None),
+            ],
+            _actions={"home": home},
+            _icon=lambda file_name: f"icon:{file_name}",
+        )
+        manager = SimpleNamespace(window=FakeWindow(), toolbar=toolbar)
+        return SimpleNamespace(canvas=SimpleNamespace(manager=manager)), home
+
+    def test_darkens_a_qt_window(self, figure):
+        fake_figure, _home = figure
+
+        plot_theme._style_figure_window(fake_figure)
+
+        window = fake_figure.canvas.manager.window
+        assert palette_color(window.applied, "Window") == plot_theme.SURFACE.lower()
+
+    def test_re_renders_the_toolbar_icons(self, figure):
+        fake_figure, home = figure
+
+        plot_theme._style_figure_window(fake_figure)
+
+        assert home.icon == "icon:home.png"
+
+    def test_a_window_without_a_toolbar_is_still_darkened(self, figure):
+        fake_figure, _home = figure
+        fake_figure.canvas.manager.toolbar = None
+
+        plot_theme._style_figure_window(fake_figure)
+
+        assert fake_figure.canvas.manager.window.applied is not None
+
+
+class TestStyleBackgroundPlotter:
+    def test_darkens_the_window_under_the_dark_theme(self):
+        plot_theme.use_dark_theme()
+        plotter = SimpleNamespace(app_window=FakeWindow())
+
+        plot_theme.style_background_plotter(plotter)
+
+        assert plotter.app_window.applied is not None
+
+    def test_leaves_the_window_alone_under_the_light_theme(self):
+        plot_theme.use_light_theme()
+        plotter = SimpleNamespace(app_window=FakeWindow())
+
+        plot_theme.style_background_plotter(plotter)
+
+        assert plotter.app_window.applied is None
+
+
+class TestThemedCursorOnOtherArtists:
+    def test_a_selection_off_a_line_adds_no_marker(self):
+        """Only a Line2D gets the ringed marker; a scatter is left as is."""
+        figure, axes = plt.subplots()
+        scatter = axes.scatter([0.2, 0.5, 0.8], [0.2, 0.5, 0.8])
+        cursor = plot_theme.themed_cursor([scatter])
+        figure.canvas.draw()
+        x_pixel, y_pixel = axes.transData.transform((0.5, 0.5))
+        event = MouseEvent(
+            "button_press_event", figure.canvas, x_pixel, y_pixel, button=1
+        )
+
+        cursor.add_selection(mplcursors.compute_pick(scatter, event), figure, axes)
+
+        assert len(axes.lines) == 0

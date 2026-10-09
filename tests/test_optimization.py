@@ -371,6 +371,18 @@ class TestOptimizeSParams:
 
         optimize_s_params(simulate, {"width": 1.0}, tmp_path)
 
+    def test_a_simulation_that_stops_the_run_exits_quietly(self, tmp_path, capsys):
+        """SciPy only catches StopIteration from the callback; one raised by
+        the simulation itself reaches optimize_s_params, which ends the run
+        without printing a result."""
+
+        def simulate(output_path, optimize, optimize_val):
+            raise StopIteration
+
+        optimize_s_params(simulate, {"width": 1.0}, tmp_path)
+
+        assert "optimal width" not in capsys.readouterr().out
+
     def test_returns_none(self, tmp_path):
         def simulate(output_path, optimize, optimize_val):
             return float(optimize_val[0] ** 2)

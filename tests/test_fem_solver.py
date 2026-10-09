@@ -463,6 +463,35 @@ class TestProgressReporting:
         assert (dofs, peak_mb) == (None, None)
         assert describe_solve(SolveInfo(1.0, None, None)) == ""
 
+    def test_no_solve_has_no_description(self):
+        assert describe_solve(None) == ""
+
+    def test_a_terminal_shows_the_current_stage_live(
+        self, tmp_path, fake_getdp, fake_popen, monkeypatch
+    ):
+        """On a terminal the progress line follows getdp's stages; the run
+        still collects every line it printed."""
+        import io
+
+        from rich.console import Console
+
+        updates = []
+        terminal = Console(file=io.StringIO(), force_terminal=True)
+        monkeypatch.setattr(fem_solver, "console", terminal)
+        monkeypatch.setattr(
+            fem_solver.Progress,
+            "update",
+            lambda self, task, **kwargs: updates.append(kwargs["description"]),
+        )
+        fake_popen(output="Info    : Pre-processing\nnoise\nInfo    : Solving\n")
+
+        run_getdp("p.pro", "m.msh", tmp_path, {}, None, label="S-params")
+
+        assert updates == [
+            "getdp S-params · Pre-processing",
+            "getdp S-params · Solving",
+        ]
+
     def test_a_finished_solve_reports_its_duration(
         self, tmp_path, fake_getdp, spy_run, capsys
     ):

@@ -555,6 +555,71 @@ class TestSimulateModel:
             simulate_model(csx_xml, output_path=tmp_path / "out", run=False)
 
 
+class TestSimulateModelPostProcessing:
+    """Everything after the ports load, with the solve and the reading of its
+    results stubbed out."""
+
+    @pytest.fixture
+    def stubbed(self, monkeypatch, no_gui):
+        """Record ``FDTD.Run`` and ``compute_sim_data`` instead of running them."""
+        import simpleEMS.fdtd_standalone_model as standalone
+        from simpleEMS.sim_tools import SimTools
+
+        calls = {"runs": [], "computed": []}
+
+        class RecordingOpenEMS(standalone.openEMS):
+            def Run(self, sim_path, **kwargs):  # noqa: N802 - matches openEMS
+                calls["runs"].append(sim_path)
+
+        def fake_compute(sim, port, output_path=None):
+            calls["computed"].append((sim, port, output_path))
+            return "sim-data"
+
+        monkeypatch.setattr(standalone, "openEMS", RecordingOpenEMS)
+        monkeypatch.setattr(SimTools, "compute_sim_data", staticmethod(fake_compute))
+        return calls
+
+    def test_explicit_freqs_are_used_as_given(self, openems_xml, tmp_path, stubbed):
+        freqs = [2.0e9, 2.5e9, 3.0e9]
+
+        _data, sim, _charac_imp, _nf2ff_box = simulate_model(
+            openems_xml, output_path=tmp_path / "out", run=False, freqs=freqs
+        )
+
+        assert sim.freqs == pytest.approx(freqs)
+        assert sim.freqs.dtype == float
+
+    def test_without_run_it_only_post_processes(self, openems_xml, tmp_path, stubbed):
+        out = tmp_path / "out"
+
+        data, _sim, charac_imp, nf2ff_box = simulate_model(
+            openems_xml, output_path=out, run=False, freqs=[2.45e9]
+        )
+
+        assert stubbed["runs"] == []
+        assert data == "sim-data"
+        assert charac_imp == pytest.approx(50)
+        assert nf2ff_box is not None
+
+    def test_run_solves_in_the_output_path(self, openems_xml, tmp_path, stubbed):
+        out = tmp_path / "out"
+
+        simulate_model(openems_xml, output_path=out, run=True, freqs=[2.45e9])
+
+        assert stubbed["runs"] == [str(out)]
+
+    def test_two_ports_are_post_processed_together(
+        self, openems_xml, tmp_path, stubbed
+    ):
+        out = tmp_path / "out"
+
+        simulate_model(openems_xml, output_path=out, run=False, freqs=[2.45e9])
+
+        ((_sim, port, output_path),) = stubbed["computed"]
+        assert [each_port.number for each_port in port] == [1, 2]
+        assert output_path == out
+
+
 @pytest.mark.slow
 @pytest.mark.needs_openems_bin
 class TestSimulateModelEndToEnd:

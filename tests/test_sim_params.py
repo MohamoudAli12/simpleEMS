@@ -187,6 +187,30 @@ class TestBackendValidation:
                 **fr4,
             )
 
+    @pytest.mark.parametrize("port_type", ["lumped", "WavePort", ""])
+    def test_unknown_fem_port_type_raises(self, fr4, port_type):
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        with pytest.raises(ValueError, match="FEM_port_type must be"):
+            InsetFedPatchParams(
+                resonant_freq=2.45e9,
+                span_freq=0.5e9,
+                FEM_port_type=port_type,
+                **fr4,
+            )
+
+    def test_a_solve_cap_below_the_solve_count_raises(self, fr4):
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        with pytest.raises(ValueError, match="FEM_max_solve_points must be >="):
+            InsetFedPatchParams(
+                resonant_freq=2.45e9,
+                span_freq=0.5e9,
+                FEM_num_solve_points=10,
+                FEM_max_solve_points=8,
+                **fr4,
+            )
+
     def test_four_solve_points_is_the_boundary_and_is_allowed(self, fr4):
         from simpleEMS.patch_antenna import InsetFedPatchParams
 

@@ -672,3 +672,121 @@ class TestPrimitiveWriters:
         # 5 vertices -> 1 move + 4 draws + 1 closing draw
         assert content.count("D02*") == 1
         assert content.count("D01*") == 5
+
+
+# ---------------------------------------------------------------------
+# What the exporter skips, and transformed primitives
+# ---------------------------------------------------------------------
+class TestSkippedGeometry:
+    def test_a_polygon_left_without_points_is_skipped(self, capsys):
+        """CSXCAD keeps the primitive even when SetCoords rejects its points,
+        and the rejection leaves the normal unset, so set it as intended."""
+        csx = ContinuousStructure()
+        metal = csx.AddMetal("empty")
+        with pytest.raises(Exception, match="empty coordinates"):
+            metal.AddLinPoly(
+                priority=1, points=[[], []], norm_dir=2, elevation=H, length=T
+            )
+        (polygon,) = csx.GetAllPrimitives()
+        polygon.SetNormDir(2)
+
+        layout = infer_layers(csx)
+
+        assert layout.layers == []
+        assert "CSPrimLinPoly in empty" in capsys.readouterr().out
+
+    def test_a_shape_with_no_footprint_rule_is_skipped(self, capsys):
+        csx = ContinuousStructure()
+        add_box(csx, "pad", H, H + T)
+        csx.AddMetal("ball").AddSphere(priority=1, center=[0, 0, H], radius=1.0)
+
+        layers = infer_layers(csx).layers
+
+        assert [name for name, _ in layers[0].regions] == ["pad"]
+        assert "CSPrimSphere in ball" in capsys.readouterr().out
+
+    def test_properties_that_are_not_metal_or_material_are_ignored(self):
+        csx = ContinuousStructure()
+        add_box(csx, "pad", H, H + T)
+        excitation = csx.AddExcitation("feed", exc_type=0, exc_val=[0, 0, 1])
+        excitation.AddBox(start=[-1, -1, 0], stop=[1, 1, H])
+
+        layers = infer_layers(csx).layers
+
+        assert [name for name, _ in layers[0].regions] == ["pad"]
+
+    def test_a_via_that_touches_no_copper_is_skipped(self, capsys):
+        csx = ContinuousStructure()
+        add_box(csx, "pad", H, H + T)
+        buried = csx.AddMetal("buried")
+        buried.AddCylinder(priority=2, start=[0, 0, 0.2], stop=[0, 0, 0.6], radius=0.1)
+
+        layout = infer_layers(csx)
+
+        assert layout.drills == []
+        assert "touches no copper layer" in capsys.readouterr().out
+
+
+class TestTransformedPrimitives:
+    @staticmethod
+    def body(tmp_path, writer, primitive):
+        path = tmp_path / "out.gbr"
+        with open(path, "w") as handle:
+            writer(handle, primitive)
+        return path.read_text().splitlines()[1:-1]
+
+    def test_a_box_is_written_where_its_transform_puts_it(self, tmp_path):
+        csx = ContinuousStructure()
+        box = csx.AddMetal("m").AddBox(
+            priority=1, start=[0.0, 0.0, 0.0], stop=[2.0, 3.0, T]
+        )
+        box.AddTransform("Translate", [10, 20, 0])
+
+        body = self.body(tmp_path, primitive_box, box)
+
+        assert body[0] == "X1000000Y2000000D02*"
+        assert body[2] == "X1200000Y2300000D01*"
+
+    def test_a_shell_is_written_where_its_transform_puts_it(self, tmp_path):
+        csx = ContinuousStructure()
+        add_shell_antipad(csx, "antipad", 0.0, T, xy=(0.0, 0.0))
+        shell = csx.GetAllPrimitives()[0]
+        shell.AddTransform("Translate", [3, 4, 0])
+
+        body = self.body(tmp_path, primitive_cylindrical_shell, shell)
+
+        centres = set()
+        for line in body:
+            x_text, y_text = line[1:-4].split("Y")
+            centres.add(
+                round(math.hypot(int(x_text) / 1e5 - 3, int(y_text) / 1e5 - 4), 4)
+            )
+        assert centres == {0.5}
+
+    def test_a_polygon_is_written_where_its_transform_puts_it(self, tmp_path):
+        csx = ContinuousStructure()
+        poly = csx.AddMetal("m").AddLinPoly(
+            priority=1,
+            points=[[0, 3, 3, 0], [0, 0, 4, 4]],
+            norm_dir=2,
+            elevation=0.0,
+            length=T,
+        )
+        poly.AddTransform("RotateAxis", "z", 90)
+
+        body = self.body(tmp_path, primitive_polygon, poly)
+
+        assert body[0] == "X0Y0D02*"
+        assert body[1] == "X0Y300000D01*"
+        assert body[2] == "X-400000Y300000D01*"
+
+    def test_a_polygon_of_two_points_is_not_written(self, tmp_path, capsys):
+        csx = ContinuousStructure()
+        poly = csx.AddMetal("m").AddLinPoly(
+            priority=1, points=[[0, 3], [0, 0]], norm_dir=2, elevation=0.0, length=T
+        )
+
+        body = self.body(tmp_path, primitive_polygon, poly)
+
+        assert body == []
+        assert "not enough points" in capsys.readouterr().out

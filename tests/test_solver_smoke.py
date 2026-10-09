@@ -323,6 +323,32 @@ class TestFemPipeline:
 # ---------------------------------------------------------------------
 # Cross-backend
 # ---------------------------------------------------------------------
+@pytest.mark.needs_getdp_bin
+class TestFemVariants:
+    """The FEM options that change the mesh or the solve, each run once."""
+
+    @staticmethod
+    def solve(fr4, out, **options):
+        params = line_params(fr4, **COARSE_FEM, **options)
+        sim = setup_simulation(params)
+        ports = MicrostripLine(params, sim).build_microstrip_line()
+        SimTools.run_simulation(sim, output_path=out)
+        return SimTools.compute_sim_data(sim, ports, output_path=out)
+
+    def test_wave_ports_solve_their_modes(self, fr4, tmp_path):
+        data = self.solve(fr4, tmp_path, FEM_port_type="waveport")
+
+        assert_well_formed(data, 21, two_port=True)
+        assert (tmp_path / "output" / "mode_1.pos").is_file()
+        assert (tmp_path / "output" / "mode_2.pos").is_file()
+
+    def test_a_pml_boundary_solves(self, fr4, tmp_path):
+        data = self.solve(fr4, tmp_path, FEM_boundary="pml")
+
+        assert_well_formed(data, 21, two_port=True)
+        assert "pml" in (tmp_path / "structure.pro").read_text(encoding="utf-8").lower()
+
+
 @pytest.mark.needs_openems_bin
 @pytest.mark.needs_getdp_bin
 class TestBackendAgreement:

@@ -16,8 +16,10 @@ pytest.importorskip("openEMS")
 
 from simpleEMS.calc import (  # noqa: E402
     PatchDims,
+    branch_line_hybrid_impedances,
     calculate_electrical_length_mm,
     conductance_G1,
+    dipole_resonant_length_mm,
     inset_depth,
     microstrip_impedance,
     microstrip_width_from_impedance,
@@ -411,3 +413,43 @@ class TestUngroundedStripEpsEff:
         _, grounded = microstrip_impedance(1.0, 1.6, 0.035, eps_r, 6e9)
 
         assert 1 < low < high < (eps_r + 1) / 2 < grounded
+
+
+# ---------------------------------------------------------------------
+# branch_line_hybrid_impedances
+# ---------------------------------------------------------------------
+class TestBranchLineHybridImpedances:
+    def test_series_arms_are_z0_over_root_two(self):
+        """Pozar 7.5: the series arms are Z0 / sqrt(2), 35.36 ohm at 50 ohm."""
+        series_arm_imp, _shunt_arm_imp = branch_line_hybrid_impedances(50)
+
+        assert series_arm_imp == pytest.approx(50 / np.sqrt(2))
+
+    @pytest.mark.parametrize("charac_imp", [25, 50, 75], ids=["25", "50", "75"])
+    def test_shunt_arms_match_the_port_impedance(self, charac_imp):
+        _series_arm_imp, shunt_arm_imp = branch_line_hybrid_impedances(charac_imp)
+
+        assert shunt_arm_imp == pytest.approx(charac_imp)
+
+
+# ---------------------------------------------------------------------
+# dipole_resonant_length_mm
+# ---------------------------------------------------------------------
+class TestDipoleResonantLength:
+    def test_free_space_dipole_is_047_wavelengths(self):
+        """At 1 GHz lambda0 is 299.79 mm, so 0.47 lambda0 is 140.90 mm."""
+        expected_mm = 0.47 * 1e3 * C0 / 1e9
+
+        assert dipole_resonant_length_mm(1e9) == pytest.approx(expected_mm)
+
+    def test_permittivity_shortens_by_its_square_root(self):
+        free_space = dipole_resonant_length_mm(2.45e9)
+
+        printed = dipole_resonant_length_mm(2.45e9, eps_eff=4.0)
+
+        assert printed == pytest.approx(free_space / 2)
+
+    def test_length_scales_with_the_wavelength_fraction(self):
+        half_wave = dipole_resonant_length_mm(2.45e9, length_wavelengths=0.5)
+
+        assert half_wave == pytest.approx(0.5 * 1e3 * C0 / 2.45e9)

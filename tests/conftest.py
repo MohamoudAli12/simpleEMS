@@ -163,6 +163,39 @@ def bandpass_filter_params():
     )
 
 
+@pytest.fixture
+def coupler_params(fr4):
+    """A 2.45 GHz 3 dB branch-line hybrid coupler on FR-4."""
+    from simpleEMS.coupler import QuadratureBranchLineHybridCouplerParams
+
+    return QuadratureBranchLineHybridCouplerParams(
+        min_freq=1.5e9, max_freq=3.5e9, centre_freq=2.45e9, **fr4
+    )
+
+
+@pytest.fixture
+def dipole_params(fr4):
+    """A 2.45 GHz printed half-wave dipole on FR-4, with a 73 ohm port."""
+    from simpleEMS.dipole_antenna import PrintedDipoleAntennaParams
+
+    return PrintedDipoleAntennaParams(
+        min_freq=1.5e9,
+        max_freq=3.5e9,
+        resonant_freq=2.45e9,
+        **{**fr4, "charac_imp": 73},
+    )
+
+
+@pytest.fixture
+def monopole_params(fr4):
+    """A 2.45 GHz microstrip-fed printed quarter-wave monopole on FR-4."""
+    from simpleEMS.monopole_antenna import PrintedMonopoleAntennaParams
+
+    return PrintedMonopoleAntennaParams(
+        min_freq=1.5e9, max_freq=3.5e9, resonant_freq=2.45e9, **fr4
+    )
+
+
 # ---------------------------------------------------------------------
 # Simulation-setup fixtures
 # ---------------------------------------------------------------------
@@ -249,6 +282,48 @@ def built_bandpass(bandpass_filter_params, sim_for):
     structure = BandPassQuarterWaveFilter(bandpass_filter_params, sim)
     ports = structure.build_band_pass_quarter_wave_filter()
     return structure, sim, bandpass_filter_params, ports
+
+
+@pytest.fixture
+def built_coupler(coupler_params, sim_for):
+    """A fully built (but unsimulated and unmeshed) branch-line hybrid coupler.
+
+    Returns ``(structure, sim, params, ports)``.
+    """
+    from simpleEMS.coupler import QuadratureBranchLineHybridCoupler
+
+    sim = sim_for(coupler_params)
+    structure = QuadratureBranchLineHybridCoupler(coupler_params, sim)
+    ports = structure.build_quadrature_branch_line_hybrid_coupler()
+    return structure, sim, coupler_params, ports
+
+
+@pytest.fixture
+def built_dipole(dipole_params, sim_for):
+    """A fully built (but unsimulated and unmeshed) printed dipole.
+
+    Returns ``(antenna, sim, params, port)``.
+    """
+    from simpleEMS.dipole_antenna import PrintedDipoleAntenna
+
+    sim = sim_for(dipole_params)
+    antenna = PrintedDipoleAntenna(dipole_params, sim)
+    port = antenna.build_printed_dipole_antenna()
+    return antenna, sim, dipole_params, port
+
+
+@pytest.fixture
+def built_monopole(monopole_params, sim_for):
+    """A fully built (but unsimulated and unmeshed) printed monopole.
+
+    Returns ``(antenna, sim, params, port)``.
+    """
+    from simpleEMS.monopole_antenna import PrintedMonopoleAntenna
+
+    sim = sim_for(monopole_params)
+    antenna = PrintedMonopoleAntenna(monopole_params, sim)
+    port = antenna.build_printed_monopole_antenna()
+    return antenna, sim, monopole_params, port
 
 
 # ---------------------------------------------------------------------

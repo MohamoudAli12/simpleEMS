@@ -1044,3 +1044,503 @@ class TestSummaryAndVerification:
         cli._verify_installation()
 
         assert checked == ["openEMS", "CSXCAD", "AppCSXCAD", "openEMS"]
+
+
+# ---------------------------------------------------------------------
+# Entry points
+# ---------------------------------------------------------------------
+class TestEntryPoints:
+    def test_the_callback_prints_help_without_a_subcommand(self, capsys):
+        context = type(
+            "Context",
+            (),
+            {"invoked_subcommand": None, "get_help": lambda self: "usage"},
+        )()
+
+        with pytest.raises(typer.Exit):
+            cli.main(context)
+
+        assert "usage" in capsys.readouterr().out
+
+    def test_the_module_runs_as_a_script(self, monkeypatch, capsys):
+        import runpy
+        import warnings
+
+        monkeypatch.setattr(sys, "argv", ["simpleems", "--help"])
+
+        with warnings.catch_warnings():
+            # runpy warns that simpleEMS.cli is already imported; that is the point.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            with pytest.raises(SystemExit) as excinfo:
+                runpy.run_module("simpleEMS.cli", run_name="__main__")
+
+        assert excinfo.value.code == 0
+        assert "checkhealth" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------
+# Dependency discovery edge cases
+# ---------------------------------------------------------------------
+class TestDependencyDiscoveryEdges:
+    def test_a_distribution_without_requirements_has_no_checks(self, monkeypatch):
+        monkeypatch.setattr(cli.importlib.metadata, "requires", lambda name: None)
+
+        assert cli._get_dependency_checks_from_pyproject_section("dependencies") == []
+
+    def test_a_broken_distribution_map_falls_back_to_the_names(self, monkeypatch):
+        """Without the import-name map, each requirement is checked under its
+        own distribution name."""
+
+        def broken():
+            raise RuntimeError("corrupt metadata")
+
+        monkeypatch.setattr(
+            cli.importlib.metadata, "requires", lambda name: ["numpy==2.0"]
+        )
+        monkeypatch.setattr(cli.importlib.metadata, "packages_distributions", broken)
+
+        checks = cli._get_dependency_checks_from_pyproject_section("dependencies")
+
+        assert checks == [("numpy", "numpy")]
+
+
+# ---------------------------------------------------------------------
+# Windows-only branches, run against stand-ins for the Windows modules
+# ---------------------------------------------------------------------
+class FakeRegistry:
+    """Stands in for ``winreg``: one user ``Environment`` key held in a dict."""
+
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_ALL_ACCESS = 0xF003F
+    REG_SZ = 1
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+        self.written = {}
+        self.closed = False
+
+    def OpenKey(self, root, sub_key, reserved, access):  # noqa: N802 - winreg API
+        assert (root, sub_key) == ("HKCU", "Environment")
+        return "environment-key"
+
+    def QueryValueEx(self, key, name):  # noqa: N802 - winreg API
+        if name not in self.values:
+            raise FileNotFoundError(name)
+        return self.values[name]
+
+    def SetValueEx(self, key, name, reserved, reg_type, value):  # noqa: N802
+        self.written[name] = (reg_type, value)
+
+    def CloseKey(self, key):  # noqa: N802 - winreg API
+        self.closed = True
+
+
+@pytest.fixture
+def windows(monkeypatch):
+    """Pretend to be Windows: a fake registry and a recording broadcast."""
+    import ctypes
+
+    registry = FakeRegistry()
+    broadcasts = []
+
+    class User32:
+        def SendMessageTimeoutW(self, *args):  # noqa: N802 - Win32 API
+            broadcasts.append(args)
+
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", registry)
+    monkeypatch.setattr(
+        ctypes, "windll", type("WinDLL", (), {"user32": User32()})(), raising=False
+    )
+    return registry, broadcasts
+
+
+class TestWindowsPrefixes:
+    def test_openems_installs_under_c(self, monkeypatch):
+        monkeypatch.setattr(cli.sys, "platform", "win32")
+
+        assert cli._default_prefix() == Path("C:\\openEMS")
+
+    def test_getdp_installs_under_c(self, monkeypatch):
+        monkeypatch.setattr(cli.sys, "platform", "win32")
+
+        assert cli._default_getdp_prefix() == Path("C:\\getdp")
+
+
+class TestWindowsPathEdit:
+    def test_appends_to_the_user_path(self, windows, tmp_path):
+        registry, _broadcasts = windows
+        registry.values["Path"] = ("C:\\tools", registry.REG_EXPAND_SZ)
+
+        cli._add_dir_to_path(tmp_path / "bin", dry_run=False)
+
+        assert registry.written["Path"] == (
+            registry.REG_EXPAND_SZ,
+            f"C:\\tools;{tmp_path / 'bin'}",
+        )
+        assert registry.closed
+
+    def test_a_missing_user_path_is_created(self, windows, tmp_path):
+        registry, _broadcasts = windows
+
+        cli._add_dir_to_path(tmp_path / "bin", dry_run=False)
+
+        assert registry.written["Path"] == (
+            registry.REG_EXPAND_SZ,
+            str(tmp_path / "bin"),
+        )
+
+    def test_a_directory_already_on_the_path_is_not_added_twice(
+        self, windows, tmp_path, capsys
+    ):
+        registry, _broadcasts = windows
+        registry.values["Path"] = (f"C:\\tools; {tmp_path / 'bin'}", registry.REG_SZ)
+
+        cli._add_dir_to_path(tmp_path / "bin", dry_run=False)
+
+        assert "Path" not in registry.written
+        assert "already in user PATH" in capsys.readouterr().out
+
+    def test_extra_variables_are_stored(self, windows, tmp_path):
+        registry, _broadcasts = windows
+
+        cli._add_dir_to_path(
+            tmp_path / "bin", dry_run=False, extra_env_vars={"GETDP_HOME": "C:\\g"}
+        )
+
+        assert registry.written["GETDP_HOME"] == (registry.REG_SZ, "C:\\g")
+
+    def test_the_change_is_broadcast(self, windows, tmp_path):
+        """Explorer only rereads the environment when told to."""
+        _registry, broadcasts = windows
+
+        cli._add_dir_to_path(tmp_path / "bin", dry_run=False)
+
+        ((_hwnd, message, _wparam, area, *_rest),) = broadcasts
+        assert (message, area) == (0x001A, "Environment")
+
+    def test_a_dry_run_writes_and_broadcasts_nothing(self, windows, tmp_path, capsys):
+        registry, broadcasts = windows
+
+        cli._add_dir_to_path(
+            tmp_path / "bin", dry_run=True, extra_env_vars={"GETDP_HOME": "C:\\g"}
+        )
+
+        assert registry.written == {}
+        assert broadcasts == []
+        assert "Added" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------
+# Windows release download
+# ---------------------------------------------------------------------
+class TestWindowsReleaseFetch:
+    @pytest.fixture
+    def prefix(self, tmp_path, home, monkeypatch, spy_path_edit):
+        """An empty prefix, with the wheel install stubbed out."""
+        monkeypatch.setattr(cli, "_pip_install", lambda path, dry, force=False: None)
+        return tmp_path / "prefix"
+
+    @staticmethod
+    def release(*names):
+        payload = {
+            "assets": [
+                {
+                    "name": name,
+                    "browser_download_url": f"https://example.invalid/{name}",
+                }
+                for name in names
+            ]
+        }
+        return io.BytesIO(json.dumps(payload).encode())
+
+    def test_a_tagged_version_queries_that_tag(self, prefix, capsys):
+        cli._install_windows(prefix, "v0.0.36", dry_run=True)
+
+        assert "releases/tags/v0.0.36" in capsys.readouterr().out
+
+    def test_a_failed_query_exits(self, prefix, monkeypatch, capsys):
+        import urllib.error
+
+        def refuse(request):
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+        monkeypatch.setattr(cli.urllib.request, "urlopen", refuse)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            cli._install_windows(prefix, "v9.9.9", dry_run=False)
+
+        assert excinfo.value.exit_code == 1
+        assert "Failed to fetch release data" in capsys.readouterr().out
+
+    def test_any_zip_is_used_when_there_is_no_msvc_build(self, prefix, monkeypatch):
+        tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        downloaded = []
+        monkeypatch.setattr(
+            cli.urllib.request,
+            "urlopen",
+            lambda request: self.release("notes.txt", "openEMS_x64_mingw.zip"),
+        )
+
+        def download(url, destination):
+            downloaded.append(url)
+            destination.write_bytes(windows_zip_bytes(tag))
+
+        monkeypatch.setattr(cli, "_download_with_progress", download)
+
+        cli._install_windows(prefix, "latest", dry_run=False)
+
+        assert downloaded == ["https://example.invalid/openEMS_x64_mingw.zip"]
+
+    def test_a_release_without_a_zip_exits(self, prefix, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli.urllib.request, "urlopen", lambda request: self.release("notes.txt")
+        )
+
+        with pytest.raises(typer.Exit) as excinfo:
+            cli._install_windows(prefix, "latest", dry_run=False)
+
+        assert excinfo.value.exit_code == 1
+        assert "No suitable release asset" in capsys.readouterr().out
+
+
+class TestPipForce:
+    def test_force_reinstalls(self, monkeypatch, spy_subprocess):
+        monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+
+        cli._pip_install("/tmp/pkg", dry_run=False, force=True)
+
+        cmd, _cwd, _dry = spy_subprocess[0]
+        assert cmd[-2:] == ["--force-reinstall", "/tmp/pkg"]
+
+
+class TestRefreshImportPaths:
+    def test_a_new_user_site_is_added_to_sys_path(self, tmp_path, monkeypatch):
+        user_site = tmp_path / "site-packages"
+        user_site.mkdir()
+        added = []
+        monkeypatch.setattr(cli.site, "getusersitepackages", lambda: str(user_site))
+        monkeypatch.setattr(cli.site, "addsitedir", added.append)
+
+        cli._refresh_import_paths()
+
+        assert added == [str(user_site)]
+
+    def test_a_missing_user_site_is_left_alone(self, tmp_path, monkeypatch):
+        added = []
+        monkeypatch.setattr(
+            cli.site, "getusersitepackages", lambda: str(tmp_path / "absent")
+        )
+        monkeypatch.setattr(cli.site, "addsitedir", added.append)
+
+        cli._refresh_import_paths()
+
+        assert added == []
+
+
+# ---------------------------------------------------------------------
+# checkhealth when things are missing
+# ---------------------------------------------------------------------
+class TestCheckHealthFailures:
+    @pytest.fixture
+    def nothing_installed(self, monkeypatch):
+        monkeypatch.setattr(
+            cli,
+            "_get_dependency_checks_from_pyproject_section",
+            lambda section: [("numpy", "numpy")],
+        )
+        monkeypatch.setattr(
+            cli, "_check_package_import", lambda imp, pip: (False, None, "no module")
+        )
+        monkeypatch.setattr(
+            cli, "_check_system_binary", lambda name: (False, None, "not found in PATH")
+        )
+
+    def test_every_failure_is_reported_and_the_exit_code_is_one(
+        self, nothing_installed, capsys
+    ):
+        with pytest.raises(typer.Exit) as excinfo:
+            cli.checkhealth(dev=False)
+
+        out = capsys.readouterr().out
+        assert excinfo.value.exit_code == 1
+        assert "6 failed" in out
+        assert "1 passed" in out
+        for name in ("numpy", "openEMS Python API", "CSXCAD Python API", "getdp"):
+            assert name in out
+
+    def test_windows_points_the_bindings_at_the_default_install(
+        self, nothing_installed, monkeypatch, tmp_path
+    ):
+        (tmp_path / "openEMS").mkdir()
+        monkeypatch.setattr(cli.sys, "platform", "win32")
+        monkeypatch.setattr(cli, "_default_prefix", lambda: tmp_path)
+        monkeypatch.delenv("OPENEMS_INSTALL_PATH", raising=False)
+        monkeypatch.delenv("CSXCAD_INSTALL_PATH", raising=False)
+
+        with pytest.raises(typer.Exit):
+            cli.checkhealth(dev=False)
+
+        assert os.environ["OPENEMS_INSTALL_PATH"] == str(tmp_path / "openEMS")
+        assert os.environ["CSXCAD_INSTALL_PATH"] == str(tmp_path / "openEMS")
+
+
+# ---------------------------------------------------------------------
+# install commands, past the dry run
+# ---------------------------------------------------------------------
+class TestInstallCommands:
+    @pytest.fixture
+    def steps(self, monkeypatch):
+        """Record which install steps run; verification reports success."""
+        calls = []
+        monkeypatch.setattr(
+            cli,
+            "_install_windows",
+            lambda prefix, version, dry_run, force=False: calls.append("windows"),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_install_unix",
+            lambda prefix, dry_run: calls.append("unix"),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_install_python_bindings_only",
+            lambda prefix, dry_run: calls.append("bindings"),
+        )
+        monkeypatch.setattr(
+            cli, "_verify_installation", lambda: calls.append("verify") or True
+        )
+        return calls
+
+    @staticmethod
+    def solver_on_path(monkeypatch, on_path, bindings_ok):
+        monkeypatch.setattr(
+            cli.shutil, "which", lambda name: "/usr/bin/openEMS" if on_path else None
+        )
+        monkeypatch.setattr(
+            cli, "_check_package_import", lambda imp, pip: (bindings_ok, None, None)
+        )
+
+    @pytest.mark.parametrize(
+        ("platform", "installer"),
+        [("linux", "bindings"), ("win32", "windows")],
+        ids=["posix", "windows"],
+    )
+    def test_a_solver_without_bindings_only_gets_the_bindings(
+        self, steps, monkeypatch, tmp_path, platform, installer
+    ):
+        self.solver_on_path(monkeypatch, on_path=True, bindings_ok=False)
+        monkeypatch.setattr(cli.sys, "platform", platform)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            cli.install_openems(
+                prefix=tmp_path, version="latest", dry_run=False, force=False
+            )
+
+        assert excinfo.value.exit_code == 0
+        assert steps == [installer, "verify"]
+
+    def test_a_dry_run_of_the_bindings_skips_verification(
+        self, steps, monkeypatch, tmp_path
+    ):
+        self.solver_on_path(monkeypatch, on_path=True, bindings_ok=False)
+        monkeypatch.setattr(cli.sys, "platform", "linux")
+
+        with pytest.raises(typer.Exit):
+            cli.install_openems(
+                prefix=tmp_path, version="latest", dry_run=True, force=False
+            )
+
+        assert steps == ["bindings"]
+
+    @pytest.mark.parametrize(
+        ("platform", "installer"),
+        [("linux", "unix"), ("win32", "windows")],
+        ids=["posix", "windows"],
+    )
+    def test_a_full_install_is_verified(
+        self, steps, monkeypatch, tmp_path, platform, installer
+    ):
+        self.solver_on_path(monkeypatch, on_path=False, bindings_ok=False)
+        monkeypatch.setattr(cli.sys, "platform", platform)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            cli.install_openems(
+                prefix=tmp_path, version="latest", dry_run=False, force=False
+            )
+
+        assert excinfo.value.exit_code == 0
+        assert steps == [installer, "verify"]
+
+    @pytest.mark.parametrize(
+        ("found", "exit_code", "message"),
+        [(True, 0, "getdp solver: /opt/getdp"), (False, 1, "getdp solver: missing")],
+        ids=["found", "missing"],
+    )
+    def test_getdp_is_checked_after_installing(
+        self, monkeypatch, tmp_path, capsys, found, exit_code, message
+    ):
+        installed = []
+        monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+        monkeypatch.setattr(
+            cli,
+            "_install_getdp_archive",
+            lambda prefix, version, dry_run: installed.append(prefix),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_check_system_binary",
+            lambda name: (
+                (True, "/opt/getdp", None) if found else (False, None, "missing")
+            ),
+        )
+
+        with pytest.raises(typer.Exit) as excinfo:
+            cli.install_getdp(
+                prefix=tmp_path, version="stable", dry_run=False, force=False
+            )
+
+        assert installed == [tmp_path]
+        assert excinfo.value.exit_code == exit_code
+        assert message in capsys.readouterr().out
+
+    def test_the_bindings_path_stops_after_its_summary(
+        self, steps, monkeypatch, tmp_path
+    ):
+        """The full install must not follow a bindings-only install, even if
+        the summary ever stops exiting the process."""
+        self.solver_on_path(monkeypatch, on_path=True, bindings_ok=False)
+        monkeypatch.setattr(cli.sys, "platform", "linux")
+        monkeypatch.setattr(
+            cli, "_print_summary", lambda ok, prefix, label="openEMS": steps.append(ok)
+        )
+
+        cli.install_openems(
+            prefix=tmp_path, version="latest", dry_run=False, force=False
+        )
+
+        assert steps == ["bindings", "verify", True]
+
+    def test_a_getdp_dry_run_stops_after_its_summary(self, monkeypatch, tmp_path):
+        """A dry run installs nothing, so there is no binary to look for."""
+        events = []
+        monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+        monkeypatch.setattr(
+            cli, "_install_getdp_archive", lambda prefix, version, dry_run: None
+        )
+        monkeypatch.setattr(
+            cli,
+            "_print_summary",
+            lambda ok, prefix, label="openEMS": events.append(("summary", ok)),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_check_system_binary",
+            lambda name: events.append(("check", name)) or (True, "/x", None),
+        )
+
+        cli.install_getdp(prefix=tmp_path, version="stable", dry_run=True, force=False)
+
+        assert events == [("summary", True)]

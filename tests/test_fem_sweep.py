@@ -253,6 +253,20 @@ class TestRationalSweep:
 
         assert len(counting_solver.frequencies) == 11
 
+    def test_a_grid_too_coarse_for_the_budget_stops_early(self):
+        """Once every point the grid can offer is solved, the next pick is a
+        repeat, and solving it again would buy nothing."""
+        calls = []
+
+        def solve(freq):
+            calls.append(freq)
+            return np.array([[0.5 + 0j]])
+
+        rational_sweep(np.array([2e9, 3e9]), [1], solve, 8, verbose=False)
+
+        assert len(calls) < 8
+        assert len(set(calls)) == len(calls)
+
     def test_single_point_grid_does_not_crash(self):
         """A one-point grid has no interval for ``pick_next`` to bisect.
 
@@ -468,6 +482,20 @@ class TestPassivityRefinement:
             pytest.skip("this seed happened to fit a passive model")
         assert "admit no passive model" in out
         assert "FEM_elems_per_wavelength" in out
+
+    def test_the_warning_asks_for_more_solves_when_the_cap_cuts_refinement_short(
+        self, capsys
+    ):
+        """With the ceiling at the budget, refinement never gets a step, so
+        the advice is the ceiling -- not the mesh. Seed 1 is one that ends
+        non-passive."""
+        rational_sweep(
+            FGRID, [1, 2], _scattered_two_port(seed=1), 10, max_solves=10, verbose=True
+        )
+
+        out = capsys.readouterr().out
+        assert "rational interpolation from 10 solve points" in out
+        assert "raise FEM_max_solve_points" in out
 
     def test_a_passive_sweep_says_nothing_about_passivity(
         self, counting_solver, capsys

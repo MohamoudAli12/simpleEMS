@@ -466,6 +466,21 @@ class TestSimulateStepFDTD:
         with pytest.raises(FileNotFoundError, match="port_ut_1"):
             self.run_build(microstrip_step, tmp_path)
 
+    def test_run_solves_into_the_output_path(
+        self, microstrip_step, tmp_path, build_only, monkeypatch
+    ):
+        runs = []
+        monkeypatch.setattr(
+            "simpleEMS.fdtd_import_step.SimTools.run_simulation",
+            lambda sim, output_path=None: runs.append((sim, output_path)),
+        )
+
+        self.run_build(microstrip_step, tmp_path, run=True)
+
+        ((sim, output_path),) = runs
+        assert sim is build_only["sim"]
+        assert output_path == tmp_path / "out"
+
     def test_every_named_solid_becomes_a_property(
         self, microstrip_step, tmp_path, build_only
     ):

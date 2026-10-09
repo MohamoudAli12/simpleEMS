@@ -385,6 +385,14 @@ class TestInsetFedPatch:
             assert limits[0][1] >= -box[1] / 2 - 1e-6
             assert limits[1][1] <= box[1] / 2 + 1e-6
 
+    def test_a_feed_narrower_than_the_drc_limit_warns(self, inset_params, capsys):
+        inset_params.feed_width_mm = 0.05
+        antenna = InsetFedPatchAntenna(inset_params, setup_simulation(inset_params))
+
+        antenna.create_feed()
+
+        assert "too small" in capsys.readouterr().out
+
     def test_rebuilding_is_deterministic(self, inset_params):
         """Two builds from the same params must be geometrically identical."""
         boxes = []
@@ -770,6 +778,50 @@ class TestQuarterWaveFilter:
                 **fr4,
             )
 
+    def test_too_narrow_a_series_line_is_rejected(self, fr4):
+        with pytest.raises(ValueError, match="Series line width"):
+            QuarterWaveFilterParams(
+                min_freq=1e9,
+                max_freq=4e9,
+                centre_freq=2.45e9,
+                bandwidth_freq=1.0e9,
+                filter_type="bandstop",
+                filter_response="butterworth",
+                filter_order=3,
+                min_trace_width_mm=5.0,
+                **fr4,
+            )
+
+    def test_too_narrow_a_shunt_stub_is_rejected(self, fr4):
+        """The 50 ohm series line passes at 0.5 mm; the high-impedance outer
+        band-stop stubs (about 0.12 mm) do not."""
+        with pytest.raises(ValueError, match="Shunt stub 0 width"):
+            QuarterWaveFilterParams(
+                min_freq=1e9,
+                max_freq=4e9,
+                centre_freq=2.45e9,
+                bandwidth_freq=1.0e9,
+                filter_type="bandstop",
+                filter_response="butterworth",
+                filter_order=3,
+                min_trace_width_mm=0.5,
+                **fr4,
+            )
+
+    def test_overlapping_stubs_are_rejected(self, fr4):
+        """A band-pass design needs wide stubs; on 1.6 mm FR-4 they overlap."""
+        with pytest.raises(ValueError, match="overlap"):
+            QuarterWaveFilterParams(
+                min_freq=1e9,
+                max_freq=4e9,
+                centre_freq=2.45e9,
+                bandwidth_freq=1.0e9,
+                filter_type="bandpass",
+                filter_response="butterworth",
+                filter_order=3,
+                **fr4,
+            )
+
     def test_stub_count_matches_the_order(self, filter_params):
         assert len(filter_params.shunt_line_width_mm) == filter_params.filter_order
         assert len(filter_params.shunt_line_length_mm) == filter_params.filter_order
@@ -780,6 +832,117 @@ class TestQuarterWaveFilter:
         widths = filter_params.shunt_line_width_mm
 
         assert widths[0] == pytest.approx(widths[-1], abs=1e-3)
+
+
+# ---------------------------------------------------------------------
+# Inverted-F antenna
+# ---------------------------------------------------------------------
+class TestInvertedFAntenna:
+    @pytest.fixture
+    def built(self, fr4, sim_for):
+        params = InvertedFAntennaParams(resonant_freq=2.45e9, span_freq=1e9, **fr4)
+        simulation = sim_for(params)
+        antenna = InvertedFAntenna(params, simulation)
+        port = antenna.build_inverted_f_antenna()
+        return antenna, simulation, params, port
+
+    def test_builds_the_expected_properties(self, built):
+        _antenna, simulation, _params, _port = built
+
+        assert {
+            "substrate",
+            "ground",
+            "short_line",
+            "short_via",
+            "excite_line",
+            "rad_line",
+        } <= set(property_names(simulation.CSX))
+
+    def test_substrate_is_square_and_centred(self, built):
+        _antenna, simulation, params, _port = built
+
+        limits = bbox(only(primitives_named(simulation.CSX, "substrate")))
+
+        assert params.substrate_width_mm == pytest.approx(params.substrate_length_mm)
+        assert limits[0][:2] == pytest.approx(
+            [-params.substrate_width_mm / 2, -params.substrate_length_mm / 2]
+        )
+        assert limits[1][2] == pytest.approx(params.substrate_thickness_mm)
+
+    def test_ground_covers_only_the_lower_half(self, built):
+        """The antenna arm sits over the clear y > 0 half of the board."""
+        _antenna, simulation, params, _port = built
+
+        limits = bbox(only(primitives_named(simulation.CSX, "ground")))
+
+        assert limits[1][1] == pytest.approx(0.0)
+        assert limits[0][1] == pytest.approx(-params.substrate_length_mm / 2)
+        assert limits[0][2] == pytest.approx(-params.copper_thickness_mm)
+
+    def test_short_leg_runs_from_over_the_ground_to_the_tip(self, built):
+        _antenna, simulation, params, _port = built
+
+        limits = bbox(only(primitives_named(simulation.CSX, "short_line")))
+
+        assert limits[0][1] < 0
+        assert limits[1][1] == pytest.approx(params.short_tip_length_mm)
+        assert limits[1][0] - limits[0][0] == pytest.approx(params.short_tip_width_mm)
+
+    def test_radiating_tip_starts_where_the_short_leg_ends(self, built):
+        _antenna, simulation, params, _port = built
+
+        limits = bbox(only(primitives_named(simulation.CSX, "rad_line")))
+
+        assert limits[0][1] == pytest.approx(params.short_tip_length_mm)
+        assert limits[1][0] == pytest.approx(params.rad_tip_length_mm)
+        assert limits[1][1] - limits[0][1] == pytest.approx(params.rad_tip_width_mm)
+
+    def test_feed_arm_is_offset_by_the_feed_spacing(self, built):
+        _antenna, simulation, params, _port = built
+
+        limits = bbox(only(primitives_named(simulation.CSX, "excite_line")))
+
+        assert limits[0][0] == pytest.approx(params.feed_spacing_mm)
+        assert limits[0][1] == pytest.approx(0.0)
+        assert limits[1][1] == pytest.approx(params.short_tip_length_mm)
+
+    def test_port_sits_at_the_ground_edge_under_the_feed_arm(self, built):
+        _antenna, _simulation, params, port = built
+
+        assert port.number == 1
+        assert port.excite == 1
+        assert port.start[0] == pytest.approx(params.feed_spacing_mm)
+        assert port.start[1] == pytest.approx(0.0)
+        assert port.start[2] == pytest.approx(-params.copper_thickness_mm)
+
+    def test_build_also_meshes(self, built):
+        _antenna, simulation, _params, _port = built
+
+        grid = simulation.CSX.GetGrid()
+        for dimension in range(3):
+            assert len(grid.GetLines(dimension)) > 1
+
+    @pytest.mark.parametrize("via_diameter_mm", [0.0, 1.5], ids=["zero", "too-wide"])
+    def test_a_via_that_misses_the_leg_is_rejected(self, fr4, sim_for, via_diameter_mm):
+        params = InvertedFAntennaParams(
+            resonant_freq=2.45e9, span_freq=1e9, via_diameter_mm=via_diameter_mm, **fr4
+        )
+        antenna = InvertedFAntenna(params, sim_for(params))
+
+        with pytest.raises(ValueError, match="via_diameter_mm"):
+            antenna.create_short_via()
+
+    @pytest.mark.parametrize(
+        "feed_spacing_mm", [0.5, 1000.0], ids=["on-the-leg", "past-the-tip"]
+    )
+    def test_a_feed_off_the_radiating_tip_is_rejected(self, fr4, feed_spacing_mm):
+        with pytest.raises(ValueError, match="feed_spacing_mm"):
+            InvertedFAntennaParams(
+                resonant_freq=2.45e9,
+                span_freq=1e9,
+                feed_spacing_mm=feed_spacing_mm,
+                **fr4,
+            )
 
 
 # ---------------------------------------------------------------------
@@ -905,7 +1068,16 @@ class TestMeshAcrossStructures:
     so the same contract has to be checked against all of them.
     """
 
-    STRUCTURES = ["inset", "probe", "mline", "bandstop", "bandpass"]
+    STRUCTURES = [
+        "inset",
+        "probe",
+        "mline",
+        "bandstop",
+        "bandpass",
+        "coupler",
+        "dipole",
+        "monopole",
+    ]
 
     @pytest.fixture(params=STRUCTURES)
     def built(self, request):

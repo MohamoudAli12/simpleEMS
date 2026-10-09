@@ -150,6 +150,12 @@ class TestParseMatlabGrid:
 
         assert _parse_matlab_grid(path, 5, 5) is None
 
+    def test_grids_of_unequal_size_return_none(self, tmp_path):
+        """phi holds the right count, but farField came out short."""
+        path = write_matlab(tmp_path / "p.m", range(4), range(4), range(3))
+
+        assert _parse_matlab_grid(path, 1, 1) is None
+
     def test_empty_file_returns_none(self, tmp_path):
         path = tmp_path / "p.m"
         path.write_text("")
@@ -1020,6 +1026,91 @@ class TestComputePatternEndToEnd:
         again = nf2ff.CalcNF2FF(str(out), 2.45e9, theta, np.array([0.0]))
 
         assert again.P_rad[:, 0] == pytest.approx(result.P_rad[:, 0])
+
+    # The variants below rerun only the transform, on the fields the solve
+    # above left behind, into their own directory so the cache test's file
+    # stays untouched.
+    @staticmethod
+    def pattern(radiated, workdir, **kwargs):
+        import json
+
+        from simpleEMS.fem_radiation import compute_pattern
+
+        _result, out, *_rest = radiated
+        meta = json.loads((out / "fem_mesh.json").read_text())
+        return compute_pattern(
+            out / "output" / "e.pos",
+            out / "output" / "h.pos",
+            2.45e9,
+            tuple(meta["bbox"]),
+            workdir,
+            nphi=12,
+            ntheta=6,
+            **kwargs,
+        )
+
+    def test_a_running_gmsh_session_is_replaced(self, radiated, tmp_path):
+        import gmsh
+
+        gmsh.initialize()
+
+        theta_axis, phi_axis, u_grid, _dir_db = self.pattern(radiated, tmp_path)
+
+        assert u_grid.shape == (phi_axis.size, theta_axis.size)
+        assert not gmsh.isInitialized()
+
+    def test_without_the_domain_the_box_hugs_the_structure(self, radiated, tmp_path):
+        _theta, _phi, u_grid, dir_db = self.pattern(radiated, tmp_path)
+
+        assert np.all(np.isfinite(u_grid))
+        assert np.isfinite(dir_db)
+
+    @pytest.mark.parametrize("kind", ["pec", "pmc"])
+    def test_a_half_model_is_mirrored_before_the_transform(
+        self, radiated, tmp_path, kind
+    ):
+        import json
+
+        _result, out, *_rest = radiated
+        meta = json.loads((out / "fem_mesh.json").read_text())
+        bbox, domain = meta["bbox"], meta["domain_bbox"]
+        centre_x = 0.5 * (bbox[0] + bbox[3])
+
+        _theta, _phi, u_grid, _dir_db = self.pattern(
+            radiated, tmp_path, domain_bbox=tuple(domain), symmetry=(0, centre_x, kind)
+        )
+
+        assert np.all(np.isfinite(u_grid))
+        assert np.max(u_grid) > 0
+
+    def test_without_the_regular_grid_the_samples_are_resampled(
+        self, radiated, tmp_path, monkeypatch
+    ):
+        from simpleEMS import fem_radiation
+
+        monkeypatch.setattr(fem_radiation, "_parse_matlab_grid", lambda *args: None)
+
+        theta_axis, phi_axis, u_grid, _dir_db = self.pattern(radiated, tmp_path)
+
+        assert theta_axis == pytest.approx(np.linspace(0, np.pi, 7))
+        assert phi_axis == pytest.approx(np.linspace(0, 2 * np.pi, 13))
+        assert np.max(u_grid) > 0
+
+    def test_decreasing_axes_are_turned_around(self, radiated, tmp_path, monkeypatch):
+        from simpleEMS import fem_radiation
+
+        original = fem_radiation._parse_matlab_grid
+
+        def reversed_grid(*args):
+            phi, theta, values = original(*args)
+            return phi[::-1, ::-1], theta[::-1, ::-1], values[::-1, ::-1]
+
+        monkeypatch.setattr(fem_radiation, "_parse_matlab_grid", reversed_grid)
+
+        theta_axis, phi_axis, _u_grid, _dir_db = self.pattern(radiated, tmp_path)
+
+        assert np.all(np.diff(theta_axis) > 0)
+        assert np.all(np.diff(phi_axis) > 0)
 
 
 def test_a_fresh_calculator_has_an_empty_cache():

@@ -704,6 +704,104 @@ class TestStructureAndExports:
 
 
 # ---------------------------------------------------------------------
+# Default output paths and the export wrappers
+# ---------------------------------------------------------------------
+class TestDefaultOutputPath:
+    """Every writer falls back to ``cwd / "Sim_Path"`` when no path is given.
+
+    The autouse ``_no_stray_writes`` fixture runs each test from ``tmp_path``,
+    so that is where ``Sim_Path`` lands.
+    """
+
+    @staticmethod
+    def sim_path():
+        return Path.cwd() / "Sim_Path"
+
+    def test_plot_2d_directivity(self, nf2ff):
+        SimTools.plot_2d_directivity(nf2ff, 2.45e9)
+
+        assert nf2ff.calls[0]["output_path"] == self.sim_path()
+
+    def test_plot_3d_directivity(self, far_field_3d, no_windows):
+        SimTools.plot_3d_directivity(far_field_3d, 2.45e9)
+
+        assert (self.sim_path() / "3D_plots" / "3D_directivity.vtk").is_file()
+
+    def test_plot_3d_gain(self, far_field_3d, no_windows):
+        SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0)
+
+        assert (self.sim_path() / "3D_plots" / "3D_Gain.vtk").is_file()
+
+    def test_plot_3d_power(self, far_field_3d, no_windows):
+        SimTools.plot_3d_power(far_field_3d, 2.45e9)
+
+        assert (self.sim_path() / "3D_plots" / "3D_Power.vtk").is_file()
+
+    def test_write_and_show_structure(self, built_inset, monkeypatch):
+        _antenna, sim, _params, _port = built_inset
+        monkeypatch.setattr(sim_tools.subprocess, "run", lambda cmd, **kw: None)
+
+        SimTools.write_and_show_structure(sim)
+
+        assert (self.sim_path() / "structure.xml").is_file()
+
+    def test_export_stl(self, built_inset):
+        _antenna, sim, _params, _port = built_inset
+
+        SimTools.export_stl(sim)
+
+        assert (self.sim_path() / "stl" / "structure.stl").is_file()
+
+    def test_export_gerber(self, built_inset):
+        _antenna, sim, _params, _port = built_inset
+
+        paths = SimTools.export_gerber(sim)
+
+        assert paths
+        assert all(path.parent == self.sim_path() / "gerber" for path in paths)
+
+    @pytest.mark.needs_cadquery
+    def test_export_step(self, built_inset):
+        _antenna, sim, _params, _port = built_inset
+
+        SimTools.export_step(sim)
+
+        assert (self.sim_path() / "step" / "structure.step").is_file()
+
+    @pytest.mark.needs_cadquery
+    def test_export_csxcad_xml_to_step(self, built_inset, tmp_path, monkeypatch):
+        _antenna, sim, _params, _port = built_inset
+        monkeypatch.setattr(sim_tools.subprocess, "run", lambda cmd, **kw: None)
+        SimTools.write_and_show_structure(sim, tmp_path)
+
+        SimTools.export_csxcad_xml_to_step(tmp_path / "structure.xml")
+
+        assert (self.sim_path() / "step").is_dir()
+
+    def test_print_and_save_params(self, inset_params):
+        SimTools.print_and_save_params(inset_params)
+
+        assert (self.sim_path() / "params" / "params.txt").is_file()
+
+
+class TestExportGerberWrapper:
+    def test_writes_into_a_gerber_subdirectory(self, built_inset, tmp_path):
+        _antenna, sim, _params, _port = built_inset
+
+        paths = SimTools.export_gerber(sim, tmp_path)
+
+        assert paths
+        assert all(path.parent == tmp_path / "gerber" for path in paths)
+
+    def test_the_prefix_names_the_files(self, built_inset, tmp_path):
+        _antenna, sim, _params, _port = built_inset
+
+        paths = SimTools.export_gerber(sim, tmp_path, prefix="board")
+
+        assert all(path.name.startswith("board") for path in paths)
+
+
+# ---------------------------------------------------------------------
 # show_plots
 # ---------------------------------------------------------------------
 class TestShowPlots:

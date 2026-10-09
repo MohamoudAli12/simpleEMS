@@ -22,6 +22,7 @@ pytestmark = pytest.mark.needs_csxcad
 pytest.importorskip("CSXCAD")
 pytest.importorskip("openEMS")
 
+from simpleEMS import fdtd_mesh  # noqa: E402
 from simpleEMS.fdtd_mesh import (  # noqa: E402
     PREC,
     BoundedType,
@@ -418,3 +419,399 @@ class TestSpacingGrowth:
         meet = _dist_for_max_spacings(0.2, 4.0, 20.0, 1.5)
 
         assert meet > 10.0
+
+
+# ---------------------------------------------------------------------
+# Polygon and polyhedron helpers
+# ---------------------------------------------------------------------
+
+
+def _metal_linpoly(points, norm_dir=2, elevation=0.0, length=0.035):
+    from CSXCAD import ContinuousStructure
+
+    csx = ContinuousStructure()
+    metal = csx.AddMetal("metal")
+    primitive = metal.AddLinPoly(
+        priority=1, points=points, norm_dir=norm_dir, elevation=elevation, length=length
+    )
+    return csx, primitive
+
+
+class Unreadable:
+    """A primitive whose vertices cannot be read."""
+
+    def GetCoords(self):  # noqa: N802 - CSXCAD API
+        raise RuntimeError("no coordinates")
+
+    def GetTransform(self):  # noqa: N802 - CSXCAD API
+        raise RuntimeError("no transform")
+
+
+class CSPrimLinPoly(Unreadable):
+    """Named like CSXCAD's class, so the helpers treat it as a polygon."""
+
+
+class CSPrimPolyhedron:
+    """A unit tetrahedron, named like CSXCAD's class."""
+
+    VERTICES = [(0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (0.0, 4.0, 0.0), (0.0, 0.0, 4.0)]
+
+    def GetTransform(self):  # noqa: N802 - CSXCAD API
+        return None
+
+    def GetNumVertices(self):  # noqa: N802 - CSXCAD API
+        return len(self.VERTICES)
+
+    def GetVertex(self, index):  # noqa: N802 - CSXCAD API
+        return self.VERTICES[index]
+
+
+class TestVertexBounds:
+    @pytest.mark.parametrize(
+        ("norm_dir", "flat_axis"), [(0, 0), (1, 1)], ids=["x-normal", "y-normal"]
+    )
+    def test_a_side_facing_polygon_sits_at_its_elevation(self, norm_dir, flat_axis):
+        _csx, polygon = _metal_linpoly(
+            [[0, 3, 3, 0], [0, 0, 2, 2]], norm_dir=norm_dir, elevation=5.0
+        )
+
+        bounds = fdtd_mesh._get_linpoly_vertex_bounds(polygon)
+
+        assert set(bounds[flat_axis]) == {5.0}
+        assert sorted(set(bounds[2])) == [0.0, 2.0]
+
+    def test_unreadable_polygon_vertices_give_no_bounds(self):
+        assert fdtd_mesh._get_linpoly_vertex_bounds(Unreadable()) == [[], [], []]
+
+    def test_polyhedron_vertices_are_collected_per_axis(self):
+        bounds = fdtd_mesh._get_polyhedron_vertex_bounds(CSPrimPolyhedron())
+
+        assert bounds == [[0, 4, 0, 0], [0, 0, 4, 0], [0, 0, 0, 4]]
+
+    def test_a_transformed_polyhedron_is_moved(self):
+        from CSXCAD.CSTransform import CSTransform
+
+        class Moved(CSPrimPolyhedron):
+            def GetTransform(self):  # noqa: N802 - CSXCAD API
+                transform = CSTransform()
+                transform.Translate([10, 0, 0])
+                return transform
+
+        bounds = fdtd_mesh._get_polyhedron_vertex_bounds(Moved())
+
+        assert bounds[0] == pytest.approx([10, 14, 10, 10])
+
+    def test_unreadable_polyhedron_vertices_give_no_bounds(self):
+        assert fdtd_mesh._get_polyhedron_vertex_bounds(Unreadable()) == [[], [], []]
+
+
+class TestCentroid:
+    def test_polygon_centroid_is_the_vertex_mean(self):
+        _csx, polygon = _metal_linpoly([[0, 4, 4, 0], [0, 0, 2, 2]], elevation=1.0)
+
+        assert fdtd_mesh._prim_centroid(polygon) == pytest.approx([2.0, 1.0, 1.0])
+
+    def test_polyhedron_centroid_is_the_vertex_mean(self):
+        assert fdtd_mesh._prim_centroid(CSPrimPolyhedron()) == pytest.approx(
+            [1.0, 1.0, 1.0]
+        )
+
+    def test_a_box_has_no_vertex_centroid(self):
+        from CSXCAD import ContinuousStructure
+
+        box = ContinuousStructure().AddMetal("m").AddBox([0, 0, 0], [1, 1, 1])
+
+        assert fdtd_mesh._prim_centroid(box) is None
+
+    def test_an_unreadable_polygon_has_no_centroid(self):
+        assert fdtd_mesh._prim_centroid(CSPrimLinPoly()) is None
+
+
+class TestCrossSection:
+    def test_an_unreadable_polygon_has_no_cross_section(self):
+        assert fdtd_mesh._linpoly_cross_section_point(CSPrimLinPoly(), 0, 1.0) is None
+
+    def test_a_cut_outside_the_polygon_has_no_cross_section(self):
+        _csx, polygon = _metal_linpoly([[0, 4, 4, 0], [0, 0, 2, 2]])
+
+        assert fdtd_mesh._linpoly_cross_section_point(polygon, 0, 9.0) is None
+
+    def test_interior_point_falls_back_to_a_cut_along_y(self, monkeypatch):
+        _csx, polygon = _metal_linpoly([[0, 4, 4, 0], [0, 0, 2, 2]])
+        original = fdtd_mesh._linpoly_cross_section_point
+        monkeypatch.setattr(
+            fdtd_mesh,
+            "_linpoly_cross_section_point",
+            lambda prim, dim, pos: None if dim == 0 else original(prim, dim, pos),
+        )
+
+        point = fdtd_mesh._linpoly_interior_xy(
+            polygon, fdtd_mesh._get_prim_bounds(polygon)
+        )
+
+        assert point == pytest.approx([2.0, 1.0])
+
+    def test_no_cut_through_the_polygon_gives_no_interior_point(self, monkeypatch):
+        _csx, polygon = _metal_linpoly([[0, 4, 4, 0], [0, 0, 2, 2]])
+        monkeypatch.setattr(
+            fdtd_mesh, "_linpoly_cross_section_point", lambda prim, dim, pos: None
+        )
+
+        bounds = fdtd_mesh._get_prim_bounds(polygon)
+
+        assert fdtd_mesh._linpoly_interior_xy(polygon, bounds) is None
+
+
+class TestDecimateCurveCoords:
+    def test_no_coordinates_give_none(self):
+        assert fdtd_mesh._decimate_curve_coords([], 0.5) == []
+
+    def test_the_last_vertex_replaces_one_too_close_to_it(self):
+        """Both extremes are kept, so a kept vertex crowding the last one
+        gives way to it."""
+        kept = fdtd_mesh._decimate_curve_coords([0.0, 0.3, 0.6, 1.0], 0.5)
+
+        assert kept == [0.0, 1.0]
+
+    def test_a_close_pair_keeps_both_extremes(self):
+        assert fdtd_mesh._decimate_curve_coords([0.2, 0.0], 0.5) == [0.0, 0.2]
+
+
+class TestCollectAllBounds:
+    @pytest.fixture
+    def triangle(self):
+        """Apex at x = 2: a vertex that is no edge of the bounding box."""
+        return _metal_linpoly([[0, 4, 2], [0, 0, 3]])
+
+    def test_an_apex_well_inside_gets_a_line(self, triangle):
+        _csx, polygon = triangle
+
+        bounds = fdtd_mesh._collect_all_bounds([polygon], [[], [], []], 0.5)
+
+        assert bounds[0] == pytest.approx([0.0, 2.0, 4.0])
+
+    def test_an_apex_crowding_an_edge_gets_none(self, triangle):
+        _csx, polygon = triangle
+
+        bounds = fdtd_mesh._collect_all_bounds([polygon], [[], [], []], 2.5)
+
+        assert bounds[0] == pytest.approx([0.0, 4.0])
+
+    def test_polyhedron_vertices_are_collected(self):
+        from CSXCAD.CSTransform import CSTransform
+
+        tetrahedron = type(
+            "CSPrimPolyhedron",
+            (CSPrimPolyhedron,),
+            {
+                "VERTICES": [(0, 0, 0), (4, 0, 0), (2, 3, 0), (2, 1, 2)],
+                "GetBoundBox": lambda self: [[0, 0, 0], [4, 3, 2]],
+                "GetTransform": lambda self: CSTransform(),
+            },
+        )()
+
+        bounds = fdtd_mesh._collect_all_bounds([tetrahedron], [[], [], []], 0.5)
+
+        assert bounds[0] == pytest.approx([0.0, 2.0, 4.0])
+        assert bounds[1] == pytest.approx([0.0, 1.0, 3.0])
+
+
+class TestTypeAtPosition:
+    """A notched metal polygon only counts as metal where it has copper."""
+
+    U_SHAPE = [[0, 3, 3, 2, 2, 1, 1, 0], [0, 0, 3, 3, 1, 1, 3, 3]]
+
+    def test_metal_filling_the_notch_wins(self):
+        from CSXCAD import ContinuousStructure
+
+        csx = ContinuousStructure()
+        metal = csx.AddMetal("metal")
+        u_shape = metal.AddLinPoly(
+            priority=1, points=self.U_SHAPE, norm_dir=2, elevation=0.0, length=0.035
+        )
+        plug = metal.AddLinPoly(
+            priority=1,
+            points=[[1, 2, 2, 1], [1, 1, 3, 3]],
+            norm_dir=2,
+            elevation=0.0,
+            length=0.035,
+        )
+
+        for primitive in (u_shape, plug):
+            primitive.Update()  # IsInside answers only once the shape is built
+
+        assert fdtd_mesh._type_at_pos([u_shape, plug], 1, 2.0) == fdtd_mesh.Type.metal
+
+    def test_a_primitive_that_cannot_be_probed_counts_as_covering(self):
+        class CSPrimPolyhedron:
+            def GetBoundBox(self):  # noqa: N802 - CSXCAD API
+                return [[0, 0, 0], [1, 1, 1]]
+
+            def GetTransform(self):  # noqa: N802 - CSXCAD API
+                return None
+
+            def GetProperty(self):  # noqa: N802 - CSXCAD API
+                class Metal:
+                    def GetTypeString(self):  # noqa: N802 - CSXCAD API
+                        return "Metal"
+
+                return Metal()
+
+            def GetNumVertices(self):  # noqa: N802 - CSXCAD API
+                return 0
+
+            def IsInside(self, point):  # noqa: N802 - CSXCAD API
+                raise RuntimeError("cannot probe")
+
+        assert (
+            fdtd_mesh._type_at_pos([CSPrimPolyhedron()], 0, 0.5) == fdtd_mesh.Type.metal
+        )
+
+
+# ---------------------------------------------------------------------
+# Mesh internals, on a real meshed microstrip line
+# ---------------------------------------------------------------------
+@pytest.fixture
+def line_mesh(built_mline):
+    _line, sim, params, _ports = built_mline
+    return fdtd_mesh.Mesh(sim.CSX, params), params
+
+
+class TestSubstrateSpans:
+    def test_a_dielectric_of_another_thickness_is_no_substrate(self, fr4, sim_for):
+        """A via's antipad is a dielectric too, but only a copper layer thick."""
+        from simpleEMS.components import GenericParams, GenericStructure
+
+        params = GenericParams(
+            min_freq=2e9,
+            max_freq=3e9,
+            target_freq=2.45e9,
+            substrate_eps_r=4.4,
+            substrate_tand=0.001,
+            substrate_thickness_mm=1.6,
+            substrate_width_mm=20.0,
+            substrate_length_mm=30.0,
+        )
+        structure = GenericStructure(params, sim_for(params))
+        structure.create_substrate()
+        structure.create_ground()
+        structure.create_via(
+            position=(0.0, 0.0),
+            via_diameter_mm=0.6,
+            z_bottom_mm=-0.035,
+            z_top_mm=1.6,
+            antipad_diameter_mm=1.2,
+            antipad_layers=[0.8],
+        )
+
+        mesh = fdtd_mesh.Mesh(structure.CSX, params)
+
+        assert mesh.substrate_spans == [(0.0, 1.6)]
+
+    def test_an_interval_outside_every_substrate_has_no_span(self, line_mesh):
+        mesh, _params = line_mesh
+
+        outside = BoundedType(Type.nonmetal, 50.0, 60.0)
+
+        assert mesh._substrate_span_containing(2, outside) is None
+
+
+class TestBoundedTypeLookups:
+    def test_an_empty_dimension_becomes_air_across_the_box(self, line_mesh):
+        mesh, _params = line_mesh
+
+        expanded = mesh._set_expanded_bounds([[], [], []])
+
+        for dim in range(3):
+            (air,) = expanded[dim]
+            assert air.get_type() == Type.air
+            assert air.get_bounds() == pytest.approx(mesh._sim_box[dim])
+
+    def test_nothing_ends_or_starts_at_an_unknown_position(self, line_mesh):
+        mesh, _params = line_mesh
+
+        assert mesh._type_below(0, 12345.0) is None
+        assert mesh._type_above(0, 12345.0) is None
+        assert mesh._type_below_meshed(0, 12345.0) is False
+        assert mesh._type_above_meshed(0, 12345.0) is False
+
+
+class TestLineGeneration:
+    def test_a_sliver_collapses_to_its_midpoint(self, line_mesh):
+        mesh, _params = line_mesh
+
+        lines = mesh._regen_lines_or_collapse(
+            1.0, 1.0001, 0.1, 0.1, 1.0, regen_threshold=0.01, dim=0, is_metal=True
+        )
+
+        assert lines == pytest.approx([1.00005])
+
+    def test_a_wide_interval_is_regenerated(self, line_mesh):
+        mesh, _params = line_mesh
+
+        lines = mesh._regen_lines_or_collapse(
+            0.0, 10.0, 0.5, 0.5, 1.0, regen_threshold=0.01, dim=0, is_metal=False
+        )
+
+        assert lines[0] == pytest.approx(0.0)
+        assert lines[-1] == pytest.approx(10.0)
+
+    def test_the_minimum_line_count_is_met_when_the_series_grow_fast(
+        self, line_mesh, monkeypatch
+    ):
+        """Two geometric series grown from each end can span the interval in
+        fewer steps than the minimum; both get padded."""
+        mesh, _params = line_mesh
+        unpadded = mesh._gen_lines_in_bounds(0.0, 20.0, 1.0, 1.0, 100.0, 0, False)
+        monkeypatch.setattr(mesh, "_scaled_min_lines", lambda dist, metal, dim: 20)
+
+        lines = mesh._gen_lines_in_bounds(0.0, 20.0, 1.0, 1.0, 100.0, 0, False)
+
+        # Ten lines from each end, sharing the line where the halves meet.
+        assert len(unpadded) < len(lines) == 19
+        assert lines[0] == pytest.approx(0.0)
+        assert lines[-1] == pytest.approx(20.0)
+
+
+class TestCleanCloseLines:
+    @staticmethod
+    def x_lines_after_cleaning(mesh, lines, fixed):
+        mesh.fixed_lines[0] = fixed
+        grid = mesh.mesh
+        grid.ClearLines(0)
+        grid.AddLine("x", lines)
+
+        mesh._clean_close_lines(min_spacing=0.01)
+
+        return list(grid.GetLines(0))
+
+    def test_two_free_lines_merge_at_their_midpoint(self, line_mesh):
+        mesh, _params = line_mesh
+
+        lines = self.x_lines_after_cleaning(mesh, [0.0, 0.002, 5.0], [])
+
+        assert lines == pytest.approx([0.001, 5.0])
+
+    def test_a_fixed_line_survives_a_later_neighbour(self, line_mesh):
+        mesh, _params = line_mesh
+
+        lines = self.x_lines_after_cleaning(mesh, [0.0, 0.002, 5.0], [0.0])
+
+        assert lines == pytest.approx([0.0, 5.0])
+
+    def test_a_fixed_line_replaces_an_earlier_neighbour(self, line_mesh):
+        mesh, _params = line_mesh
+
+        lines = self.x_lines_after_cleaning(mesh, [0.0, 0.002, 5.0], [0.002])
+
+        assert lines == pytest.approx([0.002, 5.0])
+
+    def test_a_dimension_with_one_line_is_left_alone(self, line_mesh):
+        mesh, _params = line_mesh
+        grid = mesh.mesh
+        grid.ClearLines(1)
+        grid.AddLine("y", [3.0])
+
+        mesh._clean_close_lines(min_spacing=0.01)
+
+        assert list(grid.GetLines(1)) == pytest.approx([3.0])

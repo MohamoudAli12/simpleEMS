@@ -462,6 +462,29 @@ class TestExportStep:
         assert volumes[0] == pytest.approx(1.0 * 8.0 * 0.2, rel=1e-9)
         assert volumes[1] == pytest.approx(10.0 * 10.0 * 1.6, rel=1e-9)
 
+    def test_a_clearance_that_misses_the_metal_leaves_it_whole(self, tmp_path):
+        csx = ContinuousStructure()
+        pad = csx.AddMetal("pad")
+        pad.AddBox(priority=2, start=[-1, -1, 0], stop=[1, 1, 0.035])
+        antipad = csx.AddMaterial("antipad", epsilon=1)
+        antipad.AddBox(priority=4, start=[5, 5, 0], stop=[6, 6, 0.035])
+
+        export_step(csx, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+        volumes = sorted(solid.Volume() for solid in result.solids().vals())
+
+        assert volumes == pytest.approx([0.035, 4 * 0.035], rel=1e-9)
+
+    def test_a_property_without_primitives_exports_nothing_for_it(
+        self, two_body_structure, tmp_path
+    ):
+        two_body_structure.AddMetal("unused")
+
+        export_step(two_body_structure, tmp_path)
+        result = cq.importers.importStep(str(tmp_path / "structure.step"))
+
+        assert len(result.solids().vals()) == 2
+
     def test_a_clearance_that_swallows_a_conductor_is_reported(self, tmp_path, capsys):
         csx = ContinuousStructure()
         pad = csx.AddMetal("pad")
