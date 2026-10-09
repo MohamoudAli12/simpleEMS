@@ -1039,7 +1039,7 @@ def _renormalise(s: NDArray, z_old: NDArray, z_new: NDArray) -> NDArray:
         return s
     r = (z_new - z_old) / (z_new + z_old)
     gamma = np.diag(r)
-    a = np.diag(np.sqrt(1.0 - r**2) / (1.0 - r))
+    a = np.diag(np.sqrt(1.0 - r**2))
     n = s.shape[0]
     return np.linalg.solve(a.T, (s - gamma) @ np.linalg.solve(np.eye(n) - gamma @ s, a))
 
