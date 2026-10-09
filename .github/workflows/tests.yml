@@ -50,6 +50,7 @@ jobs:
       - name: Run tests
         env:
           MPLBACKEND: Agg
+          HYPOTHESIS_PROFILE: ci
         run: pytest -m "not slow" -ra --cov=simpleEMS --cov-report=term-missing
 
   lint:
@@ -164,4 +165,5 @@ jobs:
       - name: Run the full suite
         env:
           MPLBACKEND: Agg
+          HYPOTHESIS_PROFILE: ci
         run: pytest -ra
