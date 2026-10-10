@@ -25,6 +25,7 @@ them.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -295,6 +296,11 @@ def _clip_sheet_to_dielectric(face_tag: int, direction: str, diel_bbox: tuple) -
 # export_cad floors every box dimension at 1e-3 drawing units, so a port solid
 # that was drawn flat is not exactly flat by the time it reaches gmsh.
 _FLAT = 2e-6  # metres; the 1e-3 mm floor with room to spare
+
+# A ground plane spans the board, so it dwarfs the signal conductors above it.
+# The largest conductor counts as ground only when it outsizes the next one by
+# this factor; two arms of a dipole are equal and neither is ground.
+_GROUND_AREA_RATIO = 2.0
 
 # A feed drawn all the way to the board edge leaves the port sheet exactly on
 # the dielectric's own end face. The two fragment into coincident surfaces and
@@ -1245,13 +1251,16 @@ def _collect_faces(
     port_faces_by_name: dict[str, set[int]] = {}
     for (role, name, _f), faces in zip(sheets, sheet_faces, strict=True):
         faces = faces & existing_faces
+        # The STEP export names the pieces of one CSXCAD property name, name_1,
+        # ...; group them back under that property, as fem_backend does.
+        parent_name = re.sub(r"_\d+$", "", name)
         if role == "pec":
             pec_faces |= faces
-            conductor_faces_by_name.setdefault(name, set()).update(faces)
+            conductor_faces_by_name.setdefault(parent_name, set()).update(faces)
         elif role == "lossy_conductor":
             sig = problem.solids[name].sigma
             imped_faces_by_sigma.setdefault(sig, set()).update(faces)
-            conductor_faces_by_name.setdefault(name, set()).update(faces)
+            conductor_faces_by_name.setdefault(parent_name, set()).update(faces)
         else:
             port_faces_by_name.setdefault(name, set()).update(faces)
     all_port_faces = (
@@ -1261,8 +1270,10 @@ def _collect_faces(
         set().union(*imped_faces_by_sigma.values()) if imped_faces_by_sigma else set()
     )
 
-    # Identify the ground plane (largest-area conductor sheet). Excluding it from
-    # the mesh-refinement set localises the fine mesh to the signal conductors.
+    # Identify the ground plane: the conductor that clearly dominates by area.
+    # Excluding it from the mesh-refinement set localises the fine mesh to the
+    # signal conductors. Conductors of comparable size -- the two arms of a
+    # dipole, coupled lines -- have no ground among them and all stay refined.
     ground_faces: set[int] = set()
     if len(conductor_faces_by_name) > 1:
 
@@ -1270,11 +1281,13 @@ def _collect_faces(
             """Total area, in m^2, of the faces ``fs``."""
             return sum(gmsh.model.occ.getMass(2, f) for f in fs)
 
-        ground_name = max(
-            conductor_faces_by_name,
-            key=lambda n: _area(conductor_faces_by_name[n]),
+        areas = sorted(
+            ((_area(fs), name) for name, fs in conductor_faces_by_name.items()),
+            reverse=True,
         )
-        ground_faces = conductor_faces_by_name[ground_name]
+        (largest_area, ground_name), (runner_up_area, _name) = areas[:2]
+        if largest_area > _GROUND_AREA_RATIO * runner_up_area:
+            ground_faces = conductor_faces_by_name[ground_name]
 
     # ---- outer absorbing shell ----------------------------------------------
     domain_dimtags = gmsh.model.getEntities(3)
