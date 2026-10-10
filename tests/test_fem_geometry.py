@@ -188,3 +188,48 @@ class TestPhysicalGroups:
 
         with pytest.raises(RuntimeError, match="produced no boundary faces"):
             fem_geometry._assign_physical_groups(problem, {}, [], [], faces, {})
+
+
+class TestGroundPlane:
+    """The largest conductor drops out of the mesh refinement only when it is a
+    ground plane, not just one of several equal conductors."""
+
+    @staticmethod
+    def collect(*rectangles):
+        """Lay each ``(name, x, y, dx, dy)`` rectangle down as a PEC sheet."""
+        gmsh.model.occ.addBox(-50 * MM, -50 * MM, -50 * MM, 100 * MM, 100 * MM, 1 * MM)
+        sheets = [
+            ("pec", name, gmsh.model.occ.addRectangle(x, y, 0.0, dx, dy))
+            for name, x, y, dx, dy in rectangles
+        ]
+        gmsh.model.occ.synchronize()
+        problem = Problem(step_file="s.step", freqs=np.array([1e9]))
+        faces = fem_geometry._collect_faces(
+            problem, sheets, [{tag} for _, _, tag in sheets], (), None, None
+        )
+        return faces, {name: tag for _, name, tag in sheets}
+
+    def test_two_pieces_of_one_property_are_not_ground(self, session):
+        """The STEP export splits a dipole's arms into ``name`` and ``name_1``."""
+        faces, _tags = self.collect(
+            ("dipole_arms", 0.2 * MM, -0.5 * MM, 9 * MM, 1 * MM),
+            ("dipole_arms_1", -9.2 * MM, -0.5 * MM, 9 * MM, 1 * MM),
+        )
+
+        assert faces.ground == set()
+
+    def test_two_equal_conductors_are_not_ground(self, session):
+        faces, _tags = self.collect(
+            ("line_a", 0.0, 0.0, 10 * MM, 1 * MM),
+            ("line_b", 0.0, 2 * MM, 10 * MM, 1 * MM),
+        )
+
+        assert faces.ground == set()
+
+    def test_a_board_wide_plane_is_ground(self, session):
+        faces, tags = self.collect(
+            ("ground", -20 * MM, -20 * MM, 40 * MM, 40 * MM),
+            ("trace", -10 * MM, -0.5 * MM, 20 * MM, 1 * MM),
+        )
+
+        assert faces.ground == {tags["ground"]}
