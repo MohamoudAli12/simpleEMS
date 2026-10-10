@@ -2,6 +2,7 @@
 
 import importlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -10,6 +11,7 @@ import shutil
 import site
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import urllib.error
 import urllib.request
@@ -99,7 +101,9 @@ def _check_package_import(import_name, pip_name):
         # Not just ImportError: a compiled extension that is installed but
         # cannot dlopen its shared library raises OSError, and reporting that
         # as "not installed" is more useful than a traceback out of the CLI.
-        return False, None, str(error).split("(")[0].strip()
+        # Drop only a trailing "(unknown location)"-style suffix; cutting at the
+        # first parenthesis would also cut the useful half of a dlopen error.
+        return False, None, re.sub(r"\s*\([^()]*\)$", "", str(error)).strip()
 
 
 def _check_system_binary(binary_name):
@@ -145,12 +149,19 @@ _GETDP_ARCHIVES = {
 }
 
 
-def _ensure_repo(cache_dir, dry_run):
+def _ensure_repo(cache_dir, dry_run, update=True):
+    """Clone openEMS-Project into ``cache_dir``, or pull it when ``update``.
+
+    Pass ``update=False`` to build against the sources already in the cache --
+    the ones an earlier ``simpleems install openems`` built the C++ side from.
+    """
     repo_dir = cache_dir / "openEMS-Project"
     if repo_dir.exists():
-        _run_subprocess(["git", "pull", "--recurse-submodules"], repo_dir, dry_run)
+        if update:
+            _run_subprocess(["git", "pull", "--recurse-submodules"], repo_dir, dry_run)
     else:
-        repo_dir.parent.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            repo_dir.parent.mkdir(parents=True, exist_ok=True)
         _run_subprocess(
             [
                 "git",
@@ -232,12 +243,7 @@ def _add_dir_to_path(bin_dir, dry_run, extra_env_vars=None):
         return
 
     line = f'export PATH="{bin_dir}:$PATH"'
-    rc_files = [
-        Path.home() / ".bashrc",
-        Path.home() / ".zshrc",
-        Path.home() / ".bash_profile",
-    ]
-    for rc in rc_files:
+    for rc in _shell_rc_files():
         if rc.exists():
             content = rc.read_text()
             if line in content:
@@ -253,6 +259,26 @@ def _add_dir_to_path(bin_dir, dry_run, extra_env_vars=None):
     console.print(f'    export PATH="{bin_dir}:$PATH"')
 
 
+def _shell_rc_files():
+    """The rc files to try, in order, for the user's login shell.
+
+    Only the first one that exists is edited: ``.bash_profile`` commonly
+    sources ``.bashrc``, so writing to both would duplicate the entry. The
+    candidates follow ``$SHELL`` -- a zsh user with a leftover ``.bashrc``
+    would otherwise get the line in a file zsh never reads.
+    """
+    home = Path.home()
+    shell_name = Path(os.environ.get("SHELL", "")).name
+    if shell_name == "zsh":
+        return [home / ".zshrc"]
+    if shell_name == "bash":
+        return [home / ".bashrc", home / ".bash_profile"]
+    if shell_name == "fish":
+        # fish reads none of these and has no `export`; leave it to the user.
+        return []
+    return [home / ".bashrc", home / ".zshrc", home / ".bash_profile"]
+
+
 def _prepend_to_process_path(bin_dir):
     """Put ``bin_dir`` on this process's PATH if it is not already there."""
     bin_dir = str(bin_dir)
@@ -266,25 +292,51 @@ def _in_virtualenv():
     return sys.prefix != sys.base_prefix
 
 
+def _externally_managed():
+    """True when the running interpreter is a PEP 668 system Python.
+
+    pip and uv both refuse to install into such an interpreter (Arch, Debian
+    12+, Fedora 38+ ...), so the openEMS bindings cannot go there.
+    """
+    if _in_virtualenv():
+        return False
+    stdlib = sysconfig.get_path("stdlib")
+    return stdlib is not None and (Path(stdlib) / "EXTERNALLY-MANAGED").exists()
+
+
+_NETWORK_TIMEOUT = 60  # seconds without data before a request gives up
+
+
 def _download_with_progress(url, dest):
-    response = urllib.request.urlopen(url)
+    # Download next to the destination and rename at the end, so a failed or
+    # interrupted download never leaves a truncated archive under the real name.
+    dest = Path(dest)
+    partial = dest.with_name(dest.name + ".part")
+    response = urllib.request.urlopen(url, timeout=_NETWORK_TIMEOUT)
     total = int(response.headers.get("Content-Length", 0))
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Downloading...", total=total)
-        with open(dest, "wb") as f:
-            for chunk in iter(lambda: response.read(8192), b""):
-                f.write(chunk)
-                progress.update(task, advance=len(chunk))
+    try:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Downloading...", total=total)
+            with open(partial, "wb") as f:
+                for chunk in iter(lambda: response.read(8192), b""):
+                    f.write(chunk)
+                    progress.update(task, advance=len(chunk))
+        partial.replace(dest)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _pip_install(package_path, dry_run, force: bool = False):
     if shutil.which("uv") is not None:
         cmd = ["uv", "pip", "install", "--python", sys.executable]
     else:
+        # A venv made by `uv venv` has no pip; bootstrap it rather than fail.
+        if importlib.util.find_spec("pip") is None:
+            _run_subprocess([sys.executable, "-m", "ensurepip"], None, dry_run)
         cmd = [sys.executable, "-m", "pip", "install"]
     if force:
         cmd.append("--force-reinstall")
@@ -294,7 +346,8 @@ def _pip_install(package_path, dry_run, force: bool = False):
 
 def _install_windows(prefix, version, dry_run, force: bool = False):
     cache_dir = Path.home() / ".cache" / "simpleems"
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        cache_dir.mkdir(parents=True, exist_ok=True)
     console.print(Panel.fit("[bold]Installing openEMS...[/]", border_style="cyan"))
     console.print()
 
@@ -328,7 +381,7 @@ def _install_windows(prefix, version, dry_run, force: bool = False):
                 req = urllib.request.Request(
                     api_url, headers={"Accept": "application/vnd.github.v3+json"}
                 )
-                response = urllib.request.urlopen(req)
+                response = urllib.request.urlopen(req, timeout=_NETWORK_TIMEOUT)
                 release_data = json.loads(response.read())
             except urllib.error.HTTPError as e:
                 console.print(f"  ❌ Failed to fetch release data: {e}")
@@ -405,17 +458,13 @@ def _install_windows(prefix, version, dry_run, force: bool = False):
         },
     )
 
-    bin_dir = str(install_dir)
-    current_path = os.environ.get("PATH", "")
-    dirs = current_path.split(os.pathsep)
-    if bin_dir not in dirs:
-        os.environ["PATH"] = bin_dir + os.pathsep + current_path
-
-    os.environ["OPENEMS_INSTALL_PATH"] = bin_dir
-    os.environ["CSXCAD_INSTALL_PATH"] = bin_dir
+    # _add_dir_to_path already put install_dir on this process's PATH.
+    if not dry_run:
+        os.environ["OPENEMS_INSTALL_PATH"] = str(install_dir)
+        os.environ["CSXCAD_INSTALL_PATH"] = str(install_dir)
 
 
-def _install_unix(prefix, dry_run):
+def _install_unix(prefix, dry_run, force: bool = False):
     cache_dir = Path.home() / ".cache" / "simpleems"
     console.print(Panel.fit("[bold]Installing openEMS...[/]", border_style="cyan"))
     console.print()
@@ -424,42 +473,31 @@ def _install_unix(prefix, dry_run):
     console.print("  ✅ Repository ready")
     console.print()
     console.print("Installing system dependencies (requires sudo)...")
+    # --python still matters: it pulls in the Python headers (python3-dev on
+    # Debian) that the extension build compiles against.
     _run_subprocess(
         ["sudo", "./scripts/install_deps.sh", "--auto", "--python"], repo_dir, dry_run
     )
     console.print("  ✅ Dependencies installed")
     console.print()
     console.print("Building openEMS (this may take 10-30 minutes)...")
-    prefix.mkdir(parents=True, exist_ok=True)
-    # The build script installs the Python extensions into a venv of its own
-    # under <prefix> unless one is already active. That venv is not the
-    # environment simpleEMS is running in, so the build would report success
-    # while `import openEMS` still fails here. Install into the active venv if
-    # there is one, and into the user site directory otherwise.
-    venv_mode = "auto" if _in_virtualenv() else "disable"
-    _run_subprocess(
-        [
-            "./update_openEMS.sh",
-            str(prefix),
-            "--python",
-            "--python-venv-mode",
-            venv_mode,
-        ],
-        repo_dir,
-        dry_run,
-    )
+    if not dry_run:
+        prefix.mkdir(parents=True, exist_ok=True)
+    # Build only the C++ side. openEMS's own build_python.sh installs the
+    # bindings with whichever python3/pip3 comes first on PATH, not the
+    # interpreter running simpleEMS: on Arch that is the externally managed
+    # system Python, and pip refuses (PEP 668); elsewhere it quietly lands in a
+    # venv of its own that simpleEMS never sees.
+    _run_subprocess(["./update_openEMS.sh", str(prefix)], repo_dir, dry_run)
     console.print("  ✅ Build complete")
     console.print()
     _add_dir_to_path(prefix / "bin", dry_run)
     console.print()
+    _install_python_bindings(prefix, repo_dir, dry_run, force=force)
 
 
-def _install_python_bindings_only(prefix, dry_run):
-    cache_dir = Path.home() / ".cache" / "simpleems"
-    console.print("openEMS binary found but Python API is missing.")
-    console.print("Installing Python bindings only...")
-    console.print()
-    repo_dir = _ensure_repo(cache_dir, dry_run)
+def _install_python_bindings(prefix, repo_dir, dry_run, force: bool = False):
+    """Build the CSXCAD and openEMS bindings into the running interpreter."""
     csxcad_path = repo_dir / "CSXCAD" / "python"
     openems_path = repo_dir / "openEMS" / "python"
     # Both setup.py files locate the headers and libraries of the existing C++
@@ -472,13 +510,30 @@ def _install_python_bindings_only(prefix, dry_run):
         console.print(f"  [yellow]Would install:[/] {openems_path}")
     else:
         console.print("Installing CSXCAD Python bindings...")
-        _pip_install(csxcad_path, dry_run)
+        _pip_install(csxcad_path, dry_run, force=force)
         console.print("  ✅ CSXCAD Python bindings installed")
         console.print()
         console.print("Installing openEMS Python bindings...")
-        _pip_install(openems_path, dry_run)
+        _pip_install(openems_path, dry_run, force=force)
         console.print("  ✅ openEMS Python bindings installed")
     console.print()
+
+
+def _install_python_bindings_only(prefix, dry_run):
+    cache_dir = Path.home() / ".cache" / "simpleems"
+    console.print("openEMS binary found but Python API is missing.")
+    console.print("Installing Python bindings only...")
+    console.print()
+    # Reuse the cached sources as they are: they are what an earlier install
+    # built the C++ side from, and bindings from a newer checkout can be
+    # ABI-incompatible with it.
+    if not (cache_dir / "openEMS-Project").exists():
+        console.print(
+            "  [yellow]No cached openEMS sources; cloning the latest. If the "
+            "bindings fail to build or import, reinstall with --force.[/]"
+        )
+    repo_dir = _ensure_repo(cache_dir, dry_run, update=False)
+    _install_python_bindings(prefix, repo_dir, dry_run)
 
 
 def _find_extracted_binary(root):
@@ -531,7 +586,12 @@ def _install_getdp_archive(prefix, version, dry_run):
             zf.extractall(prefix)
     else:
         with tarfile.open(archive_path, mode="r:gz") as tf:
-            tf.extractall(prefix)
+            # The "data" filter rejects absolute paths, ".." escapes and device
+            # files. It exists from 3.11.4 / 3.12 on.
+            if hasattr(tarfile, "data_filter"):
+                tf.extractall(prefix, filter="data")
+            else:
+                tf.extractall(prefix)
     console.print("  ✅ Extraction complete")
     console.print()
 
@@ -777,37 +837,56 @@ def install_openems(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Reinstall even if already installed (deletes <prefix>/openEMS)",
+        help=(
+            "Reinstall even if already installed "
+            "(on Windows, deletes <prefix>/openEMS first)"
+        ),
     ),
 ):
     """Install openEMS and CSXCAD."""
+    prefix_given = prefix is not None
     if prefix is None:
         prefix = _default_prefix()
 
-    if not force:
-        binary_exists = shutil.which("openEMS") is not None
-        python_ok, _, _ = _check_package_import("openEMS", "openEMS")
+    binary_path = shutil.which("openEMS")
+    python_ok, _, _ = _check_package_import("openEMS", "openEMS")
+    if not force and binary_path is not None and python_ok:
+        console.print("openEMS is already installed. Use --force to reinstall.")
+        raise typer.Exit()
 
-        if binary_exists and python_ok:
-            console.print("openEMS is already installed. Use --force to reinstall.")
-            raise typer.Exit()
+    # Every remaining path pip-installs the bindings into this interpreter, so
+    # stop before a 10-30 minute build that is bound to fail at the end.
+    if _externally_managed():
+        console.print(
+            f"  ❌ {sys.executable} is an externally managed system Python "
+            "(PEP 668), so the openEMS bindings cannot be installed into it.\n"
+            "  Install simpleEMS into a virtual environment and rerun from there:\n"
+            "    python -m venv ~/.venvs/simpleems\n"
+            "    ~/.venvs/simpleems/bin/pip install simpleEMS\n"
+            "    ~/.venvs/simpleems/bin/simpleems install openems"
+        )
+        raise typer.Exit(code=1)
 
-        if binary_exists and not python_ok:
-            if sys.platform == "win32":
-                _install_windows(prefix, version, dry_run)
-            else:
-                _install_python_bindings_only(prefix, dry_run)
-            if not dry_run:
-                ok = _verify_installation()
-            else:
-                ok = True
-            _print_summary(ok, prefix)
-            return
+    if not force and binary_path is not None and not python_ok:
+        if sys.platform != "win32" and not prefix_given:
+            # Build against the install that is actually on PATH, which
+            # need not be the default prefix (a distro package, say).
+            prefix = Path(binary_path).resolve().parent.parent
+        if sys.platform == "win32":
+            _install_windows(prefix, version, dry_run)
+        else:
+            _install_python_bindings_only(prefix, dry_run)
+        if not dry_run:
+            ok = _verify_installation()
+        else:
+            ok = True
+        _print_summary(ok, prefix)
+        return
 
     if sys.platform == "win32":
         _install_windows(prefix, version, dry_run, force=force)
     else:
-        _install_unix(prefix, dry_run)
+        _install_unix(prefix, dry_run, force=force)
 
     if not dry_run:
         ok = _verify_installation()
