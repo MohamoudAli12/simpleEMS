@@ -55,6 +55,9 @@ def no_side_effects(monkeypatch):
         calls["path_edits"].append((bin_dir, dry_run))
         assert dry_run, f"shell profile would really be edited for {bin_dir}"
 
+    # The install refuses an externally managed interpreter up front; the
+    # dry-run tests are about inertness, not about the host's Python.
+    monkeypatch.setattr(cli, "_externally_managed", lambda: False)
     monkeypatch.setattr(cli, "_run_subprocess", forbid_subprocess)
     monkeypatch.setattr(cli, "_download_with_progress", forbid_download)
     monkeypatch.setattr(cli, "_add_dir_to_path", record_path_edit)

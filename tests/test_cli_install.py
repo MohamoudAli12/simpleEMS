@@ -75,6 +75,9 @@ def home(tmp_path, monkeypatch):
     fake = tmp_path / "home"
     fake.mkdir()
     monkeypatch.setenv("HOME", str(fake))
+    # The rc file chosen follows $SHELL; clear it so the tests below see the
+    # shell-agnostic order and do not depend on the developer's login shell.
+    monkeypatch.delenv("SHELL", raising=False)
     assert Path.home() == fake
     return fake
 
@@ -87,6 +90,18 @@ def spy_subprocess(monkeypatch):
         cli,
         "_run_subprocess",
         lambda cmd, cwd, dry_run: calls.append((cmd, cwd, dry_run)),
+    )
+    return calls
+
+
+@pytest.fixture
+def spy_pip(monkeypatch):
+    """Record ``_pip_install`` calls as ``(package_path, dry_run, force)``."""
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "_pip_install",
+        lambda path, dry, force=False: calls.append((Path(path), dry, force)),
     )
     return calls
 
@@ -217,6 +232,43 @@ class TestAddDirToPath:
 
         assert rc.read_text() == "# untouched\n"
 
+    def test_a_zsh_user_gets_zshrc_even_with_a_bashrc(self, home, monkeypatch):
+        """zsh never reads .bashrc; editing it would leave the tool off PATH."""
+        monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+        bashrc = home / ".bashrc"
+        zshrc = home / ".zshrc"
+        bashrc.write_text("")
+        zshrc.write_text("")
+
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
+
+        assert "export PATH" in zshrc.read_text()
+        assert bashrc.read_text() == ""
+
+    def test_a_bash_user_never_gets_zshrc(self, home, monkeypatch):
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        zshrc = home / ".zshrc"
+        profile = home / ".bash_profile"
+        zshrc.write_text("")
+        profile.write_text("")
+
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
+
+        assert "export PATH" in profile.read_text()
+        assert zshrc.read_text() == ""
+
+    def test_a_fish_user_is_told_to_edit_the_path_by_hand(
+        self, home, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("SHELL", "/usr/bin/fish")
+        bashrc = home / ".bashrc"
+        bashrc.write_text("")
+
+        cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
+
+        assert bashrc.read_text() == ""
+        assert "/opt/getdp/bin" in capsys.readouterr().out
+
     def test_no_rc_file_leaves_the_home_directory_alone(self, home, capsys):
         cli._add_dir_to_path(Path("/opt/getdp/bin"), dry_run=False)
 
@@ -344,7 +396,7 @@ class TestPipInstall:
 
         cli._pip_install("/tmp/pkg", dry_run=False)
 
-        cmd, _cwd, _dry = spy_subprocess[0]
+        cmd, _cwd, _dry = spy_subprocess[-1]
         assert cmd[:4] == [sys.executable, "-m", "pip", "install"]
 
     def test_the_package_path_is_last(self, monkeypatch, spy_subprocess):
@@ -352,8 +404,29 @@ class TestPipInstall:
 
         cli._pip_install(Path("/tmp/pkg"), dry_run=False)
 
-        cmd, _cwd, _dry = spy_subprocess[0]
+        cmd, _cwd, _dry = spy_subprocess[-1]
         assert cmd[-1] == "/tmp/pkg"
+
+    def test_a_venv_without_pip_gets_one_bootstrapped(
+        self, monkeypatch, spy_subprocess
+    ):
+        """`uv venv` makes venvs without pip; `python -m pip` would just fail."""
+        monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+        monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: None)
+
+        cli._pip_install("/tmp/pkg", dry_run=False)
+
+        commands = [cmd for cmd, _cwd, _dry in spy_subprocess]
+        assert commands[0] == [sys.executable, "-m", "ensurepip"]
+        assert commands[1][:4] == [sys.executable, "-m", "pip", "install"]
+
+    def test_a_venv_with_pip_is_not_bootstrapped(self, monkeypatch, spy_subprocess):
+        monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+        monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: object())
+
+        cli._pip_install("/tmp/pkg", dry_run=False)
+
+        assert len(spy_subprocess) == 1
 
     def test_dry_run_is_passed_through(self, monkeypatch, spy_subprocess):
         monkeypatch.setattr(cli.shutil, "which", lambda name: None)
@@ -397,6 +470,24 @@ class TestEnsureRepo:
         assert cmd[:2] == ["git", "pull"]
         assert cwd == cache / "openEMS-Project"
 
+    def test_an_existing_clone_is_kept_as_is_without_update(
+        self, tmp_path, spy_subprocess
+    ):
+        """The bindings-only path builds against the sources the C++ side was
+        built from; pulling would pair it with newer, possibly ABI-incompatible
+        bindings."""
+        cache = tmp_path / "cache"
+        (cache / "openEMS-Project").mkdir(parents=True)
+
+        cli._ensure_repo(cache, dry_run=False, update=False)
+
+        assert spy_subprocess == []
+
+    def test_dry_run_creates_no_directory(self, tmp_path, spy_subprocess):
+        cli._ensure_repo(tmp_path / "cache", dry_run=True)
+
+        assert not (tmp_path / "cache").exists()
+
     def test_returns_the_repository_path(self, tmp_path, spy_subprocess):
         result = cli._ensure_repo(tmp_path / "cache", dry_run=False)
 
@@ -418,7 +509,9 @@ class TestDownload:
     def test_writes_the_payload(self, tmp_path, monkeypatch):
         payload = b"archive-bytes" * 1000
         monkeypatch.setattr(
-            cli.urllib.request, "urlopen", lambda url: self.fake_response(payload)
+            cli.urllib.request,
+            "urlopen",
+            lambda url, timeout=None: self.fake_response(payload),
         )
         dest = tmp_path / "out.tgz"
 
@@ -432,7 +525,7 @@ class TestDownload:
         monkeypatch.setattr(
             cli.urllib.request,
             "urlopen",
-            lambda url: self.fake_response(payload, length=False),
+            lambda url, timeout=None: self.fake_response(payload, length=False),
         )
         dest = tmp_path / "out.tgz"
 
@@ -443,13 +536,51 @@ class TestDownload:
     def test_handles_a_payload_larger_than_one_chunk(self, tmp_path, monkeypatch):
         payload = os.urandom(8192 * 3 + 17)
         monkeypatch.setattr(
-            cli.urllib.request, "urlopen", lambda url: self.fake_response(payload)
+            cli.urllib.request,
+            "urlopen",
+            lambda url, timeout=None: self.fake_response(payload),
         )
         dest = tmp_path / "out.tgz"
 
         cli._download_with_progress("https://example.invalid/a.tgz", dest)
 
         assert dest.read_bytes() == payload
+
+
+class TestDownloadFailure:
+    def test_a_failed_download_leaves_no_file_behind(self, tmp_path, monkeypatch):
+        """A truncated archive under the real name would be extracted later."""
+
+        class Broken(io.BytesIO):
+            headers = {"Content-Length": "100"}
+
+            def read(self, size=-1):
+                raise TimeoutError("stalled")
+
+        monkeypatch.setattr(
+            cli.urllib.request, "urlopen", lambda url, timeout=None: Broken()
+        )
+        dest = tmp_path / "out.tgz"
+
+        with pytest.raises(TimeoutError):
+            cli._download_with_progress("https://example.invalid/a.tgz", dest)
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_request_has_a_timeout(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def fake_urlopen(url, timeout=None):
+            seen["timeout"] = timeout
+            response = io.BytesIO(b"x")
+            response.headers = {}
+            return response
+
+        monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+
+        cli._download_with_progress("https://example.invalid/a.tgz", tmp_path / "a")
+
+        assert seen["timeout"]
 
 
 # ---------------------------------------------------------------------
@@ -605,6 +736,32 @@ class TestInstallGetdpArchive:
 
         assert excinfo.value.exit_code == 1
 
+    @pytest.mark.skipif(
+        not hasattr(tarfile, "data_filter"), reason="needs Python 3.11.4+"
+    )
+    def test_an_archive_cannot_write_outside_the_prefix(
+        self, tmp_path, monkeypatch, home, spy_path_edit
+    ):
+        evil = tmp_path / "evil.tgz"
+        payload = tmp_path / "payload"
+        payload.write_text("escaped")
+        with tarfile.open(evil, "w:gz") as tf:
+            tf.add(payload, arcname="../escaped")
+
+        monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(cli.platform, "machine", lambda: "x86_64")
+        monkeypatch.setattr(
+            cli,
+            "_download_with_progress",
+            lambda url, dest: dest.write_bytes(evil.read_bytes()),
+        )
+        prefix = tmp_path / "nested" / "prefix"
+
+        with pytest.raises(tarfile.FilterError):
+            cli._install_getdp_archive(prefix, "stable", False)
+
+        assert not (prefix.parent / "escaped").exists()
+
     def test_a_zip_archive_is_extracted(
         self, tmp_path, monkeypatch, home, spy_path_edit
     ):
@@ -641,7 +798,7 @@ class TestInstallGetdpArchive:
 # ---------------------------------------------------------------------
 class TestInstallUnix:
     def test_clones_builds_and_edits_the_path(
-        self, tmp_path, home, spy_subprocess, spy_path_edit
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
     ):
         cli._install_unix(tmp_path / "prefix", dry_run=False)
 
@@ -650,7 +807,7 @@ class TestInstallUnix:
         assert spy_path_edit[0][0] == tmp_path / "prefix" / "bin"
 
     def test_builds_into_the_requested_prefix(
-        self, tmp_path, home, spy_subprocess, spy_path_edit
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
     ):
         prefix = tmp_path / "prefix"
 
@@ -659,54 +816,89 @@ class TestInstallUnix:
         build_cmd = spy_subprocess[-1][0]
         assert str(prefix) in build_cmd
 
-    def test_the_build_includes_the_python_bindings(
-        self, tmp_path, home, spy_subprocess, spy_path_edit
+    def test_the_build_script_does_not_install_the_bindings(
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
     ):
-        """Without --python the solver installs but the package cannot import
-        CSXCAD, which is the failure the health check reports."""
-        cli._install_unix(tmp_path / "prefix", dry_run=False)
-
-        assert "--python" in spy_subprocess[-1][0]
-
-    def test_outside_a_venv_the_bindings_go_to_the_user_site(
-        self, tmp_path, home, monkeypatch, spy_subprocess, spy_path_edit
-    ):
-        """The build script otherwise makes a venv of its own under the prefix
-        and installs into that, which the interpreter running simpleEMS never
-        activates -- the build reports success and `import openEMS` still
-        fails."""
-        monkeypatch.setattr(cli, "_in_virtualenv", lambda: False)
-
+        """openEMS's build_python.sh installs with whichever python3/pip3 is
+        first on PATH. On Arch that is the externally managed system Python and
+        pip refuses (PEP 668); elsewhere the bindings land in a venv simpleEMS
+        never sees."""
         cli._install_unix(tmp_path / "prefix", dry_run=False)
 
         build_cmd = spy_subprocess[-1][0]
-        assert "--python-venv-mode" in build_cmd
-        assert build_cmd[build_cmd.index("--python-venv-mode") + 1] == "disable"
+        assert not any(arg.startswith("--python") for arg in build_cmd)
 
-    def test_inside_a_venv_the_bindings_go_to_that_venv(
-        self, tmp_path, home, monkeypatch, spy_subprocess, spy_path_edit
+    def test_the_bindings_are_installed_by_simpleems(
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
     ):
-        monkeypatch.setattr(cli, "_in_virtualenv", lambda: True)
-
+        """_pip_install targets sys.executable, the interpreter that has to
+        import them."""
         cli._install_unix(tmp_path / "prefix", dry_run=False)
 
-        build_cmd = spy_subprocess[-1][0]
-        assert build_cmd[build_cmd.index("--python-venv-mode") + 1] == "auto"
+        installed = [path.parts[-2] for path, _dry, _force in spy_pip]
+        assert installed == ["CSXCAD", "openEMS"]
 
-    def test_creates_the_prefix(self, tmp_path, home, spy_subprocess, spy_path_edit):
+    def test_the_bindings_build_against_the_new_prefix(
+        self, tmp_path, home, monkeypatch, spy_subprocess, spy_path_edit
+    ):
+        monkeypatch.delenv("CSXCAD_INSTALL_PATH", raising=False)
+        monkeypatch.delenv("OPENEMS_INSTALL_PATH", raising=False)
+        seen = []
+        monkeypatch.setattr(
+            cli,
+            "_pip_install",
+            lambda path, dry, force=False: seen.append(
+                os.environ.get("CSXCAD_INSTALL_PATH")
+            ),
+        )
+        prefix = tmp_path / "prefix"
+
+        cli._install_unix(prefix, dry_run=False)
+
+        assert seen == [str(prefix), str(prefix)]
+
+    def test_force_reinstalls_the_bindings(
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
+    ):
+        cli._install_unix(tmp_path / "prefix", dry_run=False, force=True)
+
+        assert [force for _path, _dry, force in spy_pip] == [True, True]
+
+    def test_the_system_dependencies_include_the_python_headers(
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
+    ):
+        """The extension build compiles against Python.h (python3-dev)."""
+        cli._install_unix(tmp_path / "prefix", dry_run=False)
+
+        deps_cmd = spy_subprocess[1][0]
+        assert "--python" in deps_cmd
+
+    def test_creates_the_prefix(
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
+    ):
         prefix = tmp_path / "prefix"
 
         cli._install_unix(prefix, dry_run=False)
 
         assert prefix.is_dir()
 
+    def test_dry_run_creates_no_prefix(
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
+    ):
+        prefix = tmp_path / "prefix"
+
+        cli._install_unix(prefix, dry_run=True)
+
+        assert not prefix.exists()
+
     def test_dry_run_is_threaded_through(
-        self, tmp_path, home, spy_subprocess, spy_path_edit
+        self, tmp_path, home, spy_subprocess, spy_pip, spy_path_edit
     ):
         cli._install_unix(tmp_path / "prefix", dry_run=True)
 
         assert all(dry for _cmd, _cwd, dry in spy_subprocess)
         assert spy_path_edit[0][1] is True
+        assert spy_pip == []
 
 
 # ---------------------------------------------------------------------
@@ -848,7 +1040,9 @@ class TestWindowsWheelSelection:
         stale.write_text("")
         monkeypatch.setattr(cli, "_pip_install", lambda path, dry, force=False: None)
         monkeypatch.setattr(
-            cli.urllib.request, "urlopen", lambda req: fake_release_response()
+            cli.urllib.request,
+            "urlopen",
+            lambda req, timeout=None: fake_release_response(),
         )
         monkeypatch.setattr(
             cli,
@@ -872,7 +1066,9 @@ class TestWindowsWheelSelection:
             cli, "_pip_install", lambda path, dry, force=False: forced.append(force)
         )
         monkeypatch.setattr(
-            cli.urllib.request, "urlopen", lambda req: fake_release_response()
+            cli.urllib.request,
+            "urlopen",
+            lambda req, timeout=None: fake_release_response(),
         )
         monkeypatch.setattr(
             cli,
@@ -911,7 +1107,9 @@ class TestWindowsWheelSelection:
         neighbour.write_text("not ours to delete")
         monkeypatch.setattr(cli, "_pip_install", lambda path, dry, force=False: None)
         monkeypatch.setattr(
-            cli.urllib.request, "urlopen", lambda req: fake_release_response()
+            cli.urllib.request,
+            "urlopen",
+            lambda req, timeout=None: fake_release_response(),
         )
         monkeypatch.setattr(
             cli,
@@ -1263,7 +1461,7 @@ class TestWindowsReleaseFetch:
     def test_a_failed_query_exits(self, prefix, monkeypatch, capsys):
         import urllib.error
 
-        def refuse(request):
+        def refuse(request, timeout=None):
             raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
 
         monkeypatch.setattr(cli.urllib.request, "urlopen", refuse)
@@ -1280,7 +1478,9 @@ class TestWindowsReleaseFetch:
         monkeypatch.setattr(
             cli.urllib.request,
             "urlopen",
-            lambda request: self.release("notes.txt", "openEMS_x64_mingw.zip"),
+            lambda request, timeout=None: self.release(
+                "notes.txt", "openEMS_x64_mingw.zip"
+            ),
         )
 
         def download(url, destination):
@@ -1295,7 +1495,9 @@ class TestWindowsReleaseFetch:
 
     def test_a_release_without_a_zip_exits(self, prefix, monkeypatch, capsys):
         monkeypatch.setattr(
-            cli.urllib.request, "urlopen", lambda request: self.release("notes.txt")
+            cli.urllib.request,
+            "urlopen",
+            lambda request, timeout=None: self.release("notes.txt"),
         )
 
         with pytest.raises(typer.Exit) as excinfo:
@@ -1311,7 +1513,7 @@ class TestPipForce:
 
         cli._pip_install("/tmp/pkg", dry_run=False, force=True)
 
-        cmd, _cwd, _dry = spy_subprocess[0]
+        cmd, _cwd, _dry = spy_subprocess[-1]
         assert cmd[-2:] == ["--force-reinstall", "/tmp/pkg"]
 
 
@@ -1402,7 +1604,7 @@ class TestInstallCommands:
         monkeypatch.setattr(
             cli,
             "_install_unix",
-            lambda prefix, dry_run: calls.append("unix"),
+            lambda prefix, dry_run, force=False: calls.append("unix"),
         )
         monkeypatch.setattr(
             cli,
@@ -1544,3 +1746,92 @@ class TestInstallCommands:
         cli.install_getdp(prefix=tmp_path, version="stable", dry_run=True, force=False)
 
         assert events == [("summary", True)]
+
+
+# ---------------------------------------------------------------------
+# install openems: interpreter and prefix checks
+# ---------------------------------------------------------------------
+class TestInstallOpenemsGuards:
+    def test_an_externally_managed_python_stops_before_any_work(
+        self, tmp_path, monkeypatch, spy_subprocess, capsys
+    ):
+        """pip and uv refuse a PEP 668 interpreter, so the 10-30 minute build
+        would fail only at the very end."""
+        monkeypatch.setattr(cli, "_externally_managed", lambda: True)
+        monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            cli.install_openems(
+                prefix=tmp_path, version="latest", dry_run=False, force=True
+            )
+
+        assert excinfo.value.exit_code == 1
+        assert spy_subprocess == []
+        assert "venv" in capsys.readouterr().out
+
+    def test_a_venv_is_never_externally_managed(self, monkeypatch):
+        monkeypatch.setattr(cli, "_in_virtualenv", lambda: True)
+
+        assert cli._externally_managed() is False
+
+    def test_a_python_with_the_marker_file_is_externally_managed(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "EXTERNALLY-MANAGED").write_text("[externally-managed]\n")
+        monkeypatch.setattr(cli, "_in_virtualenv", lambda: False)
+        monkeypatch.setattr(cli.sysconfig, "get_path", lambda name: str(tmp_path))
+
+        assert cli._externally_managed() is True
+
+    def test_the_bindings_build_against_the_openems_on_path(
+        self, tmp_path, monkeypatch
+    ):
+        """A distro package or an earlier --prefix install need not live at
+        the default prefix; the extension build must find its headers."""
+        binary = tmp_path / "usr" / "bin" / "openEMS"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("")
+        monkeypatch.setattr(cli.sys, "platform", "linux")
+        monkeypatch.setattr(cli, "_externally_managed", lambda: False)
+        monkeypatch.setattr(cli.shutil, "which", lambda name: str(binary))
+        monkeypatch.setattr(
+            cli, "_check_package_import", lambda imp, pip: (False, None, "missing")
+        )
+        prefixes = []
+        monkeypatch.setattr(
+            cli,
+            "_install_python_bindings_only",
+            lambda prefix, dry_run: prefixes.append(prefix),
+        )
+
+        with pytest.raises(typer.Exit):
+            cli.install_openems(
+                prefix=None, version="latest", dry_run=True, force=False
+            )
+
+        assert prefixes == [(tmp_path / "usr").resolve()]
+
+
+# ---------------------------------------------------------------------
+# _check_package_import error text
+# ---------------------------------------------------------------------
+class TestImportErrorText:
+    def test_a_dlopen_error_keeps_its_detail(self, monkeypatch):
+        def fail(name):
+            raise OSError("libCSXCAD.so.0 (needed by CSXCAD): cannot open shared")
+
+        monkeypatch.setattr(cli.importlib, "import_module", fail)
+
+        _ok, _version, error = cli._check_package_import("CSXCAD", "CSXCAD")
+
+        assert "cannot open shared" in error
+
+    def test_a_trailing_location_is_dropped(self, monkeypatch):
+        def fail(name):
+            raise ImportError("cannot import name 'x' from 'y' (unknown location)")
+
+        monkeypatch.setattr(cli.importlib, "import_module", fail)
+
+        _ok, _version, error = cli._check_package_import("y", "y")
+
+        assert error == "cannot import name 'x' from 'y'"
