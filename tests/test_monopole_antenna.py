@@ -46,7 +46,7 @@ def only_primitive(csx, name):
 
 def make_params(fr4, **overrides):
     return PrintedMonopoleAntennaParams(
-        min_freq=1.5e9, max_freq=3.5e9, resonant_freq=2.45e9, **{**fr4, **overrides}
+        resonant_freq=2.45e9, span_freq=1e9, **{**fr4, **overrides}
     )
 
 
@@ -54,8 +54,8 @@ def make_params(fr4, **overrides):
 # PrintedMonopoleAntennaParams
 # ---------------------------------------------------------------------
 class TestMonopoleParams:
-    def test_frequency_range_is_min_to_max(self, monopole_params):
-        assert monopole_params.freq_range == (1.5e9, 3.5e9)
+    def test_frequency_range_spans_the_resonant_frequency(self, monopole_params):
+        assert monopole_params.freq_range == pytest.approx((1.45e9, 3.45e9))
 
     def test_main_freq_is_the_resonant_frequency(self, monopole_params):
         assert monopole_params.main_freq == 2.45e9

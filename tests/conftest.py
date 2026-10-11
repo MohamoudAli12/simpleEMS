@@ -179,9 +179,8 @@ def dipole_params(fr4):
     from simpleEMS.dipole_antenna import PrintedDipoleAntennaParams
 
     return PrintedDipoleAntennaParams(
-        min_freq=1.5e9,
-        max_freq=3.5e9,
         resonant_freq=2.45e9,
+        span_freq=1e9,
         **{**fr4, "charac_imp": 73},
     )
 
@@ -191,9 +190,7 @@ def monopole_params(fr4):
     """A 2.45 GHz microstrip-fed printed quarter-wave monopole on FR-4."""
     from simpleEMS.monopole_antenna import PrintedMonopoleAntennaParams
 
-    return PrintedMonopoleAntennaParams(
-        min_freq=1.5e9, max_freq=3.5e9, resonant_freq=2.45e9, **fr4
-    )
+    return PrintedMonopoleAntennaParams(resonant_freq=2.45e9, span_freq=1e9, **fr4)
 
 
 # ---------------------------------------------------------------------
