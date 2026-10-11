@@ -12,9 +12,8 @@ from simpleEMS import (
 
 # PARAMS
 params = PrintedDipoleAntennaParams(
-    min_freq=4e9,
-    max_freq=7e9,
     resonant_freq=5.21e9,
+    span_freq=1.5e9,
     substrate_thickness_mm=1.6,
     substrate_eps_r=4.4,
     substrate_tand=0.001,

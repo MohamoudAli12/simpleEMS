@@ -72,12 +72,11 @@ class PrintedMonopoleAntennaParams(SimParams):
 
     Parameters
     ----------
-    min_freq : float
-        Minimum frequency of the simulation range in Hz.
-    max_freq : float
-        Maximum frequency of the simulation range in Hz.
     resonant_freq : float
         Design frequency of the monopole in Hz.
+    span_freq : float
+        Half-width of the simulation range in Hz; the range runs from
+        ``resonant_freq - span_freq`` to ``resonant_freq + span_freq``.
     length_wavelengths : float, optional
         Length of the radiating strip, from the ground edge to its tip, as
         a fraction of the guided wavelength. Default is 0.235, half the
@@ -123,9 +122,8 @@ class PrintedMonopoleAntennaParams(SimParams):
         ``min_trace_width_mm``, or if the radiator is wider than the board.
     """
 
-    min_freq: float
-    max_freq: float
     resonant_freq: float
+    span_freq: float
 
     length_wavelengths: float = 0.235
     radiator_width_mm: float | None = None
@@ -146,9 +144,12 @@ class PrintedMonopoleAntennaParams(SimParams):
         Returns
         -------
         tuple[float, float]
-            ``(min_freq, max_freq)`` in Hz.
+            ``(resonant_freq - span_freq, resonant_freq + span_freq)`` in Hz.
         """
-        return self.min_freq, self.max_freq
+        return (
+            self.resonant_freq - self.span_freq,
+            self.resonant_freq + self.span_freq,
+        )
 
     @property
     def main_freq(self) -> float:
