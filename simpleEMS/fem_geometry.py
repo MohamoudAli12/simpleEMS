@@ -1252,8 +1252,11 @@ def _collect_faces(
     for (role, name, _f), faces in zip(sheets, sheet_faces, strict=True):
         faces = faces & existing_faces
         # The STEP export names the pieces of one CSXCAD property name, name_1,
-        # ...; group them back under that property, as fem_backend does.
-        parent_name = re.sub(r"_\d+$", "", name)
+        # ...; group them back under that property. Strip the suffix only when
+        # the plain name is itself a solid, so distinct properties named
+        # radiator_1 and radiator_2 stay apart.
+        stripped_name = re.sub(r"_\d+$", "", name)
+        parent_name = stripped_name if stripped_name in problem.solids else name
         if role == "pec":
             pec_faces |= faces
             conductor_faces_by_name.setdefault(parent_name, set()).update(faces)
