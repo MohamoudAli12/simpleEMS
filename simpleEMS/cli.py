@@ -383,7 +383,7 @@ def _install_windows(prefix, version, dry_run, force: bool = False):
                 )
                 response = urllib.request.urlopen(req, timeout=_NETWORK_TIMEOUT)
                 release_data = json.loads(response.read())
-            except urllib.error.HTTPError as e:
+            except (urllib.error.URLError, TimeoutError) as e:
                 console.print(f"  ❌ Failed to fetch release data: {e}")
                 raise typer.Exit(code=1)
             assets = release_data.get("assets", [])
