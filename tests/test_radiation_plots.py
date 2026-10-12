@@ -260,101 +260,158 @@ class TestPlot2dRadPattern:
 # ---------------------------------------------------------------------
 # plot_2d_directivity
 # ---------------------------------------------------------------------
+class IsotropicNF2FF(FakeNF2FF):
+    """A pattern that never drops 3 dB, so it has no beamwidth."""
+
+    def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):  # noqa: N802
+        theta_deg = np.atleast_1d(np.asarray(theta, dtype=float))
+        phi_deg = np.atleast_1d(np.asarray(phi, dtype=float))
+        shape = (theta_deg.size, phi_deg.size)
+        return FakeFarField(
+            E_norm=np.ones(shape),
+            Dmax=np.array([1.0]),
+            Prad=np.array([1.0]),
+            P_rad=np.ones(shape),
+            theta=np.deg2rad(theta_deg),
+            phi=np.deg2rad(phi_deg),
+        )
+
+
+class BackwardNF2FF(FakeNF2FF):
+    """A backward lobe peaking at theta = 180 deg, the last sample of the
+    sweep, so its -3 dB crossings lie on both sides of +-180 deg."""
+
+    def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):  # noqa: N802
+        theta_deg = np.atleast_1d(np.asarray(theta, dtype=float))
+        phi_deg = np.atleast_1d(np.asarray(phi, dtype=float))
+        # The floor keeps the null at theta = 0 finite in dB.
+        pattern = np.sin(np.deg2rad(theta_deg) / 2) ** 2 + 1e-6
+        shape = (theta_deg.size, phi_deg.size)
+        return FakeFarField(
+            E_norm=np.broadcast_to(pattern[:, None], shape),
+            Dmax=np.array([4.0]),
+            Prad=np.array([1.0]),
+            P_rad=np.ones(shape),
+            theta=np.deg2rad(theta_deg),
+            phi=np.deg2rad(phi_deg),
+        )
+
+
+def hpbw_annotation(figures):
+    return next(
+        t.get_text() for t in figures.gcf().axes[0].texts if "HPBW" in t.get_text()
+    )
+
+
 class TestPlot2dDirectivity:
-    def test_opens_one_polar_figure(self, nf2ff, tmp_path, figures):
+    def test_opens_a_polar_and_a_cartesian_figure_by_default(
+        self, nf2ff, tmp_path, figures
+    ):
         SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
+
+        figure_numbers = figures.get_fignums()
+        assert len(figure_numbers) == 2
+        assert figures.figure(figure_numbers[0]).axes[0].name == "polar"
+        assert figures.figure(figure_numbers[1]).axes[0].name == "rectilinear"
+
+    def test_both_views_share_one_far_field_solve(self, nf2ff, tmp_path):
+        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
+
+        assert len(nf2ff.calls) == 1
+
+    @pytest.mark.parametrize(
+        ("style", "projection"),
+        [("polar", "polar"), ("cartesian", "rectilinear")],
+        ids=["polar", "cartesian"],
+    )
+    def test_a_single_style_opens_one_figure(
+        self, nf2ff, tmp_path, figures, style, projection
+    ):
+        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
 
         assert len(figures.get_fignums()) == 1
-        assert figures.gcf().axes[0].name == "polar"
+        assert figures.gcf().axes[0].name == projection
 
-    def test_the_peak_is_the_max_directivity(self, nf2ff, tmp_path, figures):
+    def test_an_unknown_style_is_rejected(self, nf2ff, tmp_path):
+        with pytest.raises(ValueError, match="style must be"):
+            SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style="smith")
+
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_the_peak_is_the_max_directivity(self, nf2ff, tmp_path, figures, style):
         """The curve is the normalised pattern lifted by Dmax, so its peak is
         Dmax in dBi -- 10*log10(4) = 6.02 dBi here."""
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
+        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
 
         ydata = figures.gcf().axes[0].lines[0].get_ydata()
         assert np.max(ydata) == pytest.approx(10 * np.log10(4.0), abs=1e-6)
 
-    def test_the_beamwidth_is_annotated(self, nf2ff, tmp_path, figures):
-        texts = []
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
-        for text in figures.gcf().axes[0].texts:
-            texts.append(text.get_text())
-
-        assert any("HPBW" in t for t in texts)
-
-    def test_the_computed_beamwidth_matches_the_pattern(self, nf2ff, tmp_path, figures):
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_the_computed_beamwidth_matches_the_pattern(
+        self, nf2ff, tmp_path, figures, style
+    ):
         """cos^2(theta/2) falls to -3 dB at theta = +-65.4 deg, so the
         half-power beamwidth is about 131 deg."""
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
+        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
 
-        annotation = next(
-            t.get_text() for t in figures.gcf().axes[0].texts if "HPBW" in t.get_text()
-        )
-        value = float(annotation.split("=")[1].split("°")[0])
+        value = float(hpbw_annotation(figures).split("=")[1].split("°")[0])
         assert value == pytest.approx(130.8, abs=1.0)
 
-    def test_the_main_lobe_direction_is_reported(self, nf2ff, tmp_path, figures):
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_the_main_lobe_direction_is_reported(self, nf2ff, tmp_path, figures, style):
+        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
 
-        annotation = next(
-            t.get_text() for t in figures.gcf().axes[0].texts if "HPBW" in t.get_text()
-        )
+        annotation = hpbw_annotation(figures)
         direction = float(annotation.split("Main Lobe Direction =")[1].split("°")[0])
         assert direction == pytest.approx(0.0)
 
-    def test_an_omnidirectional_cut_has_no_beamwidth(self, tmp_path, figures):
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_an_omnidirectional_cut_has_no_beamwidth(self, tmp_path, figures, style):
         """An isotropic pattern never drops 3 dB, so no beamwidth exists; the
         plot still reports the main lobe but leaves the HPBW out."""
-
-        class Isotropic(FakeNF2FF):
-            def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):  # noqa: N802
-                theta_deg = np.atleast_1d(np.asarray(theta, dtype=float))
-                phi_deg = np.atleast_1d(np.asarray(phi, dtype=float))
-                shape = (theta_deg.size, phi_deg.size)
-                return FakeFarField(
-                    E_norm=np.ones(shape),
-                    Dmax=np.array([1.0]),
-                    Prad=np.array([1.0]),
-                    P_rad=np.ones(shape),
-                    theta=np.deg2rad(theta_deg),
-                    phi=np.deg2rad(phi_deg),
-                )
-
-        SimTools.plot_2d_directivity(Isotropic(), 2.45e9, tmp_path)
+        SimTools.plot_2d_directivity(IsotropicNF2FF(), 2.45e9, tmp_path, style=style)
 
         texts = [t.get_text() for t in figures.gcf().axes[0].texts]
         assert any("Main Lobe Direction" in t for t in texts)
         assert not any("HPBW" in t for t in texts)
 
-    def test_the_beamwidth_wraps_through_180_degrees(self, tmp_path, figures):
-        """A backward lobe peaks at theta = 180 deg, the last sample of the
-        sweep; its -3 dB crossings lie on both sides of +-180 deg, and the
-        beamwidth matches the broadside case of about 131 deg."""
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_the_beamwidth_wraps_through_180_degrees(self, tmp_path, figures, style):
+        """The backward lobe's beamwidth matches the broadside case of about
+        131 deg, even though its -3 dB crossings straddle +-180 deg."""
+        SimTools.plot_2d_directivity(BackwardNF2FF(), 2.45e9, tmp_path, style=style)
 
-        class Backward(FakeNF2FF):
-            def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):  # noqa: N802
-                theta_deg = np.atleast_1d(np.asarray(theta, dtype=float))
-                phi_deg = np.atleast_1d(np.asarray(phi, dtype=float))
-                # The floor keeps the null at theta = 0 finite in dB.
-                pattern = np.sin(np.deg2rad(theta_deg) / 2) ** 2 + 1e-6
-                shape = (theta_deg.size, phi_deg.size)
-                return FakeFarField(
-                    E_norm=np.broadcast_to(pattern[:, None], shape),
-                    Dmax=np.array([4.0]),
-                    Prad=np.array([1.0]),
-                    P_rad=np.ones(shape),
-                    theta=np.deg2rad(theta_deg),
-                    phi=np.deg2rad(phi_deg),
-                )
-
-        SimTools.plot_2d_directivity(Backward(), 2.45e9, tmp_path)
-
-        annotation = next(
-            t.get_text() for t in figures.gcf().axes[0].texts if "HPBW" in t.get_text()
-        )
-        value = float(annotation.split("=")[1].split("°")[0])
+        value = float(hpbw_annotation(figures).split("=")[1].split("°")[0])
         assert value == pytest.approx(130.8, abs=1.0)
+
+    def test_cartesian_beam_edges_fold_back_into_the_theta_range(
+        self, tmp_path, figures
+    ):
+        """A beam straddling +-180 deg has an edge past 180 deg; the cartesian
+        view folds it back so both edge markers land on the plotted axis, one
+        near each end."""
+        SimTools.plot_2d_directivity(
+            BackwardNF2FF(), 2.45e9, tmp_path, style="cartesian"
+        )
+
+        ax = figures.gcf().axes[0]
+        vertical_x = [
+            line.get_xdata()[0]
+            for line in ax.lines[1:]
+            if line.get_xdata()[0] == line.get_xdata()[1]
+        ]
+        edges = sorted(x for x in vertical_x if abs(abs(x) - 180.0) > 1e-9)
+        assert all(-180.0 <= x <= 180.0 for x in vertical_x)
+        assert edges == pytest.approx([-114.6, 114.6], abs=1.0)
 
     def test_an_array_of_frequencies_is_rejected(self, nf2ff, tmp_path):
         with pytest.raises(TypeError, match="only one frequency"):
