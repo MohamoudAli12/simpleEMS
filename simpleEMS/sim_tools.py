@@ -30,7 +30,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 from collections.abc import Callable
 from dataclasses import fields
 from enum import Enum
@@ -1141,16 +1141,18 @@ class SimTools:
         output_path: Path | None = None,
         read_cached: bool = False,
         dynamic_range_db: float = 30.0,
+        style: Literal["polar", "cartesian", "both"] = "both",
     ) -> None:
         """
         Plot the 2D directivity pattern (xz-plane, phi=0) at a specified
         frequency, annotated with the half-power beamwidth (HPBW).
 
-        Computes directivity (in dBi) from NF2FF E-field data, plots it as
-        a polar pattern, and marks the -3 dB beamwidth, main-lobe direction,
-        and peak magnitude around the pattern's maximum. The beamwidth search
-        wraps through +-180 degrees; an omnidirectional cut, which never drops
-        3 dB, gets no beamwidth marker.
+        Computes directivity (in dBi) from NF2FF E-field data and draws it as
+        a polar pattern, a Cartesian (dBi versus theta) plot, or both in
+        separate figures from a single NF2FF solve. Each view marks the -3 dB
+        beamwidth, main-lobe direction, and peak magnitude. The beamwidth
+        search wraps through +-180 degrees; an omnidirectional cut, which
+        never drops 3 dB, gets no beamwidth marker.
 
         Parameters
         ----------
@@ -1167,10 +1169,13 @@ class SimTools:
             If True, read cached NF2FF results instead of re-computing.
             Default is False.
         dynamic_range_db : float, optional
-            Span of the radial axis below the peak directivity, in dB. The
-            axis starts at ``peak - dynamic_range_db``, so an omnidirectional
-            cut draws as a near-circle rather than filling the plot, and
-            deeper nulls clip at the axis floor. Default is 30.
+            Span of the directivity axis below the peak, in dB. The axis
+            starts at ``peak - dynamic_range_db``, so an omnidirectional cut
+            draws as a near-circle rather than filling the plot, and deeper
+            nulls clip at the axis floor. Default is 30.
+        style : {"polar", "cartesian", "both"}, optional
+            Which view to draw. ``"both"`` draws the polar and Cartesian
+            views in two separate figures. Default is ``"both"``.
 
         Returns
         -------
@@ -1181,6 +1186,8 @@ class SimTools:
         ------
         TypeError
             If ``freq`` is not a scalar (e.g. an array of frequencies).
+        ValueError
+            If ``style`` is not ``"polar"``, ``"cartesian"`` or ``"both"``.
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
@@ -1189,6 +1196,11 @@ class SimTools:
             raise TypeError(
                 "Please specify only one frequency, not an array, "
                 "for directivity calculation"
+            )
+
+        if style not in ("polar", "cartesian", "both"):
+            raise ValueError(
+                f"style must be 'polar', 'cartesian' or 'both', got {style!r}"
             )
 
         # 0.1° steps from -180° to 180°; 180° repeats -180° so the curve closes.
@@ -1204,9 +1216,6 @@ class SimTools:
             verbose=0,
         )
 
-        plt.figure()
-        ax = plt.subplot(111, polar=True)
-
         e_field = np.squeeze(nf2ff_res_phi0.E_norm)
         e_field_norm = e_field / np.max(e_field)
         e_field_norm_db = 20 * np.log10(e_field_norm)
@@ -1214,15 +1223,10 @@ class SimTools:
         max_directivity_db = 10.0 * np.log10(nf2ff_res_phi0.Dmax)
         directivity_dbi = e_field_norm_db + max_directivity_db
 
-        # Anchor the radial axis to the peak, not to the pattern minimum, and
+        # Anchor the axis floor to the peak, not to the pattern minimum, and
         # clip deeper nulls to the floor so they don't wrap through the centre.
-        r_min = np.max(directivity_dbi) - dynamic_range_db
-        lines = ax.plot(
-            np.deg2rad(theta),
-            np.maximum(directivity_dbi, r_min),
-            linewidth=2,
-            label="xz-plane",
-        )
+        axis_floor = np.max(directivity_dbi) - dynamic_range_db
+        clipped_directivity_dbi = np.maximum(directivity_dbi, axis_floor)
 
         # ---- HPBW calculation ----
         # The cut is a full circle: drop the last sample, which repeats the
@@ -1244,81 +1248,134 @@ class SimTools:
         left_idx = np.where(centred_pattern[:centre_idx] <= hpbw_level)[0]
         right_idx = np.where(centred_pattern[centre_idx:] <= hpbw_level)[0]
 
-        ax.set_rlim(r_min)
-        annotation = ""
-
         # An omnidirectional cut never drops 3 dB, so it has no beamwidth.
-        if len(left_idx) > 0 and len(right_idx) > 0:
+        has_beamwidth = len(left_idx) > 0 and len(right_idx) > 0
+        annotation = ""
+        if has_beamwidth:
             left_theta = peak_theta - (centre_idx - left_idx[-1]) * theta_step
             right_theta = peak_theta + right_idx[0] * theta_step
+            left_val = centred_pattern[left_idx[-1]]
+            right_val = centred_pattern[centre_idx + right_idx[0]]
             hpbw = right_theta - left_theta
-
-            ax.plot(
-                [np.deg2rad(left_theta), np.deg2rad(left_theta)],
-                [r_min, centred_pattern[left_idx[-1]]],
-                "--",
-                color=HIGHLIGHT,
-                linewidth=1,
-            )
-            ax.plot(
-                [np.deg2rad(right_theta), np.deg2rad(right_theta)],
-                [r_min, centred_pattern[centre_idx + right_idx[0]]],
-                "--",
-                color=HIGHLIGHT,
-                linewidth=1,
-            )
-            ax.plot(
-                [np.deg2rad(peak_theta), np.deg2rad(peak_theta)],
-                [r_min, hpbw_level],
-                "--",
-                color=HIGHLIGHT,
-                linewidth=1,
-            )
-            # HPBW arc
-            hpbw_arc = np.linspace(left_theta, right_theta, 360)
-            ax.plot(
-                np.deg2rad(hpbw_arc),
-                hpbw_level * np.ones_like(hpbw_arc),
-                color=HIGHLIGHT,
-                linewidth=2,
-            )
             annotation = f"HPBW (3dB) = {hpbw:.2f}°\n"
 
         main_lobe_mag = np.round(np.max(directivity_dbi), 2)
-        ax.text(
-            1.0,
-            0.1,
-            f"{annotation}Main Lobe Direction = {peak_theta:.2f}°"
-            f"\nMain Lobe Magnitude = {main_lobe_mag:.2f} dBi",
-            transform=ax.transAxes,
-            fontsize=12,
-            color=plt.rcParams["text.color"],
-            verticalalignment="top",
-            bbox=dict(
-                boxstyle="round,pad=0.5",
-                facecolor=plt.rcParams["axes.facecolor"],
-                edgecolor=plt.rcParams["axes.edgecolor"],
-            ),
-        )
-        plt.suptitle(
-            f" Directivity at {freq_formatter(freq)}",
-            fontsize=14,
+        annotation += (
+            f"Main Lobe Direction = {peak_theta:.2f}°"
+            f"\nMain Lobe Magnitude = {main_lobe_mag:.2f} dBi"
         )
 
-        cursor = themed_cursor(lines)
-        cursor.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"theta={np.rad2deg(sel.target[0]):.2f}°"
-                f"\nDirectivity = {sel.target[1]:.2f} dBi"
-            ),
-        )
+        # ---- Plotting ----
+        views = ["polar", "cartesian"] if style == "both" else [style]
 
-        ax.grid(True)
-        ax.set_xlabel("theta (deg)")
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-        ax.legend()
+        for view in views:
+            figure = plt.figure()
+
+            if view == "polar":
+                ax = figure.add_subplot(1, 1, 1, polar=True)
+                lines = ax.plot(
+                    np.deg2rad(theta),
+                    clipped_directivity_dbi,
+                    linewidth=2,
+                    label="xz-plane",
+                )
+                ax.set_rlim(axis_floor)
+
+                if has_beamwidth:
+                    ax.plot(
+                        [np.deg2rad(left_theta), np.deg2rad(left_theta)],
+                        [axis_floor, left_val],
+                        "--",
+                        color=HIGHLIGHT,
+                        linewidth=1,
+                    )
+                    ax.plot(
+                        [np.deg2rad(right_theta), np.deg2rad(right_theta)],
+                        [axis_floor, right_val],
+                        "--",
+                        color=HIGHLIGHT,
+                        linewidth=1,
+                    )
+                    ax.plot(
+                        [np.deg2rad(peak_theta), np.deg2rad(peak_theta)],
+                        [axis_floor, hpbw_level],
+                        "--",
+                        color=HIGHLIGHT,
+                        linewidth=1,
+                    )
+                    # HPBW arc
+                    hpbw_arc = np.linspace(left_theta, right_theta, 360)
+                    ax.plot(
+                        np.deg2rad(hpbw_arc),
+                        hpbw_level * np.ones_like(hpbw_arc),
+                        color=HIGHLIGHT,
+                        linewidth=2,
+                    )
+
+                text_anchor = (1.0, 0.1)
+                cursor = themed_cursor(lines)
+                cursor.connect(
+                    "add",
+                    lambda sel: sel.annotation.set_text(
+                        f"theta={np.rad2deg(sel.target[0]):.2f}°"
+                        f"\nDirectivity = {sel.target[1]:.2f} dBi"
+                    ),
+                )
+                ax.set_theta_zero_location("N")
+                ax.set_theta_direction(-1)
+                ax.legend()
+
+            else:
+                ax = figure.add_subplot(1, 1, 1)
+                lines = ax.plot(
+                    theta,
+                    clipped_directivity_dbi,
+                    linewidth=2,
+                    label="xz-plane",
+                )
+
+                if has_beamwidth:
+                    ax.axhline(hpbw_level, linestyle="--", color=HIGHLIGHT, lw=1)
+                    ax.axvline(peak_theta, linestyle="--", color=HIGHLIGHT, lw=1)
+
+                    # The beam can straddle ±180°: fold both edges back into
+                    # the plotted theta range.
+                    left_edge = (left_theta + 180.0) % 360.0 - 180.0
+                    right_edge = (right_theta + 180.0) % 360.0 - 180.0
+                    ax.axvline(left_edge, linestyle="--", color=HIGHLIGHT, lw=1)
+                    ax.axvline(right_edge, linestyle="--", color=HIGHLIGHT, lw=1)
+
+                text_anchor = (0.02, 0.98)
+                cursor = themed_cursor(lines)
+                cursor.connect(
+                    "add",
+                    lambda sel: sel.annotation.set_text(
+                        f"theta={sel.target[0]:.2f}°"
+                        f"\nDirectivity = {sel.target[1]:.2f} dBi"
+                    ),
+                )
+                ax.set_xlim(-180.0, 180.0)
+                ax.set_xticks(np.arange(-180, 181, 45))
+                ax.set_ylim(axis_floor, peak_val + 3.0)
+                ax.set_ylabel("Directivity (dBi)")
+                ax.legend(loc="lower right")
+
+            ax.text(
+                *text_anchor,
+                annotation,
+                transform=ax.transAxes,
+                fontsize=12,
+                color=plt.rcParams["text.color"],
+                verticalalignment="top",
+                bbox=dict(
+                    boxstyle="round,pad=0.5",
+                    facecolor=plt.rcParams["axes.facecolor"],
+                    edgecolor=plt.rcParams["axes.edgecolor"],
+                ),
+            )
+            ax.grid(True)
+            ax.set_xlabel("theta (deg)")
+            figure.suptitle(f" Directivity at {freq_formatter(freq)}", fontsize=14)
 
     @staticmethod
     def compute_nf2ff_3d(
