@@ -52,7 +52,6 @@ patch.plot_2d_directivity(nf2ff, params.resonant_freq)
 patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq)
 patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq)
 patch.plot_3d_gain(nf2ff_3d_result, params.resonant_freq)
-patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq)
 patch.save_plots()
 patch.show_plots()
 # PPROCESS

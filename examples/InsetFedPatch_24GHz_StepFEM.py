@@ -42,7 +42,6 @@ SimTools.plot_2d_rad_pattern(nf2ff, resonant_freq)
 nf2ff_3d = SimTools.compute_nf2ff_3d(nf2ff, resonant_freq, sim_data)
 SimTools.plot_3d_directivity(nf2ff_3d, resonant_freq)
 SimTools.plot_3d_gain(nf2ff_3d, resonant_freq)
-SimTools.plot_3d_power(nf2ff_3d, resonant_freq)
 
 SimTools.save_plots()
 SimTools.show_plots()

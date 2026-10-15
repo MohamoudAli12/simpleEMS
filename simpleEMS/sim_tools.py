@@ -1391,9 +1391,8 @@ class SimTools:
         together with the radiation efficiency at ``freq``.
 
         The resulting far-field data can be used for visualization,
-        directivity/gain/power analysis, and post-processing of antenna
-        performance via ``plot_3d_directivity``, ``plot_3d_gain``, and
-        ``plot_3d_power``.
+        directivity and gain analysis, and post-processing of antenna
+        performance via ``plot_3d_directivity`` and ``plot_3d_gain``.
 
         Parameters
         ----------
@@ -1619,78 +1618,6 @@ class SimTools:
             smooth_shading=True,
         )
         plotter.add_text("Antenna 3D Pattern - Gain (dBi) ", position="upper_edge")
-
-    @staticmethod
-    def plot_3d_power(
-        nf2ff_3d_result: nf2ff_results,
-        freq: float,
-        output_path: Path | None = None,
-    ) -> None:
-        """
-        Plot the 3D radiated power pattern of an antenna at a specified
-        frequency.
-
-        Visualizes the normalized radiated power pattern (in dB) of the
-        antenna in 3D space, based on the ``P_rad`` field of the far-field
-        results from ``compute_nf2ff_3d``. Saves the mesh under
-        ``output_path / "3D_plots"``.
-
-        Parameters
-        ----------
-        nf2ff_3d_result : nf2ff_results
-            The 3D far-field result object returned by ``compute_nf2ff_3d``.
-        freq : float
-            The frequency (in Hz) the pattern was computed at. Used only
-            for plot/file labeling.
-        output_path : Path, optional
-            Path to the directory where the simulation result is saved.
-            Defaults to ``cwd / "Sim_Path"``.
-
-        Returns
-        -------
-        None
-            Opens an interactive 3D plot window and saves the mesh to
-            ``3D_plots/3D_Power.vtk``; does not return a value.
-        """
-        if output_path is None:
-            output_path = Path.cwd() / "Sim_Path"
-
-        plots_3d_path = output_path / "3D_plots"
-        plots_3d_path.mkdir(parents=True, exist_ok=True)
-
-        power = np.squeeze(nf2ff_3d_result.P_rad)
-
-        power = power / np.max(power)  # normalize
-
-        power_db = 10 * np.log10(power)
-
-        theta = nf2ff_3d_result.theta
-        phi = nf2ff_3d_result.phi
-
-        THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
-
-        R = 10 ** (power_db / 10)
-
-        X = R * np.sin(THETA) * np.cos(PHI)
-        Y = R * np.sin(THETA) * np.sin(PHI)
-        Z = R * np.cos(THETA)
-
-        mesh = pv.StructuredGrid(X, Y, Z)
-        mesh["Power (dB)"] = power_db.ravel(order="F")
-
-        mesh.save(plots_3d_path / "3D_Power.vtk")
-        plotter = BackgroundPlotter(
-            title=f"Antenna 3D Pattern - Power (dB) at {freq_formatter(freq)} "
-        )
-        style_background_plotter(plotter)
-        plotter.add_mesh(
-            mesh,
-            scalars="Power (dB)",
-            cmap="turbo",
-            clim=[np.min(power_db), np.max(power_db)],
-            smooth_shading=True,
-        )
-        plotter.add_text("Antenna 3D Pattern - Power (dB)", position="upper_edge")
 
     @staticmethod
     def save_plots(output_path: Path | None = None, file_format: str = "png") -> None:

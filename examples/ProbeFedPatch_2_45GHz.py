@@ -79,7 +79,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             params.resonant_freq,
             output_path,
         )
-        patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
         patch.save_plots(output_path)
         patch.show_plots()
         patch.export_stl(sim, output_path)

@@ -184,7 +184,7 @@ SimTools.write_and_show_structure = staticmethod(lambda *a, **k: None)
 SimTools.show_plots = staticmethod(lambda *a, **k: None)
 SimTools.compute_sim_data = staticmethod(fake_sim_data)
 SimTools.create_nf2ff = staticmethod(lambda *a, **k: FakeNF2FF())
-for _name in ("plot_3d_directivity", "plot_3d_gain", "plot_3d_power"):
+for _name in ("plot_3d_directivity", "plot_3d_gain"):
     setattr(SimTools, _name, staticmethod(lambda *a, **k: None))
 
 # AppCSXCAD, in case an example reaches it another way

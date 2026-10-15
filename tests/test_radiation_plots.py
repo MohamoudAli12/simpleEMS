@@ -520,11 +520,6 @@ class TestPlot3d:
 
         assert self.saved(tmp_path, "3D_Gain.vtk").is_file()
 
-    def test_power_writes_a_vtk_mesh(self, far_field_3d, tmp_path, no_windows):
-        SimTools.plot_3d_power(far_field_3d, 2.45e9, tmp_path)
-
-        assert self.saved(tmp_path, "3D_Power.vtk").is_file()
-
     def test_the_mesh_matches_the_angular_grid(
         self, far_field_3d, tmp_path, no_windows
     ):
@@ -575,18 +570,11 @@ class TestPlot3d:
         expected = 10 * np.log10(4.0) + 10 * np.log10(0.5 / 2.0)
         assert mesh["Gain (dBi)"].max() == pytest.approx(expected, abs=1e-6)
 
-    def test_power_is_normalised_to_its_peak(self, far_field_3d, tmp_path, no_windows):
-        SimTools.plot_3d_power(far_field_3d, 2.45e9, tmp_path)
-
-        mesh = pv.read(self.saved(tmp_path, "3D_Power.vtk"))
-        assert mesh["Power (dB)"].max() == pytest.approx(0.0, abs=1e-9)
-
     def test_each_plot_opens_one_window(self, far_field_3d, tmp_path, no_windows):
         SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
         SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
-        SimTools.plot_3d_power(far_field_3d, 2.45e9, tmp_path)
 
-        assert len(no_windows) == 3
+        assert len(no_windows) == 2
 
     def test_the_window_titles_name_the_quantity_and_frequency(
         self, far_field_3d, tmp_path, no_windows
@@ -882,11 +870,6 @@ class TestDefaultOutputPath:
         SimTools.plot_3d_gain(far_field_3d, 2.45e9)
 
         assert (self.sim_path() / "3D_plots" / "3D_Gain.vtk").is_file()
-
-    def test_plot_3d_power(self, far_field_3d, no_windows):
-        SimTools.plot_3d_power(far_field_3d, 2.45e9)
-
-        assert (self.sim_path() / "3D_plots" / "3D_Power.vtk").is_file()
 
     def test_write_and_show_structure(self, built_inset, monkeypatch):
         _antenna, sim, _params, _port = built_inset

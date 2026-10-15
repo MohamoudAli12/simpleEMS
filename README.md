@@ -96,8 +96,6 @@ The result of the simulation
 
 ![3d_gain.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/3d_gain.png)
 
-![3d_power.png](https://raw.githubusercontent.com/MohamoudAli12/simpleEMS/master/images/3d_power_pattern.png)
-
 
 
 ## Installation
