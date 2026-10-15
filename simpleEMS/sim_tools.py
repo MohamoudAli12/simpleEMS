@@ -1492,12 +1492,13 @@ class SimTools:
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
         e_field = np.squeeze(nf2ff_3d_result.E_norm)
-        e_field /= np.max(e_field)  # normalize
+        e_field = e_field / np.max(e_field)  # normalize without mutating the result
 
+        # radiated power density scales with |E|^2, so square the field ratio
         max_directivity = nf2ff_3d_result.Dmax[0]
-        D = max_directivity * e_field
+        directivity = max_directivity * e_field**2
 
-        directivity_dbi = 10 * np.log10(D)
+        directivity_dbi = 10 * np.log10(directivity)
 
         theta = nf2ff_3d_result.theta
         phi = nf2ff_3d_result.phi
@@ -1568,13 +1569,14 @@ class SimTools:
             output_path = Path.cwd() / "Sim_Path"
 
         e_field = np.squeeze(nf2ff_3d_result.E_norm)
-        e_field /= np.max(e_field)  # normalize
+        e_field = e_field / np.max(e_field)  # normalize without mutating the result
 
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
+        # radiated power density scales with |E|^2, so square the field ratio
         max_directivity = nf2ff_3d_result.Dmax[0]
-        directivity = max_directivity * e_field
+        directivity = max_directivity * e_field**2
 
         ploss = getattr(nf2ff_3d_result, "Ploss", None)
         if ploss is not None and (nf2ff_3d_result.Prad[0] + ploss[0]) > 0:

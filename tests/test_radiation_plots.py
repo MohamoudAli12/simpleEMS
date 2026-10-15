@@ -556,25 +556,71 @@ class TestPlot3d:
                 far_field_3d, np.array([2.4e9, 2.5e9]), tmp_path
             )
 
-    def test_the_result_is_normalised_in_place(
-        self, far_field_3d, tmp_path, no_windows
+    @pytest.mark.parametrize(
+        "plot",
+        [
+            lambda result, path: SimTools.plot_3d_directivity(result, 2.45e9, path),
+            lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, 1.0, path),
+        ],
+        ids=["directivity", "gain"],
+    )
+    def test_the_caller_s_e_norm_is_left_unchanged(
+        self, plot, far_field_3d, tmp_path, no_windows
     ):
-        """Documented here because it is surprising: the 3D plots divide the
-        caller's own ``E_norm`` by its peak rather than a copy. It is
-        idempotent, so plotting directivity then gain still agrees -- but the
-        array handed in does not survive the call unchanged."""
-        before = far_field_3d.E_norm.max()
+        """The plots normalise a copy: an un-normalised ``E_norm`` handed in
+        comes back with its original peak."""
+        far_field_3d.E_norm[:] *= 2.0
 
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
+        plot(far_field_3d, tmp_path)
 
-        assert before == pytest.approx(1.0)  # already normalised in this fixture
-        assert far_field_3d.E_norm.max() == pytest.approx(1.0)
+        assert far_field_3d.E_norm.max() == pytest.approx(2.0)
+
+    @pytest.mark.parametrize(
+        ("plot", "file_name", "scalar_name", "offset_db"),
+        [
+            (
+                lambda result, path: SimTools.plot_3d_directivity(result, 2.45e9, path),
+                "3D_directivity.vtk",
+                "Directivity (dBi)",
+                0.0,
+            ),
+            (
+                lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, 1.0, path),
+                "3D_Gain.vtk",
+                "Gain (dBi)",
+                10 * np.log10(0.75),
+            ),
+        ],
+        ids=["directivity", "gain"],
+    )
+    def test_the_pattern_follows_the_squared_field_ratio(
+        self,
+        plot,
+        file_name,
+        scalar_name,
+        offset_db,
+        far_field_3d,
+        tmp_path,
+        no_windows,
+    ):
+        """Power density scales with |E|^2, so D = Dmax * (E / Emax)^2. Where
+        the fixture's field is half its peak (theta = 90 deg) the pattern sits
+        6 dB down, not 3 dB."""
+        field_ratio = far_field_3d.E_norm / far_field_3d.E_norm.max()
+        expected = 10 * np.log10(4.0 * field_ratio**2) + offset_db
+
+        plot(far_field_3d, tmp_path)
+
+        mesh = pv.read(self.saved(tmp_path, file_name))
+        np.testing.assert_allclose(
+            mesh[scalar_name], expected.ravel(order="F"), atol=1e-6
+        )
 
     def test_directivity_then_gain_agree_on_the_peak(
         self, far_field_3d, tmp_path, no_windows
     ):
-        """The consequence of the in-place normalisation above: calling both,
-        as a script plotting both does, must not shift the second one."""
+        """Calling both, as a script plotting both does, must not shift the
+        second one."""
         SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
         SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0, tmp_path)
 
