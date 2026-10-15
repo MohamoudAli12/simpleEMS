@@ -30,7 +30,7 @@ pytest.importorskip("openEMS")
 import pyvista as pv  # noqa: E402
 
 from simpleEMS import sim_tools  # noqa: E402
-from simpleEMS.sim_tools import DumpType, SimTools  # noqa: E402
+from simpleEMS.sim_tools import DumpType, SimData, SimTools  # noqa: E402
 
 
 class FakeFarField:
@@ -98,15 +98,38 @@ class FakeNF2FF:
         )
 
 
+def make_sim_data(freqs, input_power):
+    """A ``SimData`` carrying only what ``compute_nf2ff_3d`` reads."""
+    zeros = np.zeros(len(freqs), dtype=complex)
+    return SimData(
+        freqs=np.asarray(freqs, dtype=float),
+        s11=zeros,
+        s21=None,
+        s31=None,
+        s41=None,
+        z11=zeros,
+        vswr=np.ones(len(freqs)),
+        input_power=np.asarray(input_power, dtype=float),
+        port_voltage=zeros,
+        port_current=zeros,
+    )
+
+
 @pytest.fixture
 def nf2ff():
     return FakeNF2FF()
 
 
 @pytest.fixture
-def far_field_3d(nf2ff, tmp_path):
+def sim_data():
+    """1 W accepted across the band."""
+    return make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 1.0, 1.0])
+
+
+@pytest.fixture
+def far_field_3d(nf2ff, sim_data, tmp_path):
     """What ``compute_nf2ff_3d`` hands to the 3D plots."""
-    return SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, tmp_path)
+    return SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
 
 
 @pytest.fixture
@@ -430,33 +453,54 @@ class TestPlot2dDirectivity:
 # compute_nf2ff_3d
 # ---------------------------------------------------------------------
 class TestComputeNF2FF3d:
-    def test_sweeps_the_full_sphere(self, nf2ff, tmp_path):
-        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, tmp_path)
+    def test_sweeps_the_full_sphere(self, nf2ff, sim_data, tmp_path):
+        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
 
         call = nf2ff.calls[0]
         assert call["theta"][0] == 0 and call["theta"][-1] == 180
         assert call["phi"][0] == 0 and call["phi"][-1] == 360
 
-    def test_grid_is_two_degree_steps(self, nf2ff, tmp_path):
-        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, tmp_path)
+    def test_grid_is_two_degree_steps(self, nf2ff, sim_data, tmp_path):
+        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
 
         call = nf2ff.calls[0]
         assert call["theta"].size == 91
         assert call["phi"].size == 181
 
-    def test_returns_the_far_field_result(self, nf2ff, tmp_path):
-        result = SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, tmp_path)
+    def test_returns_the_far_field_result(self, nf2ff, sim_data, tmp_path):
+        result = SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
 
         assert result.E_norm.shape == (91, 181)
 
-    def test_an_array_of_frequencies_is_rejected(self, nf2ff, tmp_path):
+    def test_an_array_of_frequencies_is_rejected(self, nf2ff, sim_data, tmp_path):
         with pytest.raises(TypeError, match="only one frequency"):
-            SimTools.compute_nf2ff_3d(nf2ff, np.array([2.4e9, 2.5e9]), tmp_path)
+            SimTools.compute_nf2ff_3d(
+                nf2ff, np.array([2.4e9, 2.5e9]), sim_data, tmp_path
+            )
 
-    def test_default_output_path_is_sim_path_under_cwd(self, nf2ff):
-        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9)
+    def test_default_output_path_is_sim_path_under_cwd(self, nf2ff, sim_data):
+        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data)
 
         assert nf2ff.calls[0]["output_path"] == Path.cwd() / "Sim_Path"
+
+    def test_fdtd_efficiency_takes_the_accepted_power_at_freq(self, tmp_path):
+        """openEMS reports no Ploss, so the accepted power comes from the port:
+        the 2 W at 2.45 GHz, not the band's largest 4 W."""
+        source = FakeNF2FF(prad=0.5, with_ploss=False)
+        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+
+        result = SimTools.compute_nf2ff_3d(source, 2.45e9, band, tmp_path)
+
+        assert result.efficiency == pytest.approx(0.25)
+
+    def test_fem_efficiency_comes_from_ploss(self, tmp_path):
+        """With Prad = 0.75 and Ploss = 0.25 the efficiency is 75%, whatever
+        the port reports."""
+        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+
+        result = SimTools.compute_nf2ff_3d(FakeNF2FF(), 2.45e9, band, tmp_path)
+
+        assert result.efficiency == pytest.approx(0.75)
 
 
 # ---------------------------------------------------------------------
@@ -472,7 +516,7 @@ class TestPlot3d:
         assert self.saved(tmp_path, "3D_directivity.vtk").is_file()
 
     def test_gain_writes_a_vtk_mesh(self, far_field_3d, tmp_path, no_windows):
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0, tmp_path)
+        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
 
         assert self.saved(tmp_path, "3D_Gain.vtk").is_file()
 
@@ -509,19 +553,23 @@ class TestPlot3d:
     ):
         """With Prad = 0.75 and Ploss = 0.25 the efficiency is 75%, so the gain
         peak sits 10*log10(0.75) below the directivity peak."""
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0, tmp_path)
+        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
 
         mesh = pv.read(self.saved(tmp_path, "3D_Gain.vtk"))
         expected = 10 * np.log10(4.0) + 10 * np.log10(0.75)
         assert mesh["Gain (dBi)"].max() == pytest.approx(expected, abs=1e-6)
 
-    def test_gain_falls_back_to_input_power_without_ploss(self, tmp_path, no_windows):
-        """The openEMS box reports no Ploss, so efficiency has to come from the
-        port's input power instead."""
+    def test_gain_uses_the_input_power_at_freq_without_ploss(
+        self, tmp_path, no_windows
+    ):
+        """The openEMS box reports no Ploss, so efficiency comes from the
+        port's accepted power at the pattern frequency: 2 W, not the 4 W the
+        band peaks at."""
         source = FakeNF2FF(prad=0.5, with_ploss=False)
-        result = SimTools.compute_nf2ff_3d(source, 2.45e9, tmp_path)
+        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+        result = SimTools.compute_nf2ff_3d(source, 2.45e9, band, tmp_path)
 
-        SimTools.plot_3d_gain(result, 2.45e9, 2.0, tmp_path)
+        SimTools.plot_3d_gain(result, 2.45e9, tmp_path)
 
         mesh = pv.read(self.saved(tmp_path, "3D_Gain.vtk"))
         expected = 10 * np.log10(4.0) + 10 * np.log10(0.5 / 2.0)
@@ -535,7 +583,7 @@ class TestPlot3d:
 
     def test_each_plot_opens_one_window(self, far_field_3d, tmp_path, no_windows):
         SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0, tmp_path)
+        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
         SimTools.plot_3d_power(far_field_3d, 2.45e9, tmp_path)
 
         assert len(no_windows) == 3
@@ -560,7 +608,7 @@ class TestPlot3d:
         "plot",
         [
             lambda result, path: SimTools.plot_3d_directivity(result, 2.45e9, path),
-            lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, 1.0, path),
+            lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, path),
         ],
         ids=["directivity", "gain"],
     )
@@ -585,7 +633,7 @@ class TestPlot3d:
                 0.0,
             ),
             (
-                lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, 1.0, path),
+                lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, path),
                 "3D_Gain.vtk",
                 "Gain (dBi)",
                 10 * np.log10(0.75),
@@ -622,7 +670,7 @@ class TestPlot3d:
         """Calling both, as a script plotting both does, must not shift the
         second one."""
         SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0, tmp_path)
+        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
 
         directivity = pv.read(self.saved(tmp_path, "3D_directivity.vtk"))
         gain = pv.read(self.saved(tmp_path, "3D_Gain.vtk"))
@@ -831,7 +879,7 @@ class TestDefaultOutputPath:
         assert (self.sim_path() / "3D_plots" / "3D_directivity.vtk").is_file()
 
     def test_plot_3d_gain(self, far_field_3d, no_windows):
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, 1.0)
+        SimTools.plot_3d_gain(far_field_3d, 2.45e9)
 
         assert (self.sim_path() / "3D_plots" / "3D_Gain.vtk").is_file()
 

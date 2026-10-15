@@ -68,9 +68,11 @@ class FEMFarField:
         Azimuth angles of the grid, in radians.
     Ploss : NDArray
         Power lost in the materials, in watts, as a length-1 array. Only the
-        FEM backend reports this; ``Prad + Ploss`` is the accepted power, which
-        is what to pass as ``input_power`` to ``plot_3d_gain`` so that gain is
-        de-rated by the radiation efficiency.
+        FEM backend reports this; ``compute_nf2ff_3d`` uses ``Prad + Ploss``
+        as the accepted power for the radiation efficiency.
+    efficiency : float or None
+        Radiation efficiency ``Prad / (Prad + Ploss)``, set by
+        ``compute_nf2ff_3d``; ``None`` until then.
     """
 
     E_norm: NDArray
@@ -80,6 +82,7 @@ class FEMFarField:
     theta: NDArray
     phi: NDArray
     Ploss: NDArray
+    efficiency: float | None = None
 
 
 def compute_pattern(

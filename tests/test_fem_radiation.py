@@ -85,6 +85,14 @@ class TestFEMFarField:
         for name in ("E_norm", "Dmax", "Prad", "P_rad", "theta", "phi", "Ploss"):
             assert hasattr(ff, name)
 
+    def test_efficiency_is_unset_until_compute_nf2ff_3d_fills_it(self):
+        one = np.array([1.0])
+        ff = FEMFarField(
+            E_norm=one, Dmax=one, Prad=one, P_rad=one, theta=one, phi=one, Ploss=one
+        )
+
+        assert ff.efficiency is None
+
     @pytest.mark.needs_csxcad
     def test_ploss_is_the_fem_only_extra(self):
         """openEMS's nf2ff has no Ploss; the FEM one adds it so gain can be

@@ -1381,12 +1381,14 @@ class SimTools:
     def compute_nf2ff_3d(
         nf2ff: nf2ff,
         freq: float,
+        sim_data: SimData,
         output_path: Path | None = None,
         read_cached: bool = False,
     ) -> nf2ff_results:
         """
         Compute the 3D far-field radiation pattern over a full theta/phi
-        sweep (theta in [0, 180] deg, phi in [0, 360] deg, 2 deg steps).
+        sweep (theta in [0, 180] deg, phi in [0, 360] deg, 2 deg steps),
+        together with the radiation efficiency at ``freq``.
 
         The resulting far-field data can be used for visualization,
         directivity/gain/power analysis, and post-processing of antenna
@@ -1401,6 +1403,10 @@ class SimTools:
         freq : float
             Frequency (in Hz) at which the 3D far-field pattern is
             evaluated. Must be a scalar.
+        sim_data : SimData
+            The simulation results of the same run. The FDTD backend takes
+            the accepted power at ``freq`` from them; the FEM backend reports
+            its losses in the far-field result and does not use them.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
             Defaults to ``cwd / "Sim_Path"``.
@@ -1413,7 +1419,8 @@ class SimTools:
         nf2ff_results
             The NF2FF result object for the full theta/phi sweep, holding
             (among other fields) ``E_norm``, ``Dmax``, ``Prad``, ``theta``,
-            and ``phi``.
+            ``phi``, and ``efficiency``: the radiation efficiency
+            ``Prad / accepted power`` at ``freq``.
 
         Raises
         ------
@@ -1442,6 +1449,15 @@ class SimTools:
             outfile="nf2ff_3d.h5",
             verbose=0,
         )
+
+        # Prad is at freq, so the accepted power has to be taken at freq too
+        radiated_power = nf2ff_3d_result.Prad[0]
+        ploss = getattr(nf2ff_3d_result, "Ploss", None)
+        if ploss is not None:
+            accepted_power = radiated_power + ploss[0]  # FEM reports its losses
+        else:
+            accepted_power = np.interp(freq, sim_data.freqs, sim_data.input_power)
+        nf2ff_3d_result.efficiency = radiated_power / accepted_power
         return nf2ff_3d_result
 
     @staticmethod
@@ -1534,16 +1550,15 @@ class SimTools:
     def plot_3d_gain(
         nf2ff_3d_result: nf2ff_results,
         freq: float,
-        input_power: float,
         output_path: Path | None = None,
     ) -> None:
         """
         Plot the 3D gain pattern of an antenna at a specified frequency.
 
-        Visualizes the realized gain pattern (in dBi) of the antenna in 3D
-        space: gain is directivity (from ``compute_nf2ff_3d``) scaled by
-        the radiation efficiency ``Prad / input_power``. Saves the mesh
-        under ``output_path / "3D_plots"``.
+        Visualizes the gain pattern (in dBi) of the antenna in 3D space:
+        directivity scaled by the radiation efficiency that
+        ``compute_nf2ff_3d`` stored on the result. Saves the mesh under
+        ``output_path / "3D_plots"``.
 
         Parameters
         ----------
@@ -1551,10 +1566,7 @@ class SimTools:
             The 3D far-field result object returned by ``compute_nf2ff_3d``.
         freq : float
             The frequency (in Hz) the pattern was computed at. Used only
-            for plot/file labeling.
-        input_power : float
-            Input power at the port (same units as ``Prad``), used to
-            normalize directivity into realized gain.
+            for plot labeling.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
             Defaults to ``cwd / "Sim_Path"``.
@@ -1578,12 +1590,7 @@ class SimTools:
         max_directivity = nf2ff_3d_result.Dmax[0]
         directivity = max_directivity * e_field**2
 
-        ploss = getattr(nf2ff_3d_result, "Ploss", None)
-        if ploss is not None and (nf2ff_3d_result.Prad[0] + ploss[0]) > 0:
-            efficiency = nf2ff_3d_result.Prad[0] / (nf2ff_3d_result.Prad[0] + ploss[0])
-        else:
-            efficiency = nf2ff_3d_result.Prad[0] / (np.max(input_power))
-        gain = efficiency * directivity
+        gain = nf2ff_3d_result.efficiency * directivity
         gain_dbi = 10 * np.log10(gain)
 
         theta = nf2ff_3d_result.theta

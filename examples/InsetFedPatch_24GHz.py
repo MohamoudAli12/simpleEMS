@@ -70,7 +70,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         sim_data = patch.compute_sim_data(sim, port, output_path)
 
         nf2ff_3d_result = patch.compute_nf2ff_3d(
-            nf2ff, params.resonant_freq, output_path
+            nf2ff, params.resonant_freq, sim_data, output_path
         )
         patch.plot_s_param(sim_data.freqs, sim_data.s11)
         patch.plot_smith_chart(sim_data.freqs, sim_data.s11)
@@ -82,7 +82,6 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.plot_3d_gain(
             nf2ff_3d_result,
             params.resonant_freq,
-            sim_data.input_power,
             output_path,
         )
         patch.plot_3d_power(nf2ff_3d_result, params.resonant_freq, output_path)
