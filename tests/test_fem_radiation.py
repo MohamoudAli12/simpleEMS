@@ -887,6 +887,85 @@ class TestPatternMetadata:
 
 
 # ---------------------------------------------------------------------
+# calc_power
+# ---------------------------------------------------------------------
+class TestCalcPower:
+    """The powers behind the radiation efficiency, without a pattern."""
+
+    @pytest.fixture
+    def staged(self, tmp_path, monkeypatch):
+        """Stub the solve; the test supplies fem_mesh.json."""
+        solves = []
+
+        def fake_solve(pro, msh, workdir, freq, verbose=True):
+            solves.append(freq)
+            return ("e.pos", "h.pos", 0.25, 0.75)
+
+        monkeypatch.setattr(
+            fem_radiation.fem_solver, "solve_fields_and_power", fake_solve
+        )
+        return tmp_path, solves
+
+    def write_meta(self, path, pad, boundary="silver_muller"):
+        bbox = [0, 0, 0, 0.05, 0.05, 0.002]
+        meta = {
+            "boundary": boundary,
+            "pro_path": "p.pro",
+            "msh_path": "m.msh",
+            "bbox": bbox,
+            "domain_bbox": [bbox[i] - pad for i in range(3)]
+            + [bbox[3 + i] + pad for i in range(3)],
+        }
+        (path / "fem_mesh.json").write_text(json.dumps(meta))
+
+    def test_returns_the_radiated_and_lost_power(self, staged):
+        out, _solves = staged
+        self.write_meta(out, pad=0.25 * (C0 / 2.45e9))
+
+        assert FEMNF2FF().calc_power(out, 2.45e9) == (0.75, 0.25)
+
+    def test_needs_no_quarter_wavelength_of_air(self, staged):
+        """The radiated power comes from the port and the losses, not from a
+        Huygens surface, so air sized for 24 GHz still serves 22 GHz -- the
+        frequency CalcNF2FF refuses."""
+        out, solves = staged
+        self.write_meta(out, pad=0.25 * (C0 / 24.125e9))
+
+        FEMNF2FF().calc_power(out, 22.125e9)
+
+        assert solves == [22.125e9]
+
+    def test_reuses_the_powers_of_a_pattern_already_solved(self, staged, monkeypatch):
+        """The efficiency sweep often lands on the pattern frequency; that
+        solve already carried the powers."""
+        out, solves = staged
+        self.write_meta(out, pad=0.25 * (C0 / 2.45e9) * 1.5)
+        monkeypatch.setattr(
+            fem_radiation,
+            "compute_pattern",
+            lambda *args, **kwargs: (
+                np.linspace(0.0, math.pi, 5),
+                np.linspace(0.0, 2 * math.pi, 5),
+                np.ones((5, 5)),
+                3.0,
+            ),
+        )
+        calc = FEMNF2FF()
+        calc._pattern(str(out), 2.45e9)
+
+        assert calc.calc_power(out, 2.45e9) == (0.75, 0.25)
+        assert len(solves) == 1
+
+    def test_a_pec_box_is_refused(self, staged):
+        out, solves = staged
+        self.write_meta(out, pad=0.01, boundary="pec")
+
+        with pytest.raises(ValueError, match="no radiated power"):
+            FEMNF2FF().calc_power(out, 2.45e9)
+        assert solves == []
+
+
+# ---------------------------------------------------------------------
 # compute_pattern, against a real solve
 # ---------------------------------------------------------------------
 @pytest.mark.slow

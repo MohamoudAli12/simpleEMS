@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from typing import Literal, NamedTuple
 from collections.abc import Callable
 from dataclasses import fields
@@ -1594,6 +1595,182 @@ class SimTools:
             figure.suptitle(
                 f" Realized Gain at {freq_formatter(nf2ff_data.freq)}", fontsize=14
             )
+
+    @staticmethod
+    def plot_efficiency(
+        nf2ff: nf2ff,
+        sim_data: SimData,
+        freqs: NDArray | None = None,
+        num_points: int = 5,
+        output_path: Path | None = None,
+    ) -> NDArray:
+        """
+        Plot an antenna's radiation and total efficiency against frequency.
+
+        Efficiency only means something for a structure built to radiate, so
+        by default the plot samples ``num_points`` frequencies across the
+        antenna's -10 dB band: the run of frequencies around the S11 minimum
+        where ``|S11|`` stays below -10 dB. If S11 never gets that low, it
+        samples the whole simulated band instead.
+
+        The FDTD backend transforms every frequency in one pass over the
+        recorded near fields. The FEM backend needs one field solve per
+        frequency, which is why the default stays at a handful. The sphere uses a
+        5 deg grid: the radiated power is an integral over it, and a finer grid
+        changes it by far less than the solve itself is accurate to. Every
+        call recomputes the far field, so a changed design never reads the
+        previous run's results.
+
+        The radiation efficiency is ``Prad / accepted power``, as in
+        ``compute_nf2ff_data``. The total efficiency further derates it by the
+        port mismatch ``1 - |S11|^2``.
+
+        Parameters
+        ----------
+        nf2ff : object
+            The near-field-to-far-field (NF2FF) object containing the
+            simulation data.
+        sim_data : SimData
+            The simulation results of the same run, for the S11 and (FDTD
+            backend) the accepted power at each frequency.
+        freqs : NDArray, optional
+            Frequencies (in Hz) to evaluate the efficiency at. Defaults to
+            ``num_points`` evenly spaced frequencies across the -10 dB band.
+        num_points : int, optional
+            Number of frequencies to sample when ``freqs`` is not given.
+            Default is 5.
+        output_path : Path, optional
+            Path to the directory where the simulation result is saved.
+            Defaults to ``cwd / "Sim_Path"``.
+
+        Returns
+        -------
+        NDArray
+            Array of shape ``(3, N)``: the frequencies, the radiation
+            efficiency and the total efficiency, both as fractions.
+        """
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+
+        if freqs is None:
+            # Walk out from the S11 minimum while |S11| stays below -10 dB
+            matched = np.abs(sim_data.s11) < 10.0 ** (-10.0 / 20.0)
+            resonance_index = int(np.argmin(np.abs(sim_data.s11)))
+            low_index = high_index = resonance_index
+            if matched[resonance_index]:
+                while low_index > 0 and matched[low_index - 1]:
+                    low_index -= 1
+                while high_index < matched.size - 1 and matched[high_index + 1]:
+                    high_index += 1
+            # Unmatched, or matched at a single sample: take the whole band
+            if low_index == high_index:
+                low_index, high_index = 0, matched.size - 1
+            freqs = np.linspace(
+                sim_data.freqs[low_index], sim_data.freqs[high_index], num_points
+            )
+        freqs = np.atleast_1d(np.asarray(freqs, dtype=float))
+
+        from openEMS.nf2ff import nf2ff as openems_nf2ff
+
+        from .fem_solver import describe_solve, format_duration, last_solve
+
+        s11_magnitude = np.interp(freqs, sim_data.freqs, np.abs(sim_data.s11))
+        mismatch_efficiency = 1.0 - s11_magnitude**2
+        band_text = f"{freqs[0] / 1e9:.3f}-{freqs[-1] / 1e9:.3f} GHz"
+        started = time.perf_counter()
+
+        # openEMS takes the whole frequency array in one call and returns Prad
+        # per frequency. read_cached=False: a cached file from an earlier
+        # design would otherwise be read back as this one's result.
+        if isinstance(nf2ff, openems_nf2ff):
+            console.rule(
+                f"[info]Efficiency · {band_text} · {freqs.size} frequencies "
+                f"in one far-field transform[/info]"
+            )
+            sphere = nf2ff.CalcNF2FF(
+                output_path,
+                freqs,
+                np.arange(0, 181, 5),
+                np.arange(0, 361, 5),
+                read_cached=False,
+                outfile="nf2ff_efficiency.h5",
+                verbose=0,
+            )
+            accepted_power = np.interp(freqs, sim_data.freqs, sim_data.input_power)
+            radiation_efficiency = sphere.Prad / accepted_power
+            for index, freq in enumerate(freqs):
+                total = radiation_efficiency[index] * mismatch_efficiency[index]
+                console.print(
+                    f"[info]{index + 1:>3}/{freqs.size}  {freq / 1e9:8.4f} GHz  "
+                    f"radiation {100.0 * radiation_efficiency[index]:5.1f} %   "
+                    f"total {100.0 * total:5.1f} %[/info]"
+                )
+            console.rule(
+                f"[info]{freqs.size} frequencies in "
+                f"{format_duration(time.perf_counter() - started)}[/info]"
+            )
+        # The FEM adapter solves once per frequency for the powers alone: they
+        # come from the port and the losses, not the far field, so they need
+        # no pattern and hold below the frequency the air box was sized for.
+        # One aligned line per solve, as the FEM sweep prints its own.
+        else:
+            console.rule(
+                f"[info]Efficiency · {band_text} · {freqs.size} field solves[/info]"
+            )
+            radiation_efficiency = np.empty(freqs.size)
+            for index, freq in enumerate(freqs):
+                solve_started = time.perf_counter()
+                radiated_power, lost_power = nf2ff.calc_power(
+                    output_path, freq, verbose=False
+                )
+                radiation_efficiency[index] = radiated_power / (
+                    radiated_power + lost_power
+                )
+                elapsed = time.perf_counter() - started
+                left = (freqs.size - index - 1) * elapsed / (index + 1)
+                elapsed_text = f"elapsed {format_duration(elapsed)}"
+                left_text = f"~{format_duration(left)} left" if left > 0 else ""
+                total = radiation_efficiency[index] * mismatch_efficiency[index]
+                console.print(
+                    f"[info]{index + 1:>3}/{freqs.size}  {freq / 1e9:8.4f} GHz  "
+                    f"{format_duration(time.perf_counter() - solve_started):>7}  "
+                    f"{elapsed_text:<18}{left_text:<17}"
+                    f"radiation {100.0 * radiation_efficiency[index]:5.1f} %   "
+                    f"total {100.0 * total:5.1f} %[/info]"
+                )
+            size = describe_solve(last_solve())
+            console.rule(
+                f"[info]{freqs.size} solves in "
+                f"{format_duration(time.perf_counter() - started)}"
+                f"{f' · {size}' if size else ''}[/info]"
+            )
+
+        total_efficiency = radiation_efficiency * mismatch_efficiency
+
+        plt.figure()
+        for efficiency, label in [
+            (radiation_efficiency, "Radiation Efficiency"),
+            (total_efficiency, "Total Efficiency"),
+        ]:
+            lines = plt.plot(freqs, 100.0 * efficiency, marker="o", label=label)
+            cursor = themed_cursor(lines)
+            cursor.connect(
+                "add",
+                lambda sel, label=label: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\n"
+                    f"{label}={sel.target[1]:.1f} %"
+                ),
+            )
+
+        plt.gca().xaxis.set_major_formatter(freq_formatter)
+        plt.ylim(bottom=0.0)
+        plt.xlabel("Frequency")
+        plt.ylabel("Efficiency (%)")
+        plt.title("Efficiency vs Frequency")
+        plt.grid(True)
+        plt.legend()
+
+        return np.vstack([freqs, radiation_efficiency, total_efficiency])
 
     @staticmethod
     def plot_3d_directivity(

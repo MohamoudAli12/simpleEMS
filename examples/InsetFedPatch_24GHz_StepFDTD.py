@@ -39,6 +39,7 @@ SimTools.plot_impedance(sim_data.freqs, sim_data.z11)
 nf2ff_data = SimTools.compute_nf2ff_data(nf2ff, resonant_freq, sim_data)
 SimTools.plot_2d_directivity(nf2ff_data)
 SimTools.plot_2d_rad_pattern(nf2ff_data)
+SimTools.plot_efficiency(nf2ff, sim_data)
 SimTools.plot_3d_directivity(nf2ff_data)
 SimTools.plot_3d_gain(nf2ff_data)
 

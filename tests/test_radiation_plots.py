@@ -28,6 +28,7 @@ pytest.importorskip("CSXCAD")
 pytest.importorskip("openEMS")
 
 import pyvista as pv  # noqa: E402
+from openEMS.nf2ff import nf2ff as OpenEMSNF2FF  # noqa: E402
 
 from simpleEMS import sim_tools  # noqa: E402
 from simpleEMS.sim_tools import DumpType, SimData, SimTools  # noqa: E402
@@ -96,6 +97,11 @@ class FakeNF2FF:
             phi=np.deg2rad(phi_deg),
             Ploss=np.array([self.ploss]) if self.with_ploss else None,
         )
+
+    def calc_power(self, output_path, freq, verbose=True):
+        """The FEM adapter's pattern-free power solve."""
+        self.calls.append({"output_path": output_path, "freq": freq})
+        return self.prad, self.ploss
 
 
 def make_sim_data(freqs, input_power, s11=None):
@@ -660,6 +666,171 @@ class TestPlot2dGain:
         SimTools.plot_2d_gain(nf2ff_data, style=style)
 
         assert len(figures.gcf().axes[0].lines) == 1
+
+
+# ---------------------------------------------------------------------
+# plot_efficiency
+# ---------------------------------------------------------------------
+class FakeOpenEMSNF2FF(OpenEMSNF2FF):
+    """An openEMS NF2FF box that returns ``Prad`` for every requested
+    frequency, so the one-call FDTD path can be checked without a solve."""
+
+    def __init__(self, prad):
+        self.prad = np.asarray(prad, dtype=float)
+        self.calls = []
+
+    def CalcNF2FF(  # noqa: N802 - matches the openEMS method name
+        self,
+        output_path,
+        freq,
+        theta,
+        phi,
+        radius=1,
+        center=(0, 0, 0),
+        outfile=None,
+        read_cached=True,
+        verbose=0,
+    ):
+        self.calls.append(
+            {
+                "freq": np.atleast_1d(freq),
+                "outfile": outfile,
+                "read_cached": read_cached,
+            }
+        )
+        return FakeFarField(
+            E_norm=None, Dmax=None, Prad=self.prad, P_rad=None, theta=None, phi=None
+        )
+
+
+def resonant_band():
+    """A band whose S11 dips below -10 dB only between 2.44 and 2.46 GHz."""
+    freqs = np.linspace(2.4e9, 2.5e9, 11)
+    s11 = np.full(freqs.size, 0.9, dtype=complex)
+    s11[4:7] = [0.3, 0.05, 0.3]  # 2.44, 2.45, 2.46 GHz; -10 dB is 0.316
+    return make_sim_data(freqs, np.ones(freqs.size), s11=s11)
+
+
+class TestPlotEfficiency:
+    def test_fdtd_transforms_every_frequency_in_one_call(self, sim_data, tmp_path):
+        source = FakeOpenEMSNF2FF(prad=np.full(5, 0.5))
+
+        SimTools.plot_efficiency(source, sim_data, output_path=tmp_path)
+
+        (call,) = source.calls
+        assert call["freq"].size == 5
+
+    def test_samples_five_frequencies_across_the_ten_db_band_by_default(
+        self, nf2ff, tmp_path
+    ):
+        """Efficiency only matters where the antenna is matched, and every FEM
+        frequency is a field solve, so the default is a handful inside the
+        -10 dB band."""
+        SimTools.plot_efficiency(nf2ff, resonant_band(), output_path=tmp_path)
+
+        solved = [call["freq"] for call in nf2ff.calls]
+        assert solved == pytest.approx(np.linspace(2.44e9, 2.46e9, 5))
+
+    def test_an_unmatched_antenna_samples_the_whole_band(self, nf2ff, tmp_path):
+        """With no -10 dB band there is nothing to centre on."""
+        band = make_sim_data(
+            np.linspace(2.4e9, 2.5e9, 11),
+            np.ones(11),
+            s11=np.linspace(0.9, 0.5, 11),
+        )
+
+        SimTools.plot_efficiency(nf2ff, band, output_path=tmp_path)
+
+        solved = [call["freq"] for call in nf2ff.calls]
+        assert solved[0] == pytest.approx(2.4e9)
+        assert solved[-1] == pytest.approx(2.5e9)
+
+    def test_a_band_one_sample_wide_samples_the_whole_band(self, nf2ff, tmp_path):
+        """Five copies of one frequency would plot a single point."""
+        band = resonant_band()
+        band.s11[[4, 6]] = 0.9
+
+        SimTools.plot_efficiency(nf2ff, band, output_path=tmp_path)
+
+        solved = [call["freq"] for call in nf2ff.calls]
+        assert solved[0] == pytest.approx(2.4e9)
+        assert solved[-1] == pytest.approx(2.5e9)
+
+    def test_fdtd_never_reads_a_cached_result(self, sim_data, tmp_path):
+        """A cached file from an earlier design would otherwise come back as
+        this design's efficiency."""
+        source = FakeOpenEMSNF2FF(prad=np.full(5, 0.5))
+
+        SimTools.plot_efficiency(source, sim_data, output_path=tmp_path)
+
+        assert source.calls[0]["read_cached"] is False
+
+    def test_fdtd_keeps_the_sphere_compute_nf2ff_data_cached(self, sim_data, tmp_path):
+        source = FakeOpenEMSNF2FF(prad=np.full(5, 0.5))
+
+        SimTools.plot_efficiency(source, sim_data, output_path=tmp_path)
+
+        assert source.calls[0]["outfile"] != "nf2ff_3d.h5"
+
+    def test_fdtd_radiation_efficiency_takes_the_accepted_power_at_each_freq(
+        self, tmp_path
+    ):
+        source = FakeOpenEMSNF2FF(prad=[0.5, 0.5, 0.5])
+        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+
+        result = SimTools.plot_efficiency(
+            source, band, freqs=band.freqs, output_path=tmp_path
+        )
+
+        np.testing.assert_allclose(result[1], [0.5, 0.25, 0.125])
+
+    def test_fem_solves_each_frequency_on_its_own(self, nf2ff, sim_data, tmp_path):
+        """The FEM adapter takes one frequency per call."""
+        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
+
+        solved = [call["freq"] for call in nf2ff.calls]
+        assert solved == pytest.approx([2.4e9, 2.45e9, 2.5e9])
+
+    def test_fem_asks_for_the_powers_without_a_pattern(self, nf2ff, sim_data, tmp_path):
+        """A pattern needs a quarter-wavelength of air at every frequency,
+        which the low end of the band does not have."""
+        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
+
+        assert all("theta" not in call for call in nf2ff.calls)
+
+    def test_fem_solves_only_the_given_frequencies(self, nf2ff, sim_data, tmp_path):
+        SimTools.plot_efficiency(
+            nf2ff, sim_data, freqs=np.array([2.4e9, 2.5e9]), output_path=tmp_path
+        )
+
+        assert [call["freq"] for call in nf2ff.calls] == [2.4e9, 2.5e9]
+
+    def test_fem_radiation_efficiency_comes_from_ploss(self, nf2ff, sim_data, tmp_path):
+        """Prad = 0.75 and Ploss = 0.25 give 75% at every frequency."""
+        result = SimTools.plot_efficiency(
+            nf2ff, sim_data, num_points=3, output_path=tmp_path
+        )
+
+        np.testing.assert_allclose(result[1], 0.75)
+
+    def test_total_efficiency_derates_by_the_port_mismatch(self, tmp_path):
+        """|S11| = 0.5 reflects a quarter of the incident power."""
+        band = make_sim_data(
+            [2.4e9, 2.45e9, 2.5e9], [1.0, 1.0, 1.0], s11=[0.0, 0.5j, 0.0]
+        )
+
+        result = SimTools.plot_efficiency(
+            FakeNF2FF(), band, freqs=band.freqs, output_path=tmp_path
+        )
+
+        np.testing.assert_allclose(result[2], [0.75, 0.75 * 0.75, 0.75])
+
+    def test_draws_both_curves_in_percent(self, nf2ff, sim_data, tmp_path, figures):
+        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
+
+        radiation, total = figures.gcf().axes[0].lines
+        np.testing.assert_allclose(radiation.get_ydata(), 75.0)
+        np.testing.assert_allclose(total.get_ydata(), 75.0)
 
 
 # ---------------------------------------------------------------------

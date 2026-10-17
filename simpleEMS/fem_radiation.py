@@ -566,6 +566,62 @@ class FEMNF2FF:
             self._cache[key] = (theta_axis, phi_axis, u_grid, dir_db, p_rad, p_loss)
         return self._cache[key]
 
+    def calc_power(
+        self, output_path: str | Path, freq: float, verbose: bool = True
+    ) -> tuple[float, float]:
+        """
+        Solve for the radiated and lost power at ``freq``, without a pattern.
+
+        The radiated power is what the port accepts less what the materials
+        dissipate, so it needs no Huygens surface and no quarter-wavelength of
+        air around the structure. That lets the radiation efficiency be swept
+        below the frequency the air box was sized for, where
+        :meth:`CalcNF2FF` refuses to build a pattern.
+
+        Parameters
+        ----------
+        output_path : str | Path
+            Directory the simulation results were written to.
+        freq : float
+            Frequency to solve at, in Hz.
+        verbose : bool, optional
+            Report the solve as it runs. ``plot_efficiency`` turns this off and
+            prints one line per frequency of its own. Default ``True``.
+
+        Returns
+        -------
+        tuple[float, float]
+            ``(p_rad, p_loss)``: the radiated power and the power lost in the
+            dielectrics and conductors. Only their ratio is meaningful.
+
+        Raises
+        ------
+        ValueError
+            If the mesh was built with ``FEM_boundary='pec'``, where nothing
+            radiates.
+        """
+        output_path, freq = str(output_path), float(freq)
+        # A pattern already solved at this frequency carries the powers too
+        if (output_path, freq) in self._cache:
+            *_, p_rad, p_loss = self._cache[(output_path, freq)]
+            return p_rad, p_loss
+
+        meta = json.loads((Path(output_path) / _MESH_META).read_text())
+        if meta.get("boundary") == "pec":
+            raise ValueError(
+                "no radiated power under FEM_boundary='pec': the outer box is a "
+                "perfect conductor, so nothing radiates out of it. Re-run with "
+                "FEM_boundary='silver_muller' or 'pml' to compute the efficiency."
+            )
+        if verbose:
+            console.print(
+                f"[info]FEM power: solving fields at {freq / 1e9:.4f} GHz[/info]"
+            )
+        _, _, p_loss, p_rad = fem_solver.solve_fields_and_power(
+            meta["pro_path"], meta["msh_path"], output_path, freq, verbose=verbose
+        )
+        return p_rad, p_loss
+
     def CalcNF2FF(  # noqa: N802  (matches the openEMS nf2ff method name)
         self,
         output_path: str | Path,

@@ -469,6 +469,7 @@ def solve_fields_and_power(
     workdir: str | Path,
     freq: float,
     active: int = 1,
+    verbose: bool = True,
 ) -> tuple[str, str, float, float]:
     """
     Solve at one frequency and return the near fields and the powers together.
@@ -486,6 +487,8 @@ def solve_fields_and_power(
         Frequency to solve at, in Hz.
     active : int
         Number of the port to drive. Default ``1``.
+    verbose : bool
+        Report the solver's progress and how long it took. Default ``True``.
 
     Returns
     -------
@@ -506,6 +509,7 @@ def solve_fields_and_power(
         ["Get_Fields", "Get_Power"],
         resolution="AnalysisSinglePort",
         label=f"fields @ {freq / 1e9:.4f} GHz",
+        verbose=verbose,
     )
     outdir = Path(workdir).absolute() / "output"
 
