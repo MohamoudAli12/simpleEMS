@@ -178,6 +178,13 @@ class FakeNF2FF:
     def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):
         return FakeFarField(theta, phi)
 
+    # The efficiency curve: no sweep data, so it solves for the powers
+    def sweep_efficiency(self, output_path):
+        return None
+
+    def calc_power(self, output_path, freq, verbose=True):
+        return 0.75, 0.25
+
 
 SimTools.run_simulation = staticmethod(lambda *a, **k: None)
 SimTools.write_and_show_structure = staticmethod(lambda *a, **k: None)

@@ -63,6 +63,7 @@ class FakeNF2FF:
         self.ploss = ploss
         self.with_ploss = with_ploss
         self.calls = []
+        self.power_calls = []
 
     def CalcNF2FF(  # noqa: N802 - matches the openEMS method name
         self,
@@ -99,8 +100,9 @@ class FakeNF2FF:
         )
 
     def calc_power(self, output_path, freq, verbose=True):
-        """The FEM adapter's pattern-free power solve."""
-        self.calls.append({"output_path": output_path, "freq": freq})
+        """The FEM adapter's pattern-free power solve, recorded apart from
+        the far-field calls."""
+        self.power_calls.append({"output_path": output_path, "freq": freq})
         return self.prad, self.ploss
 
     # What the FEM sweep recorded: None, as from results that predate it,
@@ -718,13 +720,26 @@ def resonant_band():
     return make_sim_data(freqs, np.ones(freqs.size), s11=s11)
 
 
-class TestPlotEfficiency:
+def efficiency_calls(source):
+    """The far-field calls that went to the efficiency, not the pattern."""
+    return [call for call in source.calls if call["outfile"] == "nf2ff_efficiency.h5"]
+
+
+def curve_from(source, band, tmp_path, **options):
+    """The efficiency curve compute_nf2ff_data works out alongside the
+    pattern."""
+    return SimTools.compute_nf2ff_data(
+        source, 2.45e9, band, tmp_path, **options
+    ).efficiency_curve
+
+
+class TestEfficiencyCurve:
     def test_fdtd_transforms_every_frequency_in_one_call(self, sim_data, tmp_path):
         source = FakeOpenEMSNF2FF(prad=np.full(5, 0.5))
 
-        SimTools.plot_efficiency(source, sim_data, output_path=tmp_path)
+        curve_from(source, sim_data, tmp_path)
 
-        (call,) = source.calls
+        (call,) = efficiency_calls(source)
         assert call["freq"].size == 5
 
     def test_computes_five_frequencies_across_the_ten_db_band_by_default(
@@ -733,15 +748,15 @@ class TestPlotEfficiency:
         """Efficiency only matters where the antenna is matched, and every FEM
         frequency without sweep data is a field solve, so the default is a
         handful inside the -10 dB band."""
-        SimTools.plot_efficiency(nf2ff, resonant_band(), output_path=tmp_path)
+        curve_from(nf2ff, resonant_band(), tmp_path)
 
-        solved = [call["freq"] for call in nf2ff.calls]
+        solved = [call["freq"] for call in nf2ff.power_calls]
         assert solved == pytest.approx(np.linspace(2.44e9, 2.46e9, 5))
 
     def test_reports_a_smooth_curve_across_the_band_by_default(self, nf2ff, tmp_path):
-        result = SimTools.plot_efficiency(nf2ff, resonant_band(), output_path=tmp_path)
+        curve = curve_from(nf2ff, resonant_band(), tmp_path)
 
-        np.testing.assert_allclose(result[0], np.linspace(2.44e9, 2.46e9, 101))
+        np.testing.assert_allclose(curve.freqs, np.linspace(2.44e9, 2.46e9, 101))
 
     def test_an_unmatched_antenna_covers_the_whole_band(self, nf2ff, tmp_path):
         """With no -10 dB band there is nothing to centre on."""
@@ -751,9 +766,9 @@ class TestPlotEfficiency:
             s11=np.linspace(0.9, 0.5, 11),
         )
 
-        SimTools.plot_efficiency(nf2ff, band, output_path=tmp_path)
+        curve_from(nf2ff, band, tmp_path)
 
-        solved = [call["freq"] for call in nf2ff.calls]
+        solved = [call["freq"] for call in nf2ff.power_calls]
         assert solved[0] == pytest.approx(2.4e9)
         assert solved[-1] == pytest.approx(2.5e9)
 
@@ -762,27 +777,27 @@ class TestPlotEfficiency:
         band = resonant_band()
         band.s11[[4, 6]] = 0.9
 
-        SimTools.plot_efficiency(nf2ff, band, output_path=tmp_path)
+        curve_from(nf2ff, band, tmp_path)
 
-        solved = [call["freq"] for call in nf2ff.calls]
+        solved = [call["freq"] for call in nf2ff.power_calls]
         assert solved[0] == pytest.approx(2.4e9)
         assert solved[-1] == pytest.approx(2.5e9)
 
-    def test_fdtd_never_reads_a_cached_result(self, sim_data, tmp_path):
+    def test_fdtd_does_not_read_a_cached_result_by_default(self, sim_data, tmp_path):
         """A cached file from an earlier design would otherwise come back as
         this design's efficiency."""
         source = FakeOpenEMSNF2FF(prad=np.full(5, 0.5))
 
-        SimTools.plot_efficiency(source, sim_data, output_path=tmp_path)
+        curve_from(source, sim_data, tmp_path)
 
-        assert source.calls[0]["read_cached"] is False
+        assert efficiency_calls(source)[0]["read_cached"] is False
 
-    def test_fdtd_keeps_the_sphere_compute_nf2ff_data_cached(self, sim_data, tmp_path):
+    def test_fdtd_follows_read_cached_like_the_pattern(self, sim_data, tmp_path):
         source = FakeOpenEMSNF2FF(prad=np.full(5, 0.5))
 
-        SimTools.plot_efficiency(source, sim_data, output_path=tmp_path)
+        curve_from(source, sim_data, tmp_path, read_cached=True)
 
-        assert source.calls[0]["outfile"] != "nf2ff_3d.h5"
+        assert efficiency_calls(source)[0]["read_cached"] is True
 
     def test_fdtd_radiation_efficiency_takes_the_accepted_power_at_each_freq(
         self, tmp_path
@@ -790,50 +805,57 @@ class TestPlotEfficiency:
         source = FakeOpenEMSNF2FF(prad=[0.5, 0.5, 0.5])
         band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
 
-        result = SimTools.plot_efficiency(
-            source, band, freqs=band.freqs, output_path=tmp_path
+        curve = curve_from(source, band, tmp_path, efficiency_freqs=band.freqs)
+
+        np.testing.assert_allclose(curve.radiation, [0.5, 0.25, 0.125])
+
+    def test_the_pattern_efficiency_is_still_taken_at_freq(self, tmp_path):
+        """The curve adds to the single-frequency result; it does not
+        replace it."""
+        source = FakeOpenEMSNF2FF(prad=[0.5, 0.5, 0.5])
+        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+
+        result = SimTools.compute_nf2ff_data(
+            source, 2.45e9, band, tmp_path, efficiency_freqs=band.freqs
         )
 
-        np.testing.assert_allclose(result[1], [0.5, 0.25, 0.125])
+        assert result.efficiency == pytest.approx(0.25)
 
     def test_fem_solves_each_frequency_on_its_own(self, nf2ff, sim_data, tmp_path):
         """Without sweep data the FEM adapter takes one frequency per call."""
-        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
+        curve_from(nf2ff, sim_data, tmp_path, efficiency_points=3)
 
-        solved = [call["freq"] for call in nf2ff.calls]
+        solved = [call["freq"] for call in nf2ff.power_calls]
         assert solved == pytest.approx([2.4e9, 2.45e9, 2.5e9])
 
     def test_fem_asks_for_the_powers_without_a_pattern(self, nf2ff, sim_data, tmp_path):
         """A pattern needs a quarter-wavelength of air at every frequency,
-        which the low end of the band does not have."""
-        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
+        which the low end of the band does not have. The four far-field calls
+        are the pattern's own, all at freq."""
+        curve_from(nf2ff, sim_data, tmp_path, efficiency_points=3)
 
-        assert all("theta" not in call for call in nf2ff.calls)
+        assert [call["freq"] for call in nf2ff.calls] == [2.45e9] * 4
 
     def test_fem_solves_only_the_given_frequencies(self, nf2ff, sim_data, tmp_path):
-        SimTools.plot_efficiency(
-            nf2ff, sim_data, freqs=np.array([2.4e9, 2.5e9]), output_path=tmp_path
-        )
+        curve_from(nf2ff, sim_data, tmp_path, efficiency_freqs=np.array([2.4e9, 2.5e9]))
 
-        assert [call["freq"] for call in nf2ff.calls] == [2.4e9, 2.5e9]
+        assert [call["freq"] for call in nf2ff.power_calls] == [2.4e9, 2.5e9]
 
     def test_fem_radiation_efficiency_comes_from_ploss(self, nf2ff, sim_data, tmp_path):
         """Prad = 0.75 and Ploss = 0.25 give 75% at every frequency."""
-        result = SimTools.plot_efficiency(
-            nf2ff, sim_data, num_points=3, output_path=tmp_path
-        )
+        curve = curve_from(nf2ff, sim_data, tmp_path, efficiency_points=3)
 
-        np.testing.assert_allclose(result[1], 0.75)
+        np.testing.assert_allclose(curve.radiation, 0.75)
 
     def test_fem_uses_the_sweep_efficiency_without_solving(self, nf2ff, tmp_path):
         """Each sweep solve already recorded the efficiency, so no solve
         runs."""
         nf2ff.sweep = (np.linspace(2.4e9, 2.5e9, 10), np.full(10, 0.8))
 
-        result = SimTools.plot_efficiency(nf2ff, resonant_band(), output_path=tmp_path)
+        curve = curve_from(nf2ff, resonant_band(), tmp_path)
 
-        assert nf2ff.calls == []
-        np.testing.assert_allclose(result[1], 0.8)
+        assert nf2ff.power_calls == []
+        np.testing.assert_allclose(curve.radiation, 0.8)
 
     def test_fem_interpolates_the_sweep_points_smoothly(self, nf2ff, tmp_path):
         """A smooth efficiency sampled at the sweep's points is recovered
@@ -846,30 +868,28 @@ class TestPlotEfficiency:
         nf2ff.sweep = (sweep_freqs, efficiency_at(sweep_freqs))
         between = np.array([2.41e9, 2.435e9, 2.455e9, 2.49e9])
 
-        result = SimTools.plot_efficiency(
-            nf2ff, resonant_band(), freqs=between, output_path=tmp_path
-        )
+        curve = curve_from(nf2ff, resonant_band(), tmp_path, efficiency_freqs=between)
 
-        np.testing.assert_allclose(result[1], efficiency_at(between), atol=1e-9)
+        np.testing.assert_allclose(curve.radiation, efficiency_at(between), atol=1e-9)
 
-    def test_fem_solves_when_the_sweep_does_not_cover_the_range(
+    def test_fem_solves_when_the_sweep_does_not_cover_the_band(
         self, nf2ff, sim_data, tmp_path
     ):
         """Interpolating past the sweep's last solve would be extrapolation."""
         nf2ff.sweep = (np.array([2.42e9, 2.48e9]), np.array([0.8, 0.8]))
 
-        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
+        curve_from(nf2ff, sim_data, tmp_path, efficiency_points=3)
 
-        assert len(nf2ff.calls) == 3
+        assert len(nf2ff.power_calls) == 3
 
     def test_fem_solves_when_the_sweep_recorded_one_point(
         self, nf2ff, sim_data, tmp_path
     ):
         nf2ff.sweep = (np.array([2.45e9]), np.array([0.8]))
 
-        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
+        curve_from(nf2ff, sim_data, tmp_path, efficiency_points=3)
 
-        assert len(nf2ff.calls) == 3
+        assert len(nf2ff.power_calls) == 3
 
     def test_a_fit_that_overshoots_falls_back_to_straight_lines(
         self, nf2ff, tmp_path, monkeypatch
@@ -884,11 +904,11 @@ class TestPlotEfficiency:
         monkeypatch.setattr(scipy.interpolate, "AAA", spiking_fit)
         nf2ff.sweep = (np.array([2.4e9, 2.5e9]), np.array([0.7, 0.9]))
 
-        result = SimTools.plot_efficiency(
-            nf2ff, resonant_band(), freqs=np.array([2.45e9]), output_path=tmp_path
+        curve = curve_from(
+            nf2ff, resonant_band(), tmp_path, efficiency_freqs=np.array([2.45e9])
         )
 
-        np.testing.assert_allclose(result[1], [0.8])
+        np.testing.assert_allclose(curve.radiation, [0.8])
 
     def test_total_efficiency_derates_by_the_port_mismatch(self, tmp_path):
         """|S11| = 0.5 reflects a quarter of the incident power."""
@@ -896,37 +916,57 @@ class TestPlotEfficiency:
             [2.4e9, 2.45e9, 2.5e9], [1.0, 1.0, 1.0], s11=[0.0, 0.5j, 0.0]
         )
 
-        result = SimTools.plot_efficiency(
-            FakeNF2FF(), band, freqs=band.freqs, output_path=tmp_path
-        )
+        curve = curve_from(FakeNF2FF(), band, tmp_path, efficiency_freqs=band.freqs)
 
-        np.testing.assert_allclose(result[2], [0.75, 0.75 * 0.75, 0.75])
+        np.testing.assert_allclose(curve.total, [0.75, 0.75 * 0.75, 0.75])
 
-    def test_draws_both_curves_in_percent(self, nf2ff, sim_data, tmp_path, figures):
-        SimTools.plot_efficiency(nf2ff, sim_data, num_points=3, output_path=tmp_path)
-
-        radiation, _, total, _ = figures.gcf().axes[0].lines
-        np.testing.assert_allclose(radiation.get_ydata(), 75.0)
-        np.testing.assert_allclose(total.get_ydata(), 75.0)
-
-    def test_marks_only_the_computed_points_inside_the_plot(
-        self, nf2ff, tmp_path, figures
-    ):
+    def test_keeps_only_the_computed_points_inside_the_band(self, nf2ff, tmp_path):
         """The sweep's points reach past the -10 dB band; only those inside it
-        are marked, so the markers show what was solved and the line what was
-        interpolated."""
+        are kept for the markers, so they show what was solved and the line
+        what was interpolated."""
         nf2ff.sweep = (
             np.array([2.4e9, 2.44e9, 2.45e9, 2.46e9, 2.5e9]),
             np.full(5, 0.8),
         )
 
-        SimTools.plot_efficiency(nf2ff, resonant_band(), output_path=tmp_path)
+        curve = curve_from(nf2ff, resonant_band(), tmp_path)
 
-        _, radiation_markers, _, _ = figures.gcf().axes[0].lines
-        np.testing.assert_allclose(
-            radiation_markers.get_xdata(), [2.44e9, 2.45e9, 2.46e9]
-        )
+        np.testing.assert_allclose(curve.computed_freqs, [2.44e9, 2.45e9, 2.46e9])
+        np.testing.assert_allclose(curve.computed_radiation, 0.8)
+
+
+class TestPlotEfficiency:
+    def test_draws_both_curves_in_percent(self, nf2ff_data, figures):
+        """The fixture's FEM fake gives 75% everywhere, matched (S11 = 0)."""
+        SimTools.plot_efficiency(nf2ff_data)
+
+        radiation, _, total, _ = figures.gcf().axes[0].lines
+        np.testing.assert_allclose(radiation.get_ydata(), 75.0)
+        np.testing.assert_allclose(total.get_ydata(), 75.0)
+
+    def test_marks_the_computed_points(self, nf2ff_data, figures):
+        SimTools.plot_efficiency(nf2ff_data)
+
+        _, radiation_markers, _, total_markers = figures.gcf().axes[0].lines
+        curve = nf2ff_data.efficiency_curve
+        np.testing.assert_allclose(radiation_markers.get_xdata(), curve.computed_freqs)
+        np.testing.assert_allclose(total_markers.get_xdata(), curve.computed_freqs)
         assert radiation_markers.get_linestyle() == "None"
+
+    def test_solves_nothing(self, nf2ff, sim_data, tmp_path):
+        """Like every radiation plot, it only draws what compute_nf2ff_data
+        worked out."""
+        nf2ff_data = SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
+        calls_before = (len(nf2ff.calls), len(nf2ff.power_calls))
+
+        SimTools.plot_efficiency(nf2ff_data)
+
+        assert (len(nf2ff.calls), len(nf2ff.power_calls)) == calls_before
+
+    def test_the_axis_spans_zero_to_one_hundred_percent(self, nf2ff_data, figures):
+        SimTools.plot_efficiency(nf2ff_data)
+
+        assert figures.gca().get_ylim() == (0.0, 100.0)
 
 
 # ---------------------------------------------------------------------

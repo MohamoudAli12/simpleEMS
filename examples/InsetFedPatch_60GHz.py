@@ -88,7 +88,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.plot_impedance(sim_data.freqs, sim_data.z11)
         patch.plot_2d_directivity(nf2ff_data)
         patch.plot_2d_rad_pattern(nf2ff_data)
-        patch.plot_efficiency(nf2ff, sim_data, output_path=output_path)
+        patch.plot_efficiency(nf2ff_data)
         patch.plot_3d_directivity(nf2ff_data, output_path)
         patch.plot_3d_gain(nf2ff_data, output_path)
         patch.show_plots()
