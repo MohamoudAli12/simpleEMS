@@ -378,6 +378,19 @@ class TestTwoPort:
 
         assert content.count("PostOperation[Get_SParameters] ;") == 2
 
+    def test_losses_are_written_for_the_driven_port_only(self, two_port, tmp_path):
+        """The sweep reads the radiation efficiency off the first port's
+        solve. The second port's solve fills the S-matrix; its losses would
+        overwrite the driven port's with those of a port nobody drives."""
+        problem, mesh = two_port
+
+        analysis = resolution_block(write(problem, mesh, tmp_path), "Analysis")
+
+        assert analysis.count("PostOperation[Get_Power] ;") == 1
+        first_port, second_port = analysis.split("$ActivePort = 2")
+        assert "PostOperation[Get_Power] ;" in first_port
+        assert "PostOperation[Get_Power] ;" not in second_port
+
 
 # ---------------------------------------------------------------------
 # Boundary conditions and element order

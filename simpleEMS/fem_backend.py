@@ -1130,6 +1130,9 @@ def _sweep_from_meta(
     # extra getdp runs: V_<n>/I_<n> are written by the same Get_SParameters call
     # that already produces xS_<n> at each (freq, active-port) solve).
     vi_solved: dict[float, tuple[complex, complex]] = {}
+    # freq -> radiation efficiency of the reference port's solve. The same
+    # launch prints its losses (Get_Power), so this costs no solve either.
+    efficiency_solved: dict[float, float] = {}
 
     # One full FEM solve at a single frequency, producing the whole S-matrix.
     # A single getdp launch drives every port, reusing one factorisation, and
@@ -1184,6 +1187,33 @@ def _sweep_from_meta(
         v_rows = fem_solver.read_complex_rows(outdir / f"V_{ref_port}.txt", npt)
         i_rows = fem_solver.read_complex_rows(outdir / f"I_{ref_port}.txt", npt)
         vi_solved[freq] = (v_rows[idx[ref_port]], i_rows[idx[ref_port]])
+        # read_complex and _read_power_value quietly return zero for a missing
+        # file, which would turn into a division by zero or a 100 % efficiency.
+        power_files = [
+            outdir / "Ploss.txt",
+            outdir / f"Vdrv_{ref_port}.txt",
+            outdir / f"Idrv_{ref_port}.txt",
+        ]
+        missing = [file.name for file in power_files if not file.exists()]
+        if missing:
+            raise RuntimeError(
+                f"getdp wrote no {', '.join(missing)} at {freq / 1e9:.4f} GHz; "
+                f"the problem file predates the efficiency output. Re-run "
+                f"build_mesh to regenerate it."
+            )
+        voltage = fem_solver.read_complex(outdir / f"Vdrv_{ref_port}.txt")
+        current = fem_solver.read_complex(outdir / f"Idrv_{ref_port}.txt")
+        accepted_power = 0.5 * float(np.real(voltage * np.conj(current)))
+        lost_power = fem_solver._read_power_value(
+            outdir, "Ploss.txt"
+        ) + fem_solver._conductor_loss(outdir)
+        # Radiated power is what the port accepts less what the materials
+        # dissipate, as in fem_solver.solve_fields_and_power.
+        efficiency_solved[freq] = (
+            max(accepted_power - lost_power, 0.0) / accepted_power
+            if accepted_power > 0
+            else 0.0
+        )
         return s
 
     # The expensive part is each solve_at() call, so let the adaptive sweep pick
@@ -1222,6 +1252,10 @@ def _sweep_from_meta(
         ref_impedances=np.asarray(ref_impedances),
         port_voltage=v_dense,
         port_current=i_dense,
+        # The raw solve points, not a dense curve: plot_efficiency interpolates
+        # them onto whatever frequencies it is asked for.
+        efficiency_freqs=np.array(sorted(efficiency_solved)),
+        efficiency=np.array([efficiency_solved[f] for f in sorted(efficiency_solved)]),
     )
     if verbose:
         console.print(

@@ -41,7 +41,7 @@ from pathlib import Path
 # ----------------------------
 import matplotlib.pyplot as plt
 import pyvista as pv
-from matplotlib.ticker import EngFormatter
+from matplotlib.ticker import EngFormatter, MaxNLocator
 from PyQt6.QtCore import QCoreApplication
 from pysmithchart import S_PARAMETER
 from pyvistaqt import BackgroundPlotter
@@ -1608,18 +1608,31 @@ class SimTools:
         Plot an antenna's radiation and total efficiency against frequency.
 
         Efficiency only means something for a structure built to radiate, so
-        by default the plot samples ``num_points`` frequencies across the
-        antenna's -10 dB band: the run of frequencies around the S11 minimum
-        where ``|S11|`` stays below -10 dB. If S11 never gets that low, it
-        samples the whole simulated band instead.
+        by default the plot covers the antenna's -10 dB band: the run of
+        frequencies around the S11 minimum where ``|S11|`` stays below -10 dB.
+        If S11 never gets that low, it covers the whole simulated band.
 
-        The FDTD backend transforms every frequency in one pass over the
-        recorded near fields. The FEM backend needs one field solve per
-        frequency, which is why the default stays at a handful. The sphere uses a
-        5 deg grid: the radiated power is an integral over it, and a finer grid
-        changes it by far less than the solve itself is accurate to. Every
-        call recomputes the far field, so a changed design never reads the
-        previous run's results.
+        The efficiency is computed at a few frequencies, drawn as markers, and
+        a smooth curve is fitted through them:
+
+        - FDTD transforms ``num_points`` frequencies in one far-field pass over
+          the recorded near fields. Every frequency adds to that pass, so the
+          default stays at a handful.
+        - FEM reads the efficiency the sweep recorded at each of its solves,
+          which costs nothing. Results from before the sweep recorded it, or a
+          range reaching past the swept band, fall back to one field solve per
+          frequency at ``num_points`` frequencies.
+
+        The curve is a rational fit through the computed points, as the FEM
+        sweep fits its S-parameters. A smooth efficiency does not overshoot
+        its own samples by more than their spread, so a fit that does -- a
+        stray pole -- is replaced by straight lines between the points, with
+        a warning.
+
+        The FDTD sphere uses a 5 deg grid: the radiated power is an integral
+        over it, and a finer grid changes it by far less than the solve itself
+        is accurate to. Every call recomputes the far field, so a changed
+        design never reads the previous run's results.
 
         The radiation efficiency is ``Prad / accepted power``, as in
         ``compute_nf2ff_data``. The total efficiency further derates it by the
@@ -1634,11 +1647,13 @@ class SimTools:
             The simulation results of the same run, for the S11 and (FDTD
             backend) the accepted power at each frequency.
         freqs : NDArray, optional
-            Frequencies (in Hz) to evaluate the efficiency at. Defaults to
-            ``num_points`` evenly spaced frequencies across the -10 dB band.
+            Frequencies (in Hz) to report the efficiency at. FDTD, and the FEM
+            fallback, compute at exactly these; FEM with sweep data
+            interpolates onto them. Defaults to 101 points across the -10 dB
+            band.
         num_points : int, optional
-            Number of frequencies to sample when ``freqs`` is not given.
-            Default is 5.
+            Number of frequencies to compute at when ``freqs`` is not given.
+            Unused when the FEM sweep recorded the efficiency. Default is 5.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
             Defaults to ``cwd / "Sim_Path"``.
@@ -1647,7 +1662,8 @@ class SimTools:
         -------
         NDArray
             Array of shape ``(3, N)``: the frequencies, the radiation
-            efficiency and the total efficiency, both as fractions.
+            efficiency and the total efficiency, both as fractions, on
+            ``freqs`` or the 101 default points.
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
@@ -1665,94 +1681,179 @@ class SimTools:
             # Unmatched, or matched at a single sample: take the whole band
             if low_index == high_index:
                 low_index, high_index = 0, matched.size - 1
-            freqs = np.linspace(
-                sim_data.freqs[low_index], sim_data.freqs[high_index], num_points
-            )
-        freqs = np.atleast_1d(np.asarray(freqs, dtype=float))
+            band_low = sim_data.freqs[low_index]
+            band_high = sim_data.freqs[high_index]
+            curve_freqs = np.linspace(band_low, band_high, 101)
+            computed_freqs = np.linspace(band_low, band_high, num_points)
+        else:
+            curve_freqs = np.atleast_1d(np.asarray(freqs, dtype=float))
+            computed_freqs = curve_freqs
+            band_low, band_high = curve_freqs.min(), curve_freqs.max()
 
         from openEMS.nf2ff import nf2ff as openems_nf2ff
+        from scipy.interpolate import AAA
 
         from .fem_solver import describe_solve, format_duration, last_solve
 
-        s11_magnitude = np.interp(freqs, sim_data.freqs, np.abs(sim_data.s11))
-        mismatch_efficiency = 1.0 - s11_magnitude**2
-        band_text = f"{freqs[0] / 1e9:.3f}-{freqs[-1] / 1e9:.3f} GHz"
+        band_text = f"{band_low / 1e9:.3f}-{band_high / 1e9:.3f} GHz"
         started = time.perf_counter()
+        solved_one_by_one = False
+        from_sweep = False
 
         # openEMS takes the whole frequency array in one call and returns Prad
         # per frequency. read_cached=False: a cached file from an earlier
         # design would otherwise be read back as this one's result.
         if isinstance(nf2ff, openems_nf2ff):
             console.rule(
-                f"[info]Efficiency · {band_text} · {freqs.size} frequencies "
-                f"in one far-field transform[/info]"
+                f"[info]Efficiency · {band_text} · {computed_freqs.size} "
+                f"frequencies in one far-field transform[/info]"
             )
             sphere = nf2ff.CalcNF2FF(
                 output_path,
-                freqs,
+                computed_freqs,
                 np.arange(0, 181, 5),
                 np.arange(0, 361, 5),
                 read_cached=False,
                 outfile="nf2ff_efficiency.h5",
                 verbose=0,
             )
-            accepted_power = np.interp(freqs, sim_data.freqs, sim_data.input_power)
-            radiation_efficiency = sphere.Prad / accepted_power
-            for index, freq in enumerate(freqs):
-                total = radiation_efficiency[index] * mismatch_efficiency[index]
-                console.print(
-                    f"[info]{index + 1:>3}/{freqs.size}  {freq / 1e9:8.4f} GHz  "
-                    f"radiation {100.0 * radiation_efficiency[index]:5.1f} %   "
-                    f"total {100.0 * total:5.1f} %[/info]"
-                )
-            console.rule(
-                f"[info]{freqs.size} frequencies in "
-                f"{format_duration(time.perf_counter() - started)}[/info]"
+            accepted_power = np.interp(
+                computed_freqs, sim_data.freqs, sim_data.input_power
             )
-        # The FEM adapter solves once per frequency for the powers alone: they
-        # come from the port and the losses, not the far field, so they need
-        # no pattern and hold below the frequency the air box was sized for.
-        # One aligned line per solve, as the FEM sweep prints its own.
+            computed_efficiency = sphere.Prad / accepted_power
         else:
-            console.rule(
-                f"[info]Efficiency · {band_text} · {freqs.size} field solves[/info]"
-            )
-            radiation_efficiency = np.empty(freqs.size)
-            for index, freq in enumerate(freqs):
-                solve_started = time.perf_counter()
-                radiated_power, lost_power = nf2ff.calc_power(
-                    output_path, freq, verbose=False
+            sweep = nf2ff.sweep_efficiency(output_path)
+            # The sweep's points cover the plot only if they bracket it
+            if (
+                sweep is not None
+                and sweep[0].size >= 2
+                and sweep[0][0] <= band_low
+                and sweep[0][-1] >= band_high
+            ):
+                computed_freqs, computed_efficiency = sweep
+                from_sweep = True
+                console.rule(
+                    f"[info]Efficiency · {band_text} · interpolated from the "
+                    f"FEM sweep's {computed_freqs.size} solves[/info]"
                 )
-                radiation_efficiency[index] = radiated_power / (
-                    radiated_power + lost_power
+            # The powers come from the port and the losses, not the far
+            # field, so they need no pattern and hold below the frequency the
+            # air box was sized for. One aligned line per solve, as the FEM
+            # sweep prints its own.
+            else:
+                solved_one_by_one = True
+                console.rule(
+                    f"[info]Efficiency · {band_text} · "
+                    f"{computed_freqs.size} field solves[/info]"
                 )
-                elapsed = time.perf_counter() - started
-                left = (freqs.size - index - 1) * elapsed / (index + 1)
-                elapsed_text = f"elapsed {format_duration(elapsed)}"
-                left_text = f"~{format_duration(left)} left" if left > 0 else ""
-                total = radiation_efficiency[index] * mismatch_efficiency[index]
+                computed_efficiency = np.empty(computed_freqs.size)
+                for index, freq in enumerate(computed_freqs):
+                    solve_started = time.perf_counter()
+                    radiated_power, lost_power = nf2ff.calc_power(
+                        output_path, freq, verbose=False
+                    )
+                    computed_efficiency[index] = radiated_power / (
+                        radiated_power + lost_power
+                    )
+                    elapsed = time.perf_counter() - started
+                    left = (computed_freqs.size - index - 1) * elapsed / (index + 1)
+                    elapsed_text = f"elapsed {format_duration(elapsed)}"
+                    left_text = f"~{format_duration(left)} left" if left > 0 else ""
+                    total = computed_efficiency[index] * (
+                        1.0 - np.interp(freq, sim_data.freqs, np.abs(sim_data.s11)) ** 2
+                    )
+                    console.print(
+                        f"[info]{index + 1:>3}/{computed_freqs.size}  "
+                        f"{freq / 1e9:8.4f} GHz  "
+                        f"{format_duration(time.perf_counter() - solve_started):>7}  "
+                        f"{elapsed_text:<18}{left_text:<17}"
+                        f"radiation {100.0 * computed_efficiency[index]:5.1f} %   "
+                        f"total {100.0 * total:5.1f} %[/info]"
+                    )
+                size = describe_solve(last_solve())
+                console.rule(
+                    f"[info]{computed_freqs.size} solves in "
+                    f"{format_duration(time.perf_counter() - started)}"
+                    f"{f' · {size}' if size else ''}[/info]"
+                )
+
+        computed_mismatch = 1.0 - (
+            np.interp(computed_freqs, sim_data.freqs, np.abs(sim_data.s11)) ** 2
+        )
+        # The sweep's points can reach past the plotted band; list and mark
+        # only the ones inside it
+        shown = (computed_freqs >= band_low) & (computed_freqs <= band_high)
+        if not solved_one_by_one:
+            for count, index in enumerate(np.flatnonzero(shown), 1):
+                total = computed_efficiency[index] * computed_mismatch[index]
                 console.print(
-                    f"[info]{index + 1:>3}/{freqs.size}  {freq / 1e9:8.4f} GHz  "
-                    f"{format_duration(time.perf_counter() - solve_started):>7}  "
-                    f"{elapsed_text:<18}{left_text:<17}"
-                    f"radiation {100.0 * radiation_efficiency[index]:5.1f} %   "
+                    f"[info]{count:>3}/{shown.sum()}  "
+                    f"{computed_freqs[index] / 1e9:8.4f} GHz  "
+                    f"radiation {100.0 * computed_efficiency[index]:5.1f} %   "
                     f"total {100.0 * total:5.1f} %[/info]"
                 )
-            size = describe_solve(last_solve())
-            console.rule(
-                f"[info]{freqs.size} solves in "
-                f"{format_duration(time.perf_counter() - started)}"
-                f"{f' · {size}' if size else ''}[/info]"
-            )
+            if from_sweep:
+                console.rule(
+                    f"[info]{shown.sum()} of the {computed_freqs.size} sweep "
+                    f"solves fall in this band · no extra solves[/info]"
+                )
+            else:
+                console.rule(
+                    f"[info]{computed_freqs.size} frequencies in "
+                    f"{format_duration(time.perf_counter() - started)}[/info]"
+                )
 
-        total_efficiency = radiation_efficiency * mismatch_efficiency
+        # Rational fit in a [-1, 1] frequency coordinate, which AAA is far
+        # better conditioned in than raw Hz
+        if computed_freqs.size >= 2:
+            fit_low, fit_high = computed_freqs.min(), computed_freqs.max()
+            fit = AAA(
+                (2.0 * computed_freqs - (fit_low + fit_high)) / (fit_high - fit_low),
+                computed_efficiency,
+            )
+            radiation_efficiency = np.real(
+                fit((2.0 * curve_freqs - (fit_low + fit_high)) / (fit_high - fit_low))
+            )
+            spread = np.ptp(computed_efficiency) + 0.01
+            if not (
+                np.all(np.isfinite(radiation_efficiency))
+                and radiation_efficiency.min() >= computed_efficiency.min() - spread
+                and radiation_efficiency.max() <= computed_efficiency.max() + spread
+            ):
+                console.print(
+                    "[warning]Efficiency: the rational fit overshoots the "
+                    "computed points; drawing straight lines between them "
+                    "instead.[/warning]"
+                )
+                radiation_efficiency = np.interp(
+                    curve_freqs, computed_freqs, computed_efficiency
+                )
+        else:
+            radiation_efficiency = np.interp(
+                curve_freqs, computed_freqs, computed_efficiency
+            )
+        radiation_efficiency = np.clip(radiation_efficiency, 0.0, 1.0)
+
+        s11_magnitude = np.interp(curve_freqs, sim_data.freqs, np.abs(sim_data.s11))
+        total_efficiency = radiation_efficiency * (1.0 - s11_magnitude**2)
 
         plt.figure()
-        for efficiency, label in [
-            (radiation_efficiency, "Radiation Efficiency"),
-            (total_efficiency, "Total Efficiency"),
+        for curve, computed, label in [
+            (radiation_efficiency, computed_efficiency, "Radiation Efficiency"),
+            (
+                total_efficiency,
+                computed_efficiency * computed_mismatch,
+                "Total Efficiency",
+            ),
         ]:
-            lines = plt.plot(freqs, 100.0 * efficiency, marker="o", label=label)
+            lines = plt.plot(curve_freqs, 100.0 * curve, label=label)
+            plt.plot(
+                computed_freqs[shown],
+                100.0 * computed[shown],
+                linestyle="none",
+                marker="o",
+                color=lines[0].get_color(),
+            )
             cursor = themed_cursor(lines)
             cursor.connect(
                 "add",
@@ -1763,14 +1864,16 @@ class SimTools:
             )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
-        plt.ylim(bottom=0.0)
+        # A narrow band in GHz makes long tick labels; five keep them apart
+        plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=5))
+        plt.ylim(0.0, 100.0)
         plt.xlabel("Frequency")
         plt.ylabel("Efficiency (%)")
         plt.title("Efficiency vs Frequency")
         plt.grid(True)
         plt.legend()
 
-        return np.vstack([freqs, radiation_efficiency, total_efficiency])
+        return np.vstack([curve_freqs, radiation_efficiency, total_efficiency])
 
     @staticmethod
     def plot_3d_directivity(

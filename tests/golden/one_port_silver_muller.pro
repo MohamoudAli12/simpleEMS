@@ -123,6 +123,7 @@ Resolution {
       Evaluate[ $ActivePort = 1 ] ;
       Generate[A] ; Solve[A] ;
       PostOperation[Get_SParameters] ;
+      PostOperation[Get_Power] ;
     }
   }
   // One port only, driven by the ACTIVE_PORT constant, keeping the solution for

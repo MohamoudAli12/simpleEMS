@@ -966,6 +966,49 @@ class TestCalcPower:
 
 
 # ---------------------------------------------------------------------
+# sweep_efficiency
+# ---------------------------------------------------------------------
+class TestSweepEfficiency:
+    """The efficiency the FEM sweep recorded at its own solves."""
+
+    def write_meta(self, path, boundary="silver_muller"):
+        (path / "fem_mesh.json").write_text(json.dumps({"boundary": boundary}))
+
+    def test_reads_the_recorded_points(self, tmp_path):
+        self.write_meta(tmp_path)
+        np.savez(
+            tmp_path / "fem_sparams.npz",
+            efficiency_freqs=np.array([2.4e9, 2.5e9]),
+            efficiency=np.array([0.8, 0.82]),
+        )
+
+        freqs, efficiency = FEMNF2FF().sweep_efficiency(tmp_path)
+
+        np.testing.assert_array_equal(freqs, [2.4e9, 2.5e9])
+        np.testing.assert_array_equal(efficiency, [0.8, 0.82])
+
+    def test_results_from_before_the_sweep_recorded_it_give_none(self, tmp_path):
+        """The caller then solves for the powers instead."""
+        self.write_meta(tmp_path)
+        np.savez(tmp_path / "fem_sparams.npz", freqs=np.array([2.4e9]))
+
+        assert FEMNF2FF().sweep_efficiency(tmp_path) is None
+
+    def test_no_sweep_results_give_none(self, tmp_path):
+        self.write_meta(tmp_path)
+
+        assert FEMNF2FF().sweep_efficiency(tmp_path) is None
+
+    def test_a_pec_box_is_refused(self, tmp_path):
+        """The sweep's numbers exist under a PEC box too, but nothing
+        radiates, so they mean nothing."""
+        self.write_meta(tmp_path, boundary="pec")
+
+        with pytest.raises(ValueError, match="no radiated power"):
+            FEMNF2FF().sweep_efficiency(tmp_path)
+
+
+# ---------------------------------------------------------------------
 # compute_pattern, against a real solve
 # ---------------------------------------------------------------------
 @pytest.mark.slow

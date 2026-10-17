@@ -319,6 +319,33 @@ class TestFemPipeline:
 
         assert np.mean(np.abs(data.s21)) > np.mean(np.abs(data.s11))
 
+    def test_the_sweep_records_the_efficiency_at_every_solve(self, solved):
+        """Each solve prints the driven port's losses, so the efficiency
+        comes with the S-parameters at no solve of its own."""
+        _sim, params, _ports, out, _data = solved
+
+        with np.load(out / "fem_sparams.npz") as sweep:
+            freqs, efficiency = sweep["efficiency_freqs"], sweep["efficiency"]
+
+        assert freqs.size >= params.FEM_num_solve_points
+        assert np.all(np.diff(freqs) > 0)
+        assert np.all((efficiency >= 0.0) & (efficiency <= 1.0))
+
+    def test_the_recorded_efficiency_matches_a_separate_solve(self, solved):
+        """The sweep's efficiency is the same quantity calc_power solves for
+        on its own; at a solve frequency the two agree to rounding."""
+        from simpleEMS.fem_radiation import FEMNF2FF
+
+        _sim, _params, _ports, out, _data = solved
+        with np.load(out / "fem_sparams.npz") as sweep:
+            freq, recorded = sweep["efficiency_freqs"][1], sweep["efficiency"][1]
+
+        radiated_power, lost_power = FEMNF2FF().calc_power(out, freq, verbose=False)
+
+        assert recorded == pytest.approx(
+            radiated_power / (radiated_power + lost_power), abs=1e-9
+        )
+
 
 # ---------------------------------------------------------------------
 # Cross-backend

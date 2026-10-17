@@ -42,6 +42,9 @@ from .fem_materials import C0
 __all__ = ["FEMNF2FF"]
 
 _MESH_META = "fem_mesh.json"
+# Same name as fem_backend._SPARAMS, spelled out: importing fem_backend would
+# pull CSXCAD and CadQuery into the far-field path
+_SWEEP_RESULTS = "fem_sparams.npz"
 
 # CutBox places nodes exactly on the box faces, so this only absorbs float noise.
 _PLANE_TOL = 1e-12
@@ -621,6 +624,49 @@ class FEMNF2FF:
             meta["pro_path"], meta["msh_path"], output_path, freq, verbose=verbose
         )
         return p_rad, p_loss
+
+    def sweep_efficiency(
+        self, output_path: str | Path
+    ) -> tuple[NDArray, NDArray] | None:
+        """
+        Read the radiation efficiency the FEM sweep recorded at its solves.
+
+        Each sweep solve prints the driven port's losses with its
+        S-parameters, so the efficiency at those frequencies costs no solve of
+        its own. Interpolate between them rather than solving again.
+
+        Parameters
+        ----------
+        output_path : str | Path
+            Directory the simulation results were written to.
+
+        Returns
+        -------
+        tuple[NDArray, NDArray] | None
+            ``(freqs, efficiency)`` at the sweep's solve frequencies, in
+            ascending order, or ``None`` when the results predate the
+            efficiency output and :meth:`calc_power` has to solve instead.
+
+        Raises
+        ------
+        ValueError
+            If the mesh was built with ``FEM_boundary='pec'``, where nothing
+            radiates.
+        """
+        meta = json.loads((Path(output_path) / _MESH_META).read_text())
+        if meta.get("boundary") == "pec":
+            raise ValueError(
+                "no radiated power under FEM_boundary='pec': the outer box is a "
+                "perfect conductor, so nothing radiates out of it. Re-run with "
+                "FEM_boundary='silver_muller' or 'pml' to compute the efficiency."
+            )
+        sweep_file = Path(output_path) / _SWEEP_RESULTS
+        if not sweep_file.exists():
+            return None
+        with np.load(sweep_file) as sweep:
+            if "efficiency" not in sweep:
+                return None
+            return sweep["efficiency_freqs"], sweep["efficiency"]
 
     def CalcNF2FF(  # noqa: N802  (matches the openEMS nf2ff method name)
         self,

@@ -98,10 +98,15 @@ def write_problem(
     # once and rebuild just the right-hand side for each subsequent port.
     resolution_lines = ["CreateDir[Str[myDir]] ;", *gmsh_reads]
     if port_numbers:
+        # The driven port's losses ride along with its S-parameters, so the
+        # sweep carries the radiation efficiency without a solve of its own.
+        # Only this first port: the others are solved to fill the S-matrix,
+        # not as the antenna being driven.
         resolution_lines += [
             f"      Evaluate[ $ActivePort = {active_default} ] ;",
             "      Generate[A] ; Solve[A] ;",
             "      PostOperation[Get_SParameters] ;",
+            "      PostOperation[Get_Power] ;",
         ]
         for number in port_numbers[1:]:
             resolution_lines += [
