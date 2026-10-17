@@ -20,7 +20,9 @@ BAND = np.linspace(2.0e9, 3.0e9, 201)
 resonant_frequencies = st.floats(min_value=2.1e9, max_value=2.9e9)
 quality_factors = st.floats(min_value=5.0, max_value=200.0)
 budgets = st.integers(min_value=4, max_value=14)
-finite_parts = st.floats(min_value=-10.0, max_value=10.0)
+# Subnormals are no S-parameter a solve produces, and normalising by a
+# subnormal singular value overflows to inf, which LAPACK cannot decompose
+finite_parts = st.floats(min_value=-10.0, max_value=10.0, allow_subnormal=False)
 
 
 def _resonator(resonant_frequency: float, quality_factor: float):
