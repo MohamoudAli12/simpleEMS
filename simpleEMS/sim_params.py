@@ -77,7 +77,7 @@ class SimParams:
     min_trace_spacing_mm : float, optional
         Minimum manufacturable trace spacing in millimeters. Default is ``0.089``.
     num_points : int
-        Number of frequency points for post-processing. Default is ``1000``.
+        Number of frequency points for post-processing. Default is ``1001``.
         For the FEM backend this is the number of interpolated output points the
         smooth S-parameter curve is evaluated at (not the number of solves).
     backend_engine : str, optional
@@ -252,7 +252,7 @@ class SimParams:
     substrate_cells: int = 7
 
     unit: float = 1e-3  # mm
-    num_points: int = 1000
+    num_points: int = 1001
 
     backend_engine: str = "FDTD"
     simulation_box: NDArray | None = None

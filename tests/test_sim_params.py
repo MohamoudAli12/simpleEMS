@@ -532,7 +532,7 @@ class TestAbstractProperties:
 class TestDefaults:
     def test_documented_defaults(self, params):
         assert params.unit == 1e-3
-        assert params.num_points == 1000
+        assert params.num_points == 1001
         assert params.substrate_cells == 7
         assert params.copper_thickness_mm == 0.035
         assert params.min_trace_width_mm == 0.1
