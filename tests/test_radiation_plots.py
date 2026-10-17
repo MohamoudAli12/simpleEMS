@@ -98,12 +98,13 @@ class FakeNF2FF:
         )
 
 
-def make_sim_data(freqs, input_power):
-    """A ``SimData`` carrying only what ``compute_nf2ff_3d`` reads."""
+def make_sim_data(freqs, input_power, s11=None):
+    """A ``SimData`` carrying only what ``compute_nf2ff_data`` reads. S11
+    defaults to a perfect match, so the mismatch efficiency is 1."""
     zeros = np.zeros(len(freqs), dtype=complex)
     return SimData(
         freqs=np.asarray(freqs, dtype=float),
-        s11=zeros,
+        s11=zeros if s11 is None else np.asarray(s11, dtype=complex),
         s21=None,
         s31=None,
         s41=None,
@@ -127,9 +128,9 @@ def sim_data():
 
 
 @pytest.fixture
-def far_field_3d(nf2ff, sim_data, tmp_path):
-    """What ``compute_nf2ff_3d`` hands to the 3D plots."""
-    return SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
+def nf2ff_data(nf2ff, sim_data, tmp_path):
+    """What ``compute_nf2ff_data`` hands to every radiation plot."""
+    return SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
 
 
 @pytest.fixture
@@ -167,117 +168,190 @@ def figures():
 
 
 # ---------------------------------------------------------------------
+# compute_nf2ff_data
+# ---------------------------------------------------------------------
+class TestComputeNF2FFData:
+    def test_solves_the_sphere_and_the_three_principal_cuts(
+        self, nf2ff, sim_data, tmp_path
+    ):
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
+
+        sphere, xz_cut, yz_cut, xy_cut = nf2ff.calls
+        assert sphere["theta"][0] == 0 and sphere["theta"][-1] == 180
+        assert sphere["phi"][0] == 0 and sphere["phi"][-1] == 360
+        # xz cut: theta swept at phi = 0
+        assert xz_cut["phi"].tolist() == [0]
+        # yz cut: theta swept at phi = 90
+        assert yz_cut["phi"].tolist() == [90]
+        # xy cut: phi swept at theta = 90
+        assert xy_cut["theta"].tolist() == [90]
+
+    def test_the_sphere_grid_is_two_degree_steps(self, nf2ff, sim_data, tmp_path):
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
+
+        sphere = nf2ff.calls[0]
+        assert sphere["theta"].size == 91
+        assert sphere["phi"].size == 181
+
+    @pytest.mark.parametrize(
+        ("call_index", "swept"),
+        [(1, "theta"), (2, "theta"), (3, "phi")],
+        ids=["xz", "yz", "xy"],
+    )
+    def test_each_cut_sweeps_a_full_circle_in_fine_steps(
+        self, nf2ff, sim_data, tmp_path, call_index, swept
+    ):
+        """The beamwidth is read off the sampled curve, so the cut has to be
+        fine enough to place the -3 dB crossing accurately."""
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
+
+        angles = nf2ff.calls[call_index][swept]
+        assert angles.min() == -180.0
+        assert angles.max() == 180.0
+        assert np.diff(angles).max() == pytest.approx(0.1)
+
+    def test_each_solve_writes_its_own_file(self, nf2ff, sim_data, tmp_path):
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
+
+        outfiles = [call["outfile"] for call in nf2ff.calls]
+        assert outfiles == [
+            "nf2ff_3d.h5",
+            "nf2ff_xz.h5",
+            "nf2ff_yz.h5",
+            "nf2ff_xy.h5",
+        ]
+
+    def test_carries_the_frequency(self, nf2ff_data):
+        assert nf2ff_data.freq == 2.45e9
+
+    def test_read_cached_is_passed_through(self, nf2ff, sim_data, tmp_path):
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path, read_cached=True)
+
+        assert all(call["read_cached"] for call in nf2ff.calls)
+
+    def test_the_output_path_is_passed_through(self, nf2ff, sim_data, tmp_path):
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
+
+        assert all(call["output_path"] == tmp_path for call in nf2ff.calls)
+
+    def test_default_output_path_is_sim_path_under_cwd(self, nf2ff, sim_data):
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data)
+
+        assert nf2ff.calls[0]["output_path"] == Path.cwd() / "Sim_Path"
+
+    def test_an_array_of_frequencies_is_rejected(self, nf2ff, sim_data, tmp_path):
+        """One far field is one frequency; an array would silently use the
+        first."""
+        with pytest.raises(TypeError, match="only one frequency"):
+            SimTools.compute_nf2ff_data(
+                nf2ff, np.array([2.4e9, 2.5e9]), sim_data, tmp_path
+            )
+
+    def test_fdtd_efficiency_takes_the_accepted_power_at_freq(self, tmp_path):
+        """openEMS reports no Ploss, so the accepted power comes from the port:
+        the 2 W at 2.45 GHz, not the band's largest 4 W."""
+        source = FakeNF2FF(prad=0.5, with_ploss=False)
+        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+
+        result = SimTools.compute_nf2ff_data(source, 2.45e9, band, tmp_path)
+
+        assert result.efficiency == pytest.approx(0.25)
+
+    def test_fem_efficiency_comes_from_ploss(self, tmp_path):
+        """With Prad = 0.75 and Ploss = 0.25 the efficiency is 75%, whatever
+        the port reports."""
+        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+
+        result = SimTools.compute_nf2ff_data(FakeNF2FF(), 2.45e9, band, tmp_path)
+
+        assert result.efficiency == pytest.approx(0.75)
+
+    def test_mismatch_efficiency_takes_s11_at_freq(self, tmp_path):
+        """|S11| = 0.5 at 2.45 GHz reflects a quarter of the incident power,
+        whatever S11 is elsewhere in the band."""
+        band = make_sim_data(
+            [2.4e9, 2.45e9, 2.5e9], [1.0, 1.0, 1.0], s11=[0.9, 0.5j, 0.9]
+        )
+
+        result = SimTools.compute_nf2ff_data(FakeNF2FF(), 2.45e9, band, tmp_path)
+
+        assert result.mismatch_efficiency == pytest.approx(0.75)
+
+
+# ---------------------------------------------------------------------
 # plot_2d_rad_pattern
 # ---------------------------------------------------------------------
 class TestPlot2dRadPattern:
-    def test_opens_one_figure_with_three_polar_axes(self, nf2ff, tmp_path, figures):
+    def test_opens_one_figure_with_three_polar_axes(self, nf2ff_data, figures):
         """The xz, yz and xy cuts are drawn side by side in one figure."""
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         assert len(figures.get_fignums()) == 1
         assert len(figures.gcf().axes) == 3
 
-    def test_every_axis_is_polar(self, nf2ff, tmp_path, figures):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+    def test_every_axis_is_polar(self, nf2ff_data, figures):
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         assert all(ax.name == "polar" for ax in figures.gcf().axes)
 
-    def test_asks_for_all_three_principal_planes(self, nf2ff, tmp_path):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
-
-        xz_cut, yz_cut, xy_cut = nf2ff.calls
-        # xz cut: theta swept at phi = 0
-        assert xz_cut["phi"].tolist() == [0]
-        assert xz_cut["theta"].min() == -180.0
-        # yz cut: theta swept at phi = 90
-        assert yz_cut["phi"].tolist() == [90]
-        assert yz_cut["theta"].min() == -180.0
-        # xy cut: phi swept at theta = 90
-        assert xy_cut["theta"].tolist() == [90]
-        assert xy_cut["phi"].min() == -180.0
-
-    def test_each_cut_writes_its_own_file(self, nf2ff, tmp_path):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
-
-        outfiles = [call["outfile"] for call in nf2ff.calls]
-        assert outfiles == ["nf2ff_xz.h5", "nf2ff_yz.h5", "nf2ff_xy.h5"]
-
-    def test_sweeps_a_full_circle(self, nf2ff, tmp_path):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
-
-        theta = nf2ff.calls[0]["theta"]
-        assert theta.min() == -180.0
-        assert theta.max() == 180.0
-
-    def test_the_pattern_is_normalised_to_its_peak(self, nf2ff, tmp_path, figures):
+    def test_the_pattern_is_normalised_to_its_peak(self, nf2ff_data, figures):
         """A polar cut is always plotted relative to its own maximum, so the
         peak sits at 0 dB whatever the absolute field level was."""
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         ydata = figures.gcf().axes[0].lines[0].get_ydata()
         assert np.max(ydata) == pytest.approx(0.0)
 
-    def test_the_broadside_peak_is_at_theta_zero(self, nf2ff, tmp_path, figures):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+    def test_the_broadside_peak_is_at_theta_zero(self, nf2ff_data, figures):
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         line = figures.gcf().axes[0].lines[0]
         peak_theta = np.rad2deg(line.get_xdata()[np.argmax(line.get_ydata())])
         assert peak_theta == pytest.approx(0.0)
 
-    def test_each_cut_is_labelled(self, nf2ff, tmp_path, figures):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+    def test_each_cut_is_labelled(self, nf2ff_data, figures):
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         labels = [ax.lines[0].get_label() for ax in figures.gcf().axes]
         assert labels == ["xz-plane", "yz-plane", "xy-plane"]
 
-    def test_the_radial_axis_spans_the_dynamic_range(self, nf2ff, tmp_path, figures):
+    def test_the_radial_axis_spans_the_dynamic_range(self, nf2ff_data, figures):
         """The axis is anchored to the peak, not to the pattern minimum, so an
         omnidirectional cut draws as a circle instead of filling the plot."""
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path, dynamic_range_db=20)
+        SimTools.plot_2d_rad_pattern(nf2ff_data, dynamic_range_db=20)
 
         for ax in figures.gcf().axes:
             assert ax.get_ylim() == pytest.approx((-20.0, 0.0))
 
-    def test_deep_nulls_clip_at_the_axis_floor(self, nf2ff, tmp_path, figures):
+    def test_deep_nulls_clip_at_the_axis_floor(self, nf2ff_data, figures):
         """The fake pattern has a true null at theta = 180 degrees; it must
         land on the floor rather than wrap through the centre."""
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         ydata = figures.gcf().axes[0].lines[0].get_ydata()
         assert np.min(ydata) == pytest.approx(-30.0)
 
-    def test_the_frequency_is_in_the_title(self, nf2ff, tmp_path, figures):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+    def test_the_frequency_is_in_the_title(self, nf2ff_data, figures):
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         assert "2.45" in figures.gcf()._suptitle.get_text()
 
-    def test_zero_is_north_and_angles_run_clockwise(self, nf2ff, tmp_path, figures):
+    def test_zero_is_north_and_angles_run_clockwise(self, nf2ff_data, figures):
         """Antenna convention: theta = 0 points up the page."""
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
         for ax in figures.gcf().axes:
             assert ax.get_theta_offset() == pytest.approx(np.pi / 2)
             assert ax.get_theta_direction() == -1
 
-    def test_an_array_of_frequencies_is_rejected(self, nf2ff, tmp_path):
-        """One cut is one frequency; an array would silently plot the first."""
-        with pytest.raises(TypeError, match="only one frequency"):
-            SimTools.plot_2d_rad_pattern(nf2ff, np.array([2.4e9, 2.5e9]), tmp_path)
+    def test_solves_nothing_itself(self, nf2ff, nf2ff_data, figures):
+        """The far field was solved once by compute_nf2ff_data; the plot only
+        reads it."""
+        calls_before = len(nf2ff.calls)
 
-    def test_read_cached_is_passed_through(self, nf2ff, tmp_path):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path, read_cached=True)
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
 
-        assert all(call["read_cached"] for call in nf2ff.calls)
-
-    def test_the_output_path_is_passed_through(self, nf2ff, tmp_path):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9, tmp_path)
-
-        assert nf2ff.calls[0]["output_path"] == tmp_path
-
-    def test_default_output_path_is_sim_path_under_cwd(self, nf2ff):
-        SimTools.plot_2d_rad_pattern(nf2ff, 2.45e9)
-
-        assert nf2ff.calls[0]["output_path"] == Path.cwd() / "Sim_Path"
+        assert len(nf2ff.calls) == calls_before
 
 
 # ---------------------------------------------------------------------
@@ -320,6 +394,32 @@ class BackwardNF2FF(FakeNF2FF):
         )
 
 
+class OffPlaneNF2FF(FakeNF2FF):
+    """The broadside pattern scaled by ``(1 + sin(phi)^2) / 2``: full strength
+    in the yz-plane but half of it in the xz-plane, so the xz cut misses the
+    sphere's peak by 6 dB."""
+
+    def CalcNF2FF(self, output_path, freq, theta, phi, **kwargs):  # noqa: N802
+        theta_deg = np.atleast_1d(np.asarray(theta, dtype=float))
+        phi_deg = np.atleast_1d(np.asarray(phi, dtype=float))
+        theta_part = np.cos(np.deg2rad(theta_deg) / 2.0)[:, None] ** 2
+        phi_part = (1.0 + np.sin(np.deg2rad(phi_deg))[None, :] ** 2) / 2.0
+        e_norm = theta_part * phi_part
+        return FakeFarField(
+            E_norm=e_norm,
+            Dmax=np.array([4.0]),
+            Prad=np.array([0.75]),
+            P_rad=e_norm**2,
+            theta=np.deg2rad(theta_deg),
+            phi=np.deg2rad(phi_deg),
+            Ploss=np.array([0.25]),
+        )
+
+
+def far_field_from(source, sim_data, tmp_path):
+    return SimTools.compute_nf2ff_data(source, 2.45e9, sim_data, tmp_path)
+
+
 def hpbw_annotation(figures):
     return next(
         t.get_text() for t in figures.gcf().axes[0].texts if "HPBW" in t.get_text()
@@ -327,20 +427,13 @@ def hpbw_annotation(figures):
 
 
 class TestPlot2dDirectivity:
-    def test_opens_a_polar_and_a_cartesian_figure_by_default(
-        self, nf2ff, tmp_path, figures
-    ):
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
+    def test_opens_a_polar_and_a_cartesian_figure_by_default(self, nf2ff_data, figures):
+        SimTools.plot_2d_directivity(nf2ff_data)
 
         figure_numbers = figures.get_fignums()
         assert len(figure_numbers) == 2
         assert figures.figure(figure_numbers[0]).axes[0].name == "polar"
         assert figures.figure(figure_numbers[1]).axes[0].name == "rectilinear"
-
-    def test_both_views_share_one_far_field_solve(self, nf2ff, tmp_path):
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
-
-        assert len(nf2ff.calls) == 1
 
     @pytest.mark.parametrize(
         ("style", "projection"),
@@ -348,37 +441,50 @@ class TestPlot2dDirectivity:
         ids=["polar", "cartesian"],
     )
     def test_a_single_style_opens_one_figure(
-        self, nf2ff, tmp_path, figures, style, projection
+        self, nf2ff_data, figures, style, projection
     ):
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
+        SimTools.plot_2d_directivity(nf2ff_data, style=style)
 
         assert len(figures.get_fignums()) == 1
         assert figures.gcf().axes[0].name == projection
 
-    def test_an_unknown_style_is_rejected(self, nf2ff, tmp_path):
+    def test_an_unknown_style_is_rejected(self, nf2ff_data):
         with pytest.raises(ValueError, match="style must be"):
-            SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style="smith")
+            SimTools.plot_2d_directivity(nf2ff_data, style="smith")
 
     @pytest.mark.parametrize(
         "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
     )
-    def test_the_peak_is_the_max_directivity(self, nf2ff, tmp_path, figures, style):
-        """The curve is the normalised pattern lifted by Dmax, so its peak is
-        Dmax in dBi -- 10*log10(4) = 6.02 dBi here."""
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
+    def test_the_peak_is_the_max_directivity(self, nf2ff_data, figures, style):
+        """The curve is the pattern lifted by Dmax, so its peak is Dmax in
+        dBi -- 10*log10(4) = 6.02 dBi here."""
+        SimTools.plot_2d_directivity(nf2ff_data, style=style)
 
         ydata = figures.gcf().axes[0].lines[0].get_ydata()
         assert np.max(ydata) == pytest.approx(10 * np.log10(4.0), abs=1e-6)
+
+    def test_a_cut_that_misses_the_main_lobe_sits_below_dmax(
+        self, sim_data, tmp_path, figures
+    ):
+        """The cut is referenced to the sphere's peak, not its own: an xz
+        field at half the sphere's peak sits 6 dB under Dmax, at 0 dBi."""
+        nf2ff_data = far_field_from(OffPlaneNF2FF(), sim_data, tmp_path)
+
+        SimTools.plot_2d_directivity(nf2ff_data, style="cartesian")
+
+        ydata = figures.gcf().axes[0].lines[0].get_ydata()
+        expected = 10 * np.log10(4.0) + 20 * np.log10(0.5)
+        assert np.max(ydata) == pytest.approx(expected, abs=1e-6)
 
     @pytest.mark.parametrize(
         "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
     )
     def test_the_computed_beamwidth_matches_the_pattern(
-        self, nf2ff, tmp_path, figures, style
+        self, nf2ff_data, figures, style
     ):
         """cos^2(theta/2) falls to -3 dB at theta = +-65.4 deg, so the
         half-power beamwidth is about 131 deg."""
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
+        SimTools.plot_2d_directivity(nf2ff_data, style=style)
 
         value = float(hpbw_annotation(figures).split("=")[1].split("°")[0])
         assert value == pytest.approx(130.8, abs=1.0)
@@ -386,8 +492,8 @@ class TestPlot2dDirectivity:
     @pytest.mark.parametrize(
         "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
     )
-    def test_the_main_lobe_direction_is_reported(self, nf2ff, tmp_path, figures, style):
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path, style=style)
+    def test_the_main_lobe_direction_is_reported(self, nf2ff_data, figures, style):
+        SimTools.plot_2d_directivity(nf2ff_data, style=style)
 
         annotation = hpbw_annotation(figures)
         direction = float(annotation.split("Main Lobe Direction =")[1].split("°")[0])
@@ -396,10 +502,14 @@ class TestPlot2dDirectivity:
     @pytest.mark.parametrize(
         "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
     )
-    def test_an_omnidirectional_cut_has_no_beamwidth(self, tmp_path, figures, style):
+    def test_an_omnidirectional_cut_has_no_beamwidth(
+        self, sim_data, tmp_path, figures, style
+    ):
         """An isotropic pattern never drops 3 dB, so no beamwidth exists; the
         plot still reports the main lobe but leaves the HPBW out."""
-        SimTools.plot_2d_directivity(IsotropicNF2FF(), 2.45e9, tmp_path, style=style)
+        nf2ff_data = far_field_from(IsotropicNF2FF(), sim_data, tmp_path)
+
+        SimTools.plot_2d_directivity(nf2ff_data, style=style)
 
         texts = [t.get_text() for t in figures.gcf().axes[0].texts]
         assert any("Main Lobe Direction" in t for t in texts)
@@ -408,23 +518,27 @@ class TestPlot2dDirectivity:
     @pytest.mark.parametrize(
         "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
     )
-    def test_the_beamwidth_wraps_through_180_degrees(self, tmp_path, figures, style):
+    def test_the_beamwidth_wraps_through_180_degrees(
+        self, sim_data, tmp_path, figures, style
+    ):
         """The backward lobe's beamwidth matches the broadside case of about
         131 deg, even though its -3 dB crossings straddle +-180 deg."""
-        SimTools.plot_2d_directivity(BackwardNF2FF(), 2.45e9, tmp_path, style=style)
+        nf2ff_data = far_field_from(BackwardNF2FF(), sim_data, tmp_path)
+
+        SimTools.plot_2d_directivity(nf2ff_data, style=style)
 
         value = float(hpbw_annotation(figures).split("=")[1].split("°")[0])
         assert value == pytest.approx(130.8, abs=1.0)
 
     def test_cartesian_beam_edges_fold_back_into_the_theta_range(
-        self, tmp_path, figures
+        self, sim_data, tmp_path, figures
     ):
         """A beam straddling +-180 deg has an edge past 180 deg; the cartesian
         view folds it back so both edge markers land on the plotted axis, one
         near each end."""
-        SimTools.plot_2d_directivity(
-            BackwardNF2FF(), 2.45e9, tmp_path, style="cartesian"
-        )
+        nf2ff_data = far_field_from(BackwardNF2FF(), sim_data, tmp_path)
+
+        SimTools.plot_2d_directivity(nf2ff_data, style="cartesian")
 
         ax = figures.gcf().axes[0]
         vertical_x = [
@@ -436,71 +550,116 @@ class TestPlot2dDirectivity:
         assert all(-180.0 <= x <= 180.0 for x in vertical_x)
         assert edges == pytest.approx([-114.6, 114.6], abs=1.0)
 
-    def test_an_array_of_frequencies_is_rejected(self, nf2ff, tmp_path):
-        with pytest.raises(TypeError, match="only one frequency"):
-            SimTools.plot_2d_directivity(nf2ff, np.array([2.4e9, 2.5e9]), tmp_path)
+    def test_the_frequency_is_in_the_title(self, nf2ff_data, figures):
+        SimTools.plot_2d_directivity(nf2ff_data, style="polar")
 
-    def test_uses_a_finer_sweep_than_the_pattern_plot(self, nf2ff, tmp_path):
-        """The beamwidth is read off the sampled curve, so the grid has to be
-        fine enough to place the -3 dB crossing accurately."""
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9, tmp_path)
-
-        theta = nf2ff.calls[0]["theta"]
-        assert np.diff(theta).max() == pytest.approx(0.1)
+        assert "2.45" in figures.gcf()._suptitle.get_text()
 
 
 # ---------------------------------------------------------------------
-# compute_nf2ff_3d
+# plot_2d_gain
 # ---------------------------------------------------------------------
-class TestComputeNF2FF3d:
-    def test_sweeps_the_full_sphere(self, nf2ff, sim_data, tmp_path):
-        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
+class TestPlot2dGain:
+    def test_opens_a_polar_and_a_cartesian_figure_by_default(self, nf2ff_data, figures):
+        SimTools.plot_2d_gain(nf2ff_data)
 
-        call = nf2ff.calls[0]
-        assert call["theta"][0] == 0 and call["theta"][-1] == 180
-        assert call["phi"][0] == 0 and call["phi"][-1] == 360
+        figure_numbers = figures.get_fignums()
+        assert len(figure_numbers) == 2
+        assert figures.figure(figure_numbers[0]).axes[0].name == "polar"
+        assert figures.figure(figure_numbers[1]).axes[0].name == "rectilinear"
 
-    def test_grid_is_two_degree_steps(self, nf2ff, sim_data, tmp_path):
-        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
+    @pytest.mark.parametrize(
+        ("style", "projection"),
+        [("polar", "polar"), ("cartesian", "rectilinear")],
+        ids=["polar", "cartesian"],
+    )
+    def test_a_single_style_opens_one_figure(
+        self, nf2ff_data, figures, style, projection
+    ):
+        SimTools.plot_2d_gain(nf2ff_data, style=style)
 
-        call = nf2ff.calls[0]
-        assert call["theta"].size == 91
-        assert call["phi"].size == 181
+        assert len(figures.get_fignums()) == 1
+        assert figures.gcf().axes[0].name == projection
 
-    def test_returns_the_far_field_result(self, nf2ff, sim_data, tmp_path):
-        result = SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data, tmp_path)
+    def test_an_unknown_style_is_rejected(self, nf2ff_data):
+        with pytest.raises(ValueError, match="style must be"):
+            SimTools.plot_2d_gain(nf2ff_data, style="smith")
 
-        assert result.E_norm.shape == (91, 181)
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_fem_peak_is_dmax_scaled_by_the_efficiency(
+        self, nf2ff_data, figures, style
+    ):
+        """Prad = 0.75 and Ploss = 0.25 give 75% efficiency, so the peak is
+        10*log10(0.75 * 4) = 4.77 dBi."""
+        SimTools.plot_2d_gain(nf2ff_data, style=style)
 
-    def test_an_array_of_frequencies_is_rejected(self, nf2ff, sim_data, tmp_path):
-        with pytest.raises(TypeError, match="only one frequency"):
-            SimTools.compute_nf2ff_3d(
-                nf2ff, np.array([2.4e9, 2.5e9]), sim_data, tmp_path
-            )
+        ydata = figures.gcf().axes[0].lines[0].get_ydata()
+        assert np.max(ydata) == pytest.approx(10 * np.log10(3.0), abs=1e-6)
 
-    def test_default_output_path_is_sim_path_under_cwd(self, nf2ff, sim_data):
-        SimTools.compute_nf2ff_3d(nf2ff, 2.45e9, sim_data)
-
-        assert nf2ff.calls[0]["output_path"] == Path.cwd() / "Sim_Path"
-
-    def test_fdtd_efficiency_takes_the_accepted_power_at_freq(self, tmp_path):
-        """openEMS reports no Ploss, so the accepted power comes from the port:
-        the 2 W at 2.45 GHz, not the band's largest 4 W."""
+    def test_fdtd_efficiency_takes_the_accepted_power_at_freq(self, tmp_path, figures):
+        """openEMS reports no Ploss: Prad = 0.5 W over the 2 W accepted at
+        2.45 GHz is 25%, so the peak is 10*log10(0.25 * 4) = 0 dBi."""
         source = FakeNF2FF(prad=0.5, with_ploss=False)
         band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+        nf2ff_data = far_field_from(source, band, tmp_path)
 
-        result = SimTools.compute_nf2ff_3d(source, 2.45e9, band, tmp_path)
+        SimTools.plot_2d_gain(nf2ff_data, style="cartesian")
 
-        assert result.efficiency == pytest.approx(0.25)
+        ydata = figures.gcf().axes[0].lines[0].get_ydata()
+        assert np.max(ydata) == pytest.approx(0.0, abs=1e-6)
 
-    def test_fem_efficiency_comes_from_ploss(self, tmp_path):
-        """With Prad = 0.75 and Ploss = 0.25 the efficiency is 75%, whatever
-        the port reports."""
-        band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
+    def test_the_peak_is_derated_by_the_port_mismatch(self, nf2ff, tmp_path, figures):
+        """|S11| = 0.5 lets 75% of the incident power in, on top of the 75%
+        radiation efficiency: 10*log10(4 * 0.75 * 0.75) = 3.52 dBi."""
+        band = make_sim_data(
+            [2.4e9, 2.45e9, 2.5e9], [1.0, 1.0, 1.0], s11=[0.5, 0.5, 0.5]
+        )
+        nf2ff_data = far_field_from(nf2ff, band, tmp_path)
 
-        result = SimTools.compute_nf2ff_3d(FakeNF2FF(), 2.45e9, band, tmp_path)
+        SimTools.plot_2d_gain(nf2ff_data, style="cartesian")
 
-        assert result.efficiency == pytest.approx(0.75)
+        ydata = figures.gcf().axes[0].lines[0].get_ydata()
+        assert np.max(ydata) == pytest.approx(10 * np.log10(2.25), abs=1e-6)
+
+    def test_a_cut_that_misses_the_main_lobe_sits_below_the_peak_gain(
+        self, sim_data, tmp_path, figures
+    ):
+        """An xz field at half the sphere's peak sits 6 dB under the 4.77 dBi
+        peak gain."""
+        nf2ff_data = far_field_from(OffPlaneNF2FF(), sim_data, tmp_path)
+
+        SimTools.plot_2d_gain(nf2ff_data, style="cartesian")
+
+        ydata = figures.gcf().axes[0].lines[0].get_ydata()
+        expected = 10 * np.log10(3.0) + 20 * np.log10(0.5)
+        assert np.max(ydata) == pytest.approx(expected, abs=1e-6)
+
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_reports_the_main_lobe_without_a_beamwidth(
+        self, nf2ff_data, figures, style
+    ):
+        """The efficiency shifts the curve without reshaping it, so the
+        beamwidth would repeat the directivity plot's and is left out."""
+        SimTools.plot_2d_gain(nf2ff_data, style=style)
+
+        (annotation,) = [t.get_text() for t in figures.gcf().axes[0].texts]
+        direction = float(annotation.split("Main Lobe Direction =")[1].split("°")[0])
+        magnitude = float(annotation.split("Main Lobe Magnitude =")[1].split("dBi")[0])
+        assert direction == pytest.approx(0.0)
+        assert magnitude == pytest.approx(10 * np.log10(3.0), abs=0.01)
+        assert "HPBW" not in annotation
+
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_draws_only_the_gain_curve(self, nf2ff_data, figures, style):
+        SimTools.plot_2d_gain(nf2ff_data, style=style)
+
+        assert len(figures.gcf().axes[0].lines) == 1
 
 
 # ---------------------------------------------------------------------
@@ -510,49 +669,47 @@ class TestPlot3d:
     def saved(self, tmp_path, name):
         return tmp_path / "3D_plots" / name
 
-    def test_directivity_writes_a_vtk_mesh(self, far_field_3d, tmp_path, no_windows):
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
+    def test_directivity_writes_a_vtk_mesh(self, nf2ff_data, tmp_path, no_windows):
+        SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
 
         assert self.saved(tmp_path, "3D_directivity.vtk").is_file()
 
-    def test_gain_writes_a_vtk_mesh(self, far_field_3d, tmp_path, no_windows):
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
+    def test_gain_writes_a_vtk_mesh(self, nf2ff_data, tmp_path, no_windows):
+        SimTools.plot_3d_gain(nf2ff_data, tmp_path)
 
-        assert self.saved(tmp_path, "3D_Gain.vtk").is_file()
+        assert self.saved(tmp_path, "3D_Realized_Gain.vtk").is_file()
 
-    def test_the_mesh_matches_the_angular_grid(
-        self, far_field_3d, tmp_path, no_windows
-    ):
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
+    def test_the_mesh_matches_the_angular_grid(self, nf2ff_data, tmp_path, no_windows):
+        SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
 
         mesh = pv.read(self.saved(tmp_path, "3D_directivity.vtk"))
         assert mesh.n_points == 91 * 181
 
     def test_the_directivity_scalar_is_named_for_the_colour_bar(
-        self, far_field_3d, tmp_path, no_windows
+        self, nf2ff_data, tmp_path, no_windows
     ):
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
+        SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
 
         mesh = pv.read(self.saved(tmp_path, "3D_directivity.vtk"))
         assert "Directivity (dBi)" in mesh.array_names
 
-    def test_the_directivity_peak_is_dmax(self, far_field_3d, tmp_path, no_windows):
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
+    def test_the_directivity_peak_is_dmax(self, nf2ff_data, tmp_path, no_windows):
+        SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
 
         mesh = pv.read(self.saved(tmp_path, "3D_directivity.vtk"))
         peak = mesh["Directivity (dBi)"].max()
         assert peak == pytest.approx(10 * np.log10(4.0), abs=1e-6)
 
     def test_gain_is_derated_by_the_radiation_efficiency(
-        self, far_field_3d, tmp_path, no_windows
+        self, nf2ff_data, tmp_path, no_windows
     ):
         """With Prad = 0.75 and Ploss = 0.25 the efficiency is 75%, so the gain
         peak sits 10*log10(0.75) below the directivity peak."""
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
+        SimTools.plot_3d_gain(nf2ff_data, tmp_path)
 
-        mesh = pv.read(self.saved(tmp_path, "3D_Gain.vtk"))
+        mesh = pv.read(self.saved(tmp_path, "3D_Realized_Gain.vtk"))
         expected = 10 * np.log10(4.0) + 10 * np.log10(0.75)
-        assert mesh["Gain (dBi)"].max() == pytest.approx(expected, abs=1e-6)
+        assert mesh["Realized Gain (dBi)"].max() == pytest.approx(expected, abs=1e-6)
 
     def test_gain_uses_the_input_power_at_freq_without_ploss(
         self, tmp_path, no_windows
@@ -562,68 +719,76 @@ class TestPlot3d:
         band peaks at."""
         source = FakeNF2FF(prad=0.5, with_ploss=False)
         band = make_sim_data([2.4e9, 2.45e9, 2.5e9], [1.0, 2.0, 4.0])
-        result = SimTools.compute_nf2ff_3d(source, 2.45e9, band, tmp_path)
+        nf2ff_data = far_field_from(source, band, tmp_path)
 
-        SimTools.plot_3d_gain(result, 2.45e9, tmp_path)
+        SimTools.plot_3d_gain(nf2ff_data, tmp_path)
 
-        mesh = pv.read(self.saved(tmp_path, "3D_Gain.vtk"))
+        mesh = pv.read(self.saved(tmp_path, "3D_Realized_Gain.vtk"))
         expected = 10 * np.log10(4.0) + 10 * np.log10(0.5 / 2.0)
-        assert mesh["Gain (dBi)"].max() == pytest.approx(expected, abs=1e-6)
+        assert mesh["Realized Gain (dBi)"].max() == pytest.approx(expected, abs=1e-6)
 
-    def test_each_plot_opens_one_window(self, far_field_3d, tmp_path, no_windows):
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
+    def test_gain_is_derated_by_the_port_mismatch(self, tmp_path, no_windows):
+        """|S11| = 0.5 lets 75% of the incident power in, on top of the 75%
+        radiation efficiency."""
+        band = make_sim_data(
+            [2.4e9, 2.45e9, 2.5e9], [1.0, 1.0, 1.0], s11=[0.5, 0.5, 0.5]
+        )
+        nf2ff_data = far_field_from(FakeNF2FF(), band, tmp_path)
+
+        SimTools.plot_3d_gain(nf2ff_data, tmp_path)
+
+        mesh = pv.read(self.saved(tmp_path, "3D_Realized_Gain.vtk"))
+        expected = 10 * np.log10(4.0 * 0.75 * 0.75)
+        assert mesh["Realized Gain (dBi)"].max() == pytest.approx(expected, abs=1e-6)
+
+    def test_each_plot_opens_one_window(self, nf2ff_data, tmp_path, no_windows):
+        SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
+        SimTools.plot_3d_gain(nf2ff_data, tmp_path)
 
         assert len(no_windows) == 2
 
     def test_the_window_titles_name_the_quantity_and_frequency(
-        self, far_field_3d, tmp_path, no_windows
+        self, nf2ff_data, tmp_path, no_windows
     ):
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
+        SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
+        SimTools.plot_3d_gain(nf2ff_data, tmp_path)
 
         assert "Directivity" in no_windows[0].title
-        assert "2.45" in no_windows[0].title
-
-    def test_an_array_of_frequencies_is_rejected(
-        self, far_field_3d, tmp_path, no_windows
-    ):
-        with pytest.raises(TypeError, match="only one frequency"):
-            SimTools.plot_3d_directivity(
-                far_field_3d, np.array([2.4e9, 2.5e9]), tmp_path
-            )
+        assert "Realized Gain" in no_windows[1].title
+        assert all("2.45" in window.title for window in no_windows)
 
     @pytest.mark.parametrize(
         "plot",
         [
-            lambda result, path: SimTools.plot_3d_directivity(result, 2.45e9, path),
-            lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, path),
+            lambda result, path: SimTools.plot_3d_directivity(result, path),
+            lambda result, path: SimTools.plot_3d_gain(result, path),
         ],
         ids=["directivity", "gain"],
     )
     def test_the_caller_s_e_norm_is_left_unchanged(
-        self, plot, far_field_3d, tmp_path, no_windows
+        self, plot, nf2ff_data, tmp_path, no_windows
     ):
         """The plots normalise a copy: an un-normalised ``E_norm`` handed in
         comes back with its original peak."""
-        far_field_3d.E_norm[:] *= 2.0
+        nf2ff_data.sphere.E_norm[:] *= 2.0
 
-        plot(far_field_3d, tmp_path)
+        plot(nf2ff_data, tmp_path)
 
-        assert far_field_3d.E_norm.max() == pytest.approx(2.0)
+        assert nf2ff_data.sphere.E_norm.max() == pytest.approx(2.0)
 
     @pytest.mark.parametrize(
         ("plot", "file_name", "scalar_name", "offset_db"),
         [
             (
-                lambda result, path: SimTools.plot_3d_directivity(result, 2.45e9, path),
+                lambda result, path: SimTools.plot_3d_directivity(result, path),
                 "3D_directivity.vtk",
                 "Directivity (dBi)",
                 0.0,
             ),
             (
-                lambda result, path: SimTools.plot_3d_gain(result, 2.45e9, path),
-                "3D_Gain.vtk",
-                "Gain (dBi)",
+                lambda result, path: SimTools.plot_3d_gain(result, path),
+                "3D_Realized_Gain.vtk",
+                "Realized Gain (dBi)",
                 10 * np.log10(0.75),
             ),
         ],
@@ -635,17 +800,18 @@ class TestPlot3d:
         file_name,
         scalar_name,
         offset_db,
-        far_field_3d,
+        nf2ff_data,
         tmp_path,
         no_windows,
     ):
         """Power density scales with |E|^2, so D = Dmax * (E / Emax)^2. Where
         the fixture's field is half its peak (theta = 90 deg) the pattern sits
         6 dB down, not 3 dB."""
-        field_ratio = far_field_3d.E_norm / far_field_3d.E_norm.max()
+        sphere = nf2ff_data.sphere
+        field_ratio = sphere.E_norm / sphere.E_norm.max()
         expected = 10 * np.log10(4.0 * field_ratio**2) + offset_db
 
-        plot(far_field_3d, tmp_path)
+        plot(nf2ff_data, tmp_path)
 
         mesh = pv.read(self.saved(tmp_path, file_name))
         np.testing.assert_allclose(
@@ -653,16 +819,16 @@ class TestPlot3d:
         )
 
     def test_directivity_then_gain_agree_on_the_peak(
-        self, far_field_3d, tmp_path, no_windows
+        self, nf2ff_data, tmp_path, no_windows
     ):
         """Calling both, as a script plotting both does, must not shift the
         second one."""
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9, tmp_path)
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9, tmp_path)
+        SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
+        SimTools.plot_3d_gain(nf2ff_data, tmp_path)
 
         directivity = pv.read(self.saved(tmp_path, "3D_directivity.vtk"))
-        gain = pv.read(self.saved(tmp_path, "3D_Gain.vtk"))
-        assert gain["Gain (dBi)"].max() == pytest.approx(
+        gain = pv.read(self.saved(tmp_path, "3D_Realized_Gain.vtk"))
+        assert gain["Realized Gain (dBi)"].max() == pytest.approx(
             directivity["Directivity (dBi)"].max() + 10 * np.log10(0.75), abs=1e-6
         )
 
@@ -856,20 +1022,20 @@ class TestDefaultOutputPath:
     def sim_path():
         return Path.cwd() / "Sim_Path"
 
-    def test_plot_2d_directivity(self, nf2ff):
-        SimTools.plot_2d_directivity(nf2ff, 2.45e9)
+    def test_compute_nf2ff_data(self, nf2ff, sim_data):
+        SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data)
 
         assert nf2ff.calls[0]["output_path"] == self.sim_path()
 
-    def test_plot_3d_directivity(self, far_field_3d, no_windows):
-        SimTools.plot_3d_directivity(far_field_3d, 2.45e9)
+    def test_plot_3d_directivity(self, nf2ff_data, no_windows):
+        SimTools.plot_3d_directivity(nf2ff_data)
 
         assert (self.sim_path() / "3D_plots" / "3D_directivity.vtk").is_file()
 
-    def test_plot_3d_gain(self, far_field_3d, no_windows):
-        SimTools.plot_3d_gain(far_field_3d, 2.45e9)
+    def test_plot_3d_gain(self, nf2ff_data, no_windows):
+        SimTools.plot_3d_gain(nf2ff_data)
 
-        assert (self.sim_path() / "3D_plots" / "3D_Gain.vtk").is_file()
+        assert (self.sim_path() / "3D_plots" / "3D_Realized_Gain.vtk").is_file()
 
     def test_write_and_show_structure(self, built_inset, monkeypatch):
         _antenna, sim, _params, _port = built_inset

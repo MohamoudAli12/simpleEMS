@@ -193,6 +193,44 @@ class SimData(NamedTuple):
     ref_impedance: float = 50.0
 
 
+class NF2FFData(NamedTuple):
+    """Named tuple holding the far-field results at one frequency.
+
+    ``compute_nf2ff_data`` fills it in one go, and every 2D and 3D radiation
+    plot reads from it, so the far field is solved once per frequency.
+
+    Attributes
+    ----------
+    freq : float
+        Frequency (in Hz) the far field was computed at.
+    sphere : nf2ff_results
+        The full sphere: theta in [0, 180] deg and phi in [0, 360] deg, in
+        2 deg steps. Its ``Dmax`` and peak ``E_norm`` set the absolute level
+        of every directivity and gain plot.
+    xz_cut : nf2ff_results
+        The xz-plane: theta swept over [-180, 180] deg in 0.1 deg steps at
+        phi = 0.
+    yz_cut : nf2ff_results
+        The yz-plane: theta swept over [-180, 180] deg in 0.1 deg steps at
+        phi = 90 deg.
+    xy_cut : nf2ff_results
+        The xy-plane: phi swept over [-180, 180] deg in 0.1 deg steps at
+        theta = 90 deg.
+    efficiency : float
+        Radiation efficiency ``Prad / accepted power`` at ``freq``.
+    mismatch_efficiency : float
+        Port mismatch efficiency ``1 - |S11|^2`` at ``freq``.
+    """
+
+    freq: float
+    sphere: nf2ff_results
+    xz_cut: nf2ff_results
+    yz_cut: nf2ff_results
+    xy_cut: nf2ff_results
+    efficiency: float
+    mismatch_efficiency: float
+
+
 class SimSetup(NamedTuple):
     """
     Named tuple holding the simulation setup objects.
@@ -1020,21 +1058,22 @@ class SimTools:
         plt.legend(loc="lower right", bbox_to_anchor=(1.5, 1.0))
 
     @staticmethod
-    def plot_2d_rad_pattern(
+    def compute_nf2ff_data(
         nf2ff: nf2ff,
         freq: float,
+        sim_data: SimData,
         output_path: Path | None = None,
         read_cached: bool = False,
-        dynamic_range_db: float = 30.0,
-    ) -> None:
+    ) -> NF2FFData:
         """
-        Plot the 2D E-field radiation pattern at a specified frequency.
+        Compute every far-field result the radiation plots need at ``freq``.
 
-        Computes far-field E-field cuts in the xz-plane (phi=0), the
-        yz-plane (phi=90) and the xy-plane (theta=90) from NF2FF data and
-        plots each as a normalized polar pattern (in dB) side by side. The
-        three cuts hold both principal planes of any antenna whose axis
-        lies along x, y or z: its E-plane and its omnidirectional H-plane.
+        Solves the far field once over the full sphere (theta in [0, 180]
+        deg, phi in [0, 360] deg, 2 deg steps) and once over each principal
+        cut (xz, yz and xy planes, 0.1 deg steps), and works out the
+        radiation and mismatch efficiencies. Hand the result to
+        ``plot_2d_rad_pattern``, ``plot_2d_directivity``, ``plot_2d_gain``,
+        ``plot_3d_directivity`` and ``plot_3d_gain``.
 
         Parameters
         ----------
@@ -1042,25 +1081,25 @@ class SimTools:
             The near-field-to-far-field (NF2FF) object containing the
             simulation data.
         freq : float
-            Frequency (in Hz) at which the radiation pattern is evaluated.
-            Must be a scalar.
+            Frequency (in Hz) at which the far field is evaluated. Must be a
+            scalar.
+        sim_data : SimData
+            The simulation results of the same run. Both backends take the
+            port mismatch from its S11 at ``freq``. The FDTD backend also
+            takes the accepted power at ``freq`` from them; the FEM backend
+            reports its losses in the far-field result instead.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
             Defaults to ``cwd / "Sim_Path"``.
         read_cached : bool, optional
             If True, read cached NF2FF results instead of re-computing.
             Default is False.
-        dynamic_range_db : float, optional
-            Span of each radial axis below the 0 dB peak. The axis starts at
-            ``-dynamic_range_db``, so an omnidirectional cut draws as a
-            near-circle rather than filling the plot, and deeper nulls clip
-            at the axis floor. Default is 30.
 
         Returns
         -------
-        None
-            Generates the 2D radiation pattern plot; does not return a
-            value.
+        NF2FFData
+            The full-sphere result, the three principal cuts, and the
+            radiation and mismatch efficiencies at ``freq``.
 
         Raises
         ------
@@ -1073,23 +1112,22 @@ class SimTools:
         if not np.isscalar(freq):
             raise TypeError(
                 "Please specify only one frequency, not an array, "
-                "for radiation pattern calculation"
+                "for far-field calculation"
             )
 
-        sweep = np.arange(-180.0, 181.0, 2.0)
-        console.print("Calculating 2D Radiation Pattern.........", style="info")
-        plt.figure(figsize=(15, 5))
+        # 0.1° steps from -180° to 180°; 180° repeats -180° so each cut closes.
+        sweep = np.linspace(-180.0, 180.0, 3601)
 
-        # (label, theta, phi, swept angle name, outfile) for each cut
-        cuts = [
-            ("xz-plane", sweep, 0, "theta", "nf2ff_xz.h5"),
-            ("yz-plane", sweep, 90, "theta", "nf2ff_yz.h5"),
-            ("xy-plane", 90, sweep, "phi", "nf2ff_xy.h5"),
+        # (theta, phi, outfile) for the full sphere and each principal cut
+        requests = [
+            (np.arange(0, 181, 2), np.arange(0, 361, 2), "nf2ff_3d.h5"),
+            (sweep, 0, "nf2ff_xz.h5"),
+            (sweep, 90, "nf2ff_yz.h5"),
+            (90, sweep, "nf2ff_xy.h5"),
         ]
-        for subplot_index, (label, theta, phi, sweep_name, outfile) in enumerate(
-            cuts, 1
-        ):
-            nf2ff_result = nf2ff.CalcNF2FF(
+        console.print("Calculating Far Field.........", style="info")
+        sphere, xz_cut, yz_cut, xy_cut = [
+            nf2ff.CalcNF2FF(
                 output_path,
                 freq,
                 theta,
@@ -1098,16 +1136,79 @@ class SimTools:
                 outfile=outfile,
                 verbose=0,
             )
+            for theta, phi, outfile in requests
+        ]
 
+        # Prad is at freq, so the accepted power has to be taken at freq too.
+        # Only the full sphere integrates Prad over every direction.
+        radiated_power = sphere.Prad[0]
+        ploss = getattr(sphere, "Ploss", None)
+        if ploss is not None:
+            accepted_power = radiated_power + ploss[0]  # FEM reports its losses
+        else:
+            accepted_power = np.interp(freq, sim_data.freqs, sim_data.input_power)
+
+        # The share of the incident power the port mismatch lets through
+        s11_magnitude = np.interp(freq, sim_data.freqs, np.abs(sim_data.s11))
+
+        return NF2FFData(
+            freq=freq,
+            sphere=sphere,
+            xz_cut=xz_cut,
+            yz_cut=yz_cut,
+            xy_cut=xy_cut,
+            efficiency=radiated_power / accepted_power,
+            mismatch_efficiency=1.0 - s11_magnitude**2,
+        )
+
+    @staticmethod
+    def plot_2d_rad_pattern(
+        nf2ff_data: NF2FFData,
+        dynamic_range_db: float = 30.0,
+    ) -> None:
+        """
+        Plot the 2D E-field radiation pattern.
+
+        Plots the far-field E-field cuts in the xz-plane (phi=0), the
+        yz-plane (phi=90) and the xy-plane (theta=90) as normalized polar
+        patterns (in dB) side by side. The three cuts hold both principal
+        planes of any antenna whose axis lies along x, y or z: its E-plane
+        and its omnidirectional H-plane.
+
+        Parameters
+        ----------
+        nf2ff_data : NF2FFData
+            The far-field results returned by ``compute_nf2ff_data``.
+        dynamic_range_db : float, optional
+            Span of each radial axis below the 0 dB peak. The axis starts at
+            ``-dynamic_range_db``, so an omnidirectional cut draws as a
+            near-circle rather than filling the plot, and deeper nulls clip
+            at the axis floor. Default is 30.
+
+        Returns
+        -------
+        None
+            Generates the 2D radiation pattern plot; does not return a
+            value.
+        """
+        plt.figure(figsize=(15, 5))
+
+        # (label, cut, swept angle name, swept angles in radians) for each cut
+        cuts = [
+            ("xz-plane", nf2ff_data.xz_cut, "theta", nf2ff_data.xz_cut.theta),
+            ("yz-plane", nf2ff_data.yz_cut, "theta", nf2ff_data.yz_cut.theta),
+            ("xy-plane", nf2ff_data.xy_cut, "phi", nf2ff_data.xy_cut.phi),
+        ]
+        for subplot_index, (label, cut, sweep_name, sweep) in enumerate(cuts, 1):
             ax = plt.subplot(1, len(cuts), subplot_index, polar=True)
 
-            efield = np.squeeze(nf2ff_result.E_norm)
+            efield = np.squeeze(cut.E_norm)
             efield_norm_dB = 20 * np.log10(efield / np.max(efield))
 
             # Clip deeper nulls to the floor so they don't wrap through the
             # centre of the polar axis.
             lines = ax.plot(
-                np.deg2rad(sweep),
+                sweep,
                 np.maximum(efield_norm_dB, -dynamic_range_db),
                 linewidth=2,
                 label=label,
@@ -1130,44 +1231,31 @@ class SimTools:
             ax.legend()
 
         plt.suptitle(
-            f"Radiation Pattern at: {freq_formatter(freq)}",
+            f"Radiation Pattern at: {freq_formatter(nf2ff_data.freq)}",
             fontsize=14,
         )
 
     @staticmethod
     def plot_2d_directivity(
-        nf2ff: nf2ff,
-        freq: float,
-        output_path: Path | None = None,
-        read_cached: bool = False,
+        nf2ff_data: NF2FFData,
         dynamic_range_db: float = 30.0,
         style: Literal["polar", "cartesian", "both"] = "both",
     ) -> None:
         """
-        Plot the 2D directivity pattern (xz-plane, phi=0) at a specified
-        frequency, annotated with the half-power beamwidth (HPBW).
+        Plot the 2D directivity pattern (xz-plane, phi=0), annotated with the
+        half-power beamwidth (HPBW).
 
-        Computes directivity (in dBi) from NF2FF E-field data and draws it as
-        a polar pattern, a Cartesian (dBi versus theta) plot, or both in
-        separate figures from a single NF2FF solve. Each view marks the -3 dB
-        beamwidth, main-lobe direction, and peak magnitude. The beamwidth
-        search wraps through +-180 degrees; an omnidirectional cut, which
-        never drops 3 dB, gets no beamwidth marker.
+        Computes directivity (in dBi) from the xz-plane cut, referenced to the
+        full sphere's peak, and draws it as a polar pattern, a Cartesian (dBi
+        versus theta) plot, or both in separate figures. Each view marks the
+        -3 dB beamwidth, main-lobe direction, and peak magnitude. The
+        beamwidth search wraps through +-180 degrees; an omnidirectional cut,
+        which never drops 3 dB, gets no beamwidth marker.
 
         Parameters
         ----------
-        nf2ff : object
-            The near-field-to-far-field (NF2FF) object containing the
-            simulation data.
-        freq : float
-            Frequency (in Hz) at which the directivity is evaluated. Must
-            be a scalar.
-        output_path : Path, optional
-            Path to the directory where the simulation result is saved.
-            Defaults to ``cwd / "Sim_Path"``.
-        read_cached : bool, optional
-            If True, read cached NF2FF results instead of re-computing.
-            Default is False.
+        nf2ff_data : NF2FFData
+            The far-field results returned by ``compute_nf2ff_data``.
         dynamic_range_db : float, optional
             Span of the directivity axis below the peak, in dB. The axis
             starts at ``peak - dynamic_range_db``, so an omnidirectional cut
@@ -1184,43 +1272,24 @@ class SimTools:
 
         Raises
         ------
-        TypeError
-            If ``freq`` is not a scalar (e.g. an array of frequencies).
         ValueError
             If ``style`` is not ``"polar"``, ``"cartesian"`` or ``"both"``.
         """
-        if output_path is None:
-            output_path = Path.cwd() / "Sim_Path"
-
-        if not np.isscalar(freq):
-            raise TypeError(
-                "Please specify only one frequency, not an array, "
-                "for directivity calculation"
-            )
-
         if style not in ("polar", "cartesian", "both"):
             raise ValueError(
                 f"style must be 'polar', 'cartesian' or 'both', got {style!r}"
             )
 
-        # 0.1° steps from -180° to 180°; 180° repeats -180° so the curve closes.
-        theta = np.linspace(-180.0, 180.0, 3601)
-        console.print("Calculating 2D Directivity.........", style="info")
-        nf2ff_res_phi0 = nf2ff.CalcNF2FF(
-            output_path,
-            freq,
-            theta,
-            0,
-            read_cached=read_cached,
-            outfile="nf2ff_xz.h5",
-            verbose=0,
-        )
+        xz_cut = nf2ff_data.xz_cut
+        sphere = nf2ff_data.sphere
+        theta = np.rad2deg(xz_cut.theta)
 
-        e_field = np.squeeze(nf2ff_res_phi0.E_norm)
-        e_field_norm = e_field / np.max(e_field)
+        # Reference the cut to the sphere's peak, not its own, so a cut that
+        # misses the main lobe sits below Dmax instead of being lifted to it.
+        e_field_norm = np.squeeze(xz_cut.E_norm) / np.max(sphere.E_norm)
         e_field_norm_db = 20 * np.log10(e_field_norm)
 
-        max_directivity_db = 10.0 * np.log10(nf2ff_res_phi0.Dmax)
+        max_directivity_db = 10.0 * np.log10(sphere.Dmax[0])
         directivity_dbi = e_field_norm_db + max_directivity_db
 
         # Anchor the axis floor to the peak, not to the pattern minimum, and
@@ -1375,110 +1444,173 @@ class SimTools:
             )
             ax.grid(True)
             ax.set_xlabel("theta (deg)")
-            figure.suptitle(f" Directivity at {freq_formatter(freq)}", fontsize=14)
+            figure.suptitle(
+                f" Directivity at {freq_formatter(nf2ff_data.freq)}", fontsize=14
+            )
 
     @staticmethod
-    def compute_nf2ff_3d(
-        nf2ff: nf2ff,
-        freq: float,
-        sim_data: SimData,
-        output_path: Path | None = None,
-        read_cached: bool = False,
-    ) -> nf2ff_results:
+    def plot_2d_gain(
+        nf2ff_data: NF2FFData,
+        dynamic_range_db: float = 30.0,
+        style: Literal["polar", "cartesian", "both"] = "both",
+    ) -> None:
         """
-        Compute the 3D far-field radiation pattern over a full theta/phi
-        sweep (theta in [0, 180] deg, phi in [0, 360] deg, 2 deg steps),
-        together with the radiation efficiency at ``freq``.
+        Plot the 2D realized gain pattern (xz-plane, phi=0).
 
-        The resulting far-field data can be used for visualization,
-        directivity and gain analysis, and post-processing of antenna
-        performance via ``plot_3d_directivity`` and ``plot_3d_gain``.
+        Computes the realized gain (in dBi) from the xz-plane cut: the
+        directivity pattern scaled by the radiation efficiency and by the
+        port mismatch ``1 - |S11|^2``. Draws it as a polar pattern, a
+        Cartesian (dBi versus theta) plot, or both in separate figures. Each
+        view reports the main-lobe direction and peak gain. The efficiencies
+        shift the whole pattern by a constant, so the beamwidth matches the
+        one ``plot_2d_directivity`` reports.
 
         Parameters
         ----------
-        nf2ff : object
-            The near-field-to-far-field (NF2FF) object containing the
-            simulation data.
-        freq : float
-            Frequency (in Hz) at which the 3D far-field pattern is
-            evaluated. Must be a scalar.
-        sim_data : SimData
-            The simulation results of the same run. The FDTD backend takes
-            the accepted power at ``freq`` from them; the FEM backend reports
-            its losses in the far-field result and does not use them.
-        output_path : Path, optional
-            Path to the directory where the simulation result is saved.
-            Defaults to ``cwd / "Sim_Path"``.
-        read_cached : bool, optional
-            If True, read cached NF2FF results instead of re-computing.
-            Default is False.
+        nf2ff_data : NF2FFData
+            The far-field results returned by ``compute_nf2ff_data``.
+        dynamic_range_db : float, optional
+            Span of the gain axis below the peak, in dB. The axis starts at
+            ``peak - dynamic_range_db``, so an omnidirectional cut draws as a
+            near-circle rather than filling the plot, and deeper nulls clip
+            at the axis floor. Default is 30.
+        style : {"polar", "cartesian", "both"}, optional
+            Which view to draw. ``"both"`` draws the polar and Cartesian
+            views in two separate figures. Default is ``"both"``.
 
         Returns
         -------
-        nf2ff_results
-            The NF2FF result object for the full theta/phi sweep, holding
-            (among other fields) ``E_norm``, ``Dmax``, ``Prad``, ``theta``,
-            ``phi``, and ``efficiency``: the radiation efficiency
-            ``Prad / accepted power`` at ``freq``.
+        None
+            Plots the 2D gain pattern; does not return a value.
 
         Raises
         ------
-        TypeError
-            If ``freq`` is not a scalar (e.g. an array of frequencies).
+        ValueError
+            If ``style`` is not ``"polar"``, ``"cartesian"`` or ``"both"``.
         """
-        if output_path is None:
-            output_path = Path.cwd() / "Sim_Path"
-
-        if not np.isscalar(freq):
-            raise TypeError(
-                "Please specify only one frequency, not an array, "
-                "for 3D far-field calculation"
+        if style not in ("polar", "cartesian", "both"):
+            raise ValueError(
+                f"style must be 'polar', 'cartesian' or 'both', got {style!r}"
             )
 
-        theta = np.arange(0, 181, 2)  # elevation
-        phi = np.arange(0, 361, 2)  # azimuth
+        xz_cut = nf2ff_data.xz_cut
+        sphere = nf2ff_data.sphere
+        theta = np.rad2deg(xz_cut.theta)
 
-        console.print("Calculating 3D Radiation Pattern.........", style="info")
-        nf2ff_3d_result = nf2ff.CalcNF2FF(
-            output_path,
-            freq,
-            theta,
-            phi,
-            read_cached=read_cached,
-            outfile="nf2ff_3d.h5",
-            verbose=0,
+        # Reference the cut to the sphere's peak, not its own, so a cut that
+        # misses the main lobe sits below the peak gain instead of at it.
+        e_field_norm = np.squeeze(xz_cut.E_norm) / np.max(sphere.E_norm)
+        e_field_norm_db = 20 * np.log10(e_field_norm)
+
+        # Realized gain also loses the power the port mismatch reflects
+        max_gain_db = 10.0 * np.log10(
+            nf2ff_data.efficiency * nf2ff_data.mismatch_efficiency * sphere.Dmax[0]
+        )
+        gain_dbi = e_field_norm_db + max_gain_db
+
+        # Anchor the axis floor to the peak, not to the pattern minimum, and
+        # clip deeper nulls to the floor so they don't wrap through the centre.
+        axis_floor = np.max(gain_dbi) - dynamic_range_db
+        clipped_gain_dbi = np.maximum(gain_dbi, axis_floor)
+
+        # The last sample repeats the first direction, so leave it out.
+        peak_idx = np.argmax(gain_dbi[:-1])
+        peak_theta = theta[peak_idx]
+        peak_val = gain_dbi[peak_idx]
+
+        annotation = (
+            f"Main Lobe Direction = {peak_theta:.2f}°"
+            f"\nMain Lobe Magnitude = {peak_val:.2f} dBi"
         )
 
-        # Prad is at freq, so the accepted power has to be taken at freq too
-        radiated_power = nf2ff_3d_result.Prad[0]
-        ploss = getattr(nf2ff_3d_result, "Ploss", None)
-        if ploss is not None:
-            accepted_power = radiated_power + ploss[0]  # FEM reports its losses
-        else:
-            accepted_power = np.interp(freq, sim_data.freqs, sim_data.input_power)
-        nf2ff_3d_result.efficiency = radiated_power / accepted_power
-        return nf2ff_3d_result
+        # ---- Plotting ----
+        views = ["polar", "cartesian"] if style == "both" else [style]
+
+        for view in views:
+            figure = plt.figure()
+
+            if view == "polar":
+                ax = figure.add_subplot(1, 1, 1, polar=True)
+                lines = ax.plot(
+                    np.deg2rad(theta),
+                    clipped_gain_dbi,
+                    linewidth=2,
+                    label="xz-plane",
+                )
+                ax.set_rlim(axis_floor)
+
+                text_anchor = (1.0, 0.1)
+                cursor = themed_cursor(lines)
+                cursor.connect(
+                    "add",
+                    lambda sel: sel.annotation.set_text(
+                        f"theta={np.rad2deg(sel.target[0]):.2f}°"
+                        f"\nRealized Gain = {sel.target[1]:.2f} dBi"
+                    ),
+                )
+                ax.set_theta_zero_location("N")
+                ax.set_theta_direction(-1)
+                ax.legend()
+
+            else:
+                ax = figure.add_subplot(1, 1, 1)
+                lines = ax.plot(
+                    theta,
+                    clipped_gain_dbi,
+                    linewidth=2,
+                    label="xz-plane",
+                )
+
+                text_anchor = (0.02, 0.98)
+                cursor = themed_cursor(lines)
+                cursor.connect(
+                    "add",
+                    lambda sel: sel.annotation.set_text(
+                        f"theta={sel.target[0]:.2f}°"
+                        f"\nRealized Gain = {sel.target[1]:.2f} dBi"
+                    ),
+                )
+                ax.set_xlim(-180.0, 180.0)
+                ax.set_xticks(np.arange(-180, 181, 45))
+                ax.set_ylim(axis_floor, peak_val + 3.0)
+                ax.set_ylabel("Realized Gain (dBi)")
+                ax.legend(loc="lower right")
+
+            ax.text(
+                *text_anchor,
+                annotation,
+                transform=ax.transAxes,
+                fontsize=12,
+                color=plt.rcParams["text.color"],
+                verticalalignment="top",
+                bbox=dict(
+                    boxstyle="round,pad=0.5",
+                    facecolor=plt.rcParams["axes.facecolor"],
+                    edgecolor=plt.rcParams["axes.edgecolor"],
+                ),
+            )
+            ax.grid(True)
+            ax.set_xlabel("theta (deg)")
+            figure.suptitle(
+                f" Realized Gain at {freq_formatter(nf2ff_data.freq)}", fontsize=14
+            )
 
     @staticmethod
     def plot_3d_directivity(
-        nf2ff_3d_result: nf2ff_results,
-        freq: float,
+        nf2ff_data: NF2FFData,
         output_path: Path | None = None,
     ) -> None:
         """
-        Plot the 3D directivity pattern of an antenna at a specified frequency.
+        Plot the 3D directivity pattern of an antenna.
 
         Visualizes the directivity pattern (in dBi) of the antenna in 3D
-        space, based on the far-field results from ``compute_nf2ff_3d``,
-        and saves the mesh as a VTK file under ``output_path / "3D_plots"``.
+        space from the full-sphere result of ``compute_nf2ff_data``, and saves
+        the mesh as a VTK file under ``output_path / "3D_plots"``.
 
         Parameters
         ----------
-        nf2ff_3d_result : nf2ff_results
-            The 3D far-field result object returned by ``compute_nf2ff_3d``.
-        freq : float
-            The frequency (in Hz) at which the 3D directivity pattern is
-            evaluated. Must be a scalar; used only for plot/file labeling.
+        nf2ff_data : NF2FFData
+            The far-field results returned by ``compute_nf2ff_data``.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
             Defaults to ``cwd / "Sim_Path"``.
@@ -1488,35 +1620,25 @@ class SimTools:
         None
             Opens an interactive 3D plot window and saves the mesh to
             ``3D_plots/3D_directivity.vtk``; does not return a value.
-
-        Raises
-        ------
-        TypeError
-            If ``freq`` is not a scalar (e.g. an array of frequencies).
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
-        if not np.isscalar(freq):
-            raise TypeError(
-                "Please specify only one frequency, not an array, "
-                "for directivity calculation"
-            )
-
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
-        e_field = np.squeeze(nf2ff_3d_result.E_norm)
+        sphere = nf2ff_data.sphere
+        e_field = np.squeeze(sphere.E_norm)
         e_field = e_field / np.max(e_field)  # normalize without mutating the result
 
         # radiated power density scales with |E|^2, so square the field ratio
-        max_directivity = nf2ff_3d_result.Dmax[0]
+        max_directivity = sphere.Dmax[0]
         directivity = max_directivity * e_field**2
 
         directivity_dbi = 10 * np.log10(directivity)
 
-        theta = nf2ff_3d_result.theta
-        phi = nf2ff_3d_result.phi
+        theta = sphere.theta
+        phi = sphere.phi
 
         THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
 
@@ -1531,7 +1653,8 @@ class SimTools:
         mesh.save(plots_3d_path / "3D_directivity.vtk")
 
         plotter = BackgroundPlotter(
-            title=f"Antenna 3D Pattern - Directivity (dBi) at {freq_formatter(freq)} "
+            title="Antenna 3D Pattern - Directivity (dBi) at "
+            f"{freq_formatter(nf2ff_data.freq)} "
         )
         style_background_plotter(plotter)
         plotter.add_mesh(
@@ -1547,25 +1670,21 @@ class SimTools:
 
     @staticmethod
     def plot_3d_gain(
-        nf2ff_3d_result: nf2ff_results,
-        freq: float,
+        nf2ff_data: NF2FFData,
         output_path: Path | None = None,
     ) -> None:
         """
-        Plot the 3D gain pattern of an antenna at a specified frequency.
+        Plot the 3D realized gain pattern of an antenna.
 
-        Visualizes the gain pattern (in dBi) of the antenna in 3D space:
-        directivity scaled by the radiation efficiency that
-        ``compute_nf2ff_3d`` stored on the result. Saves the mesh under
-        ``output_path / "3D_plots"``.
+        Visualizes the realized gain pattern (in dBi) of the antenna in 3D
+        space: the full-sphere directivity scaled by the radiation and
+        mismatch efficiencies that ``compute_nf2ff_data`` worked out. Saves
+        the mesh under ``output_path / "3D_plots"``.
 
         Parameters
         ----------
-        nf2ff_3d_result : nf2ff_results
-            The 3D far-field result object returned by ``compute_nf2ff_3d``.
-        freq : float
-            The frequency (in Hz) the pattern was computed at. Used only
-            for plot labeling.
+        nf2ff_data : NF2FFData
+            The far-field results returned by ``compute_nf2ff_data``.
         output_path : Path, optional
             Path to the directory where the simulation result is saved.
             Defaults to ``cwd / "Sim_Path"``.
@@ -1574,26 +1693,30 @@ class SimTools:
         -------
         None
             Opens an interactive 3D plot window and saves the mesh to
-            ``3D_plots/3D_Gain.vtk``; does not return a value.
+            ``3D_plots/3D_Realized_Gain.vtk``; does not return a value.
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
-        e_field = np.squeeze(nf2ff_3d_result.E_norm)
+        sphere = nf2ff_data.sphere
+        e_field = np.squeeze(sphere.E_norm)
         e_field = e_field / np.max(e_field)  # normalize without mutating the result
 
         plots_3d_path = output_path / "3D_plots"
         plots_3d_path.mkdir(parents=True, exist_ok=True)
 
         # radiated power density scales with |E|^2, so square the field ratio
-        max_directivity = nf2ff_3d_result.Dmax[0]
+        max_directivity = sphere.Dmax[0]
         directivity = max_directivity * e_field**2
 
-        gain = nf2ff_3d_result.efficiency * directivity
-        gain_dbi = 10 * np.log10(gain)
+        # Realized gain also loses the power the port mismatch reflects
+        realized_gain = (
+            nf2ff_data.efficiency * nf2ff_data.mismatch_efficiency * directivity
+        )
+        gain_dbi = 10 * np.log10(realized_gain)
 
-        theta = nf2ff_3d_result.theta
-        phi = nf2ff_3d_result.phi
+        theta = sphere.theta
+        phi = sphere.phi
 
         THETA, PHI = np.meshgrid(theta, phi, indexing="ij")
 
@@ -1604,20 +1727,23 @@ class SimTools:
         Z = R * np.cos(THETA)
 
         mesh = pv.StructuredGrid(X, Y, Z)
-        mesh["Gain (dBi)"] = gain_dbi.ravel(order="F")
-        mesh.save(plots_3d_path / "3D_Gain.vtk")
+        mesh["Realized Gain (dBi)"] = gain_dbi.ravel(order="F")
+        mesh.save(plots_3d_path / "3D_Realized_Gain.vtk")
         plotter = BackgroundPlotter(
-            title=f"Antenna 3D Pattern - Gain (dBi) at {freq_formatter(freq)} "
+            title="Antenna 3D Pattern - Realized Gain (dBi) at "
+            f"{freq_formatter(nf2ff_data.freq)} "
         )
         style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
-            scalars="Gain (dBi)",
+            scalars="Realized Gain (dBi)",
             cmap="turbo",
             clim=[np.min(gain_dbi), np.max(gain_dbi)],
             smooth_shading=True,
         )
-        plotter.add_text("Antenna 3D Pattern - Gain (dBi) ", position="upper_edge")
+        plotter.add_text(
+            "Antenna 3D Pattern - Realized Gain (dBi) ", position="upper_edge"
+        )
 
     @staticmethod
     def save_plots(output_path: Path | None = None, file_format: str = "png") -> None:

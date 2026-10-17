@@ -79,21 +79,17 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.run_simulation(sim, output_path)
         sim_data = patch.compute_sim_data(sim, port, output_path)
 
-        nf2ff_3d_result = patch.compute_nf2ff_3d(
+        nf2ff_data = patch.compute_nf2ff_data(
             nf2ff, params.resonant_freq, sim_data, output_path
         )
         patch.plot_s_param(sim_data.freqs, sim_data.s11)
         patch.plot_smith_chart(sim_data.freqs, sim_data.s11)
         patch.plot_vswr(sim_data.freqs, sim_data.vswr)
         patch.plot_impedance(sim_data.freqs, sim_data.z11)
-        patch.plot_2d_directivity(nf2ff, params.resonant_freq, output_path)
-        patch.plot_2d_rad_pattern(nf2ff, params.resonant_freq, output_path)
-        patch.plot_3d_directivity(nf2ff_3d_result, params.resonant_freq, output_path)
-        patch.plot_3d_gain(
-            nf2ff_3d_result,
-            params.resonant_freq,
-            output_path,
-        )
+        patch.plot_2d_directivity(nf2ff_data)
+        patch.plot_2d_rad_pattern(nf2ff_data)
+        patch.plot_3d_directivity(nf2ff_data, output_path)
+        patch.plot_3d_gain(nf2ff_data, output_path)
         patch.show_plots()
         patch.save_plots(output_path)
         patch.export_stl(sim, output_path)

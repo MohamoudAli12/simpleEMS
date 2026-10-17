@@ -23,7 +23,10 @@ SimTools.plot_s_param(
     sim_data.s11,
     sim_data.s21,
 )
-SimTools.plot_2d_directivity(nf2ff, sim_data.freqs[0], output_path)
+nf2ff_data = SimTools.compute_nf2ff_data(
+    nf2ff, sim_data.freqs[0], sim_data, output_path
+)
+SimTools.plot_2d_directivity(nf2ff_data)
 SimTools.plot_impedance(sim_data.freqs, sim_data.z11)
 SimTools.plot_smith_chart(sim_data.freqs, sim_data.s11)
 SimTools.plot_vswr(sim_data.freqs, sim_data.vswr)

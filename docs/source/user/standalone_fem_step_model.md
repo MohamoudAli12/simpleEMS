@@ -106,8 +106,9 @@ These commands show the S11 curve, the Smith chart, the VSWR, and the input
 impedance.
 
 To show a radiation pattern, first get the far-field object from
-`SimTools.create_nf2ff()`. Then give it to the radiation plots, for example
-`plot_2d_directivity` or `plot_3d_gain`.
+`SimTools.create_nf2ff()`. `SimTools.compute_nf2ff_data()` turns it into the
+far-field results at one frequency, and the radiation plots, for example
+`plot_2d_directivity` or `plot_3d_gain`, read everything from those.
 
 ```{seealso}
 - {class}`simpleEMS.sim_tools.SimTools`
