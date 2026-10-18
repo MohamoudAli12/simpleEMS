@@ -1990,10 +1990,7 @@ class SimTools:
         mesh["Directivity (dBi)"] = directivity_dbi.ravel(order="F")
         mesh.save(plots_3d_path / "3D_directivity.vtk")
 
-        plotter = BackgroundPlotter(
-            title="Antenna 3D Pattern - Directivity (dBi) at "
-            f"{freq_formatter(nf2ff_data.freq)} "
-        )
+        plotter = BackgroundPlotter(title="Antenna 3D Pattern - Directivity (dBi)")
         style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
@@ -2003,7 +2000,9 @@ class SimTools:
             smooth_shading=True,
         )
         plotter.add_text(
-            "Antenna 3D Pattern - Directivity (dBi) ", position="upper_edge"
+            "Antenna 3D Pattern - Directivity (dBi) at "
+            f"{freq_formatter(nf2ff_data.freq)}",
+            position="upper_edge",
         )
 
     @staticmethod
@@ -2067,10 +2066,7 @@ class SimTools:
         mesh = pv.StructuredGrid(X, Y, Z)
         mesh["Realized Gain (dBi)"] = gain_dbi.ravel(order="F")
         mesh.save(plots_3d_path / "3D_Realized_Gain.vtk")
-        plotter = BackgroundPlotter(
-            title="Antenna 3D Pattern - Realized Gain (dBi) at "
-            f"{freq_formatter(nf2ff_data.freq)} "
-        )
+        plotter = BackgroundPlotter(title="Antenna 3D Pattern - Realized Gain (dBi)")
         style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
@@ -2080,7 +2076,9 @@ class SimTools:
             smooth_shading=True,
         )
         plotter.add_text(
-            "Antenna 3D Pattern - Realized Gain (dBi) ", position="upper_edge"
+            "Antenna 3D Pattern - Realized Gain (dBi) at "
+            f"{freq_formatter(nf2ff_data.freq)}",
+            position="upper_edge",
         )
 
     @staticmethod

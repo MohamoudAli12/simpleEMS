@@ -1082,15 +1082,16 @@ class TestPlot3d:
 
         assert len(no_windows) == 2
 
-    def test_the_window_titles_name_the_quantity_and_frequency(
+    def test_the_window_text_names_the_quantity_and_frequency(
         self, nf2ff_data, tmp_path, no_windows
     ):
+        """The frequency shows inside the window, not only in its title bar."""
         SimTools.plot_3d_directivity(nf2ff_data, tmp_path)
         SimTools.plot_3d_gain(nf2ff_data, tmp_path)
 
-        assert "Directivity" in no_windows[0].title
-        assert "Realized Gain" in no_windows[1].title
-        assert all("2.45" in window.title for window in no_windows)
+        assert "Directivity" in no_windows[0].texts[0]
+        assert "Realized Gain" in no_windows[1].texts[0]
+        assert all("2.45" in window.texts[0] for window in no_windows)
 
     @pytest.mark.parametrize(
         "plot",
