@@ -1415,7 +1415,7 @@ class SimTools:
     @staticmethod
     def plot_2d_rad_pattern(
         nf2ff_data: NF2FFData,
-        dynamic_range_db: float = 30.0,
+        floor_db: float | None = None,
     ) -> None:
         """
         Plot the 2D E-field radiation pattern.
@@ -1430,18 +1430,28 @@ class SimTools:
         ----------
         nf2ff_data : NF2FFData
             The far-field results returned by ``compute_nf2ff_data``.
-        dynamic_range_db : float, optional
-            Span of each radial axis below the 0 dB peak. The axis starts at
-            ``-dynamic_range_db``, so an omnidirectional cut draws as a
+        floor_db : float or None, optional
+            Floor of each radial axis relative to the 0 dB peak, as a
+            negative number (e.g. ``-30``). When set, the axis runs from
+            ``floor_db`` to 0 dB, so an omnidirectional cut draws as a
             near-circle rather than filling the plot, and deeper nulls clip
-            at the axis floor. Default is 30.
+            at the axis floor. Default is None, which autoscales each axis to
+            its pattern.
 
         Returns
         -------
         None
             Generates the 2D radiation pattern plot; does not return a
             value.
+
+        Raises
+        ------
+        ValueError
+            If ``floor_db`` is zero or positive.
         """
+        if floor_db is not None and floor_db >= 0:
+            raise ValueError(f"floor_db must be negative, got {floor_db}")
+
         plt.figure(figsize=(15, 5))
 
         # (label, cut, swept angle name, swept angles in radians) for each cut
@@ -1456,15 +1466,21 @@ class SimTools:
             efield = np.squeeze(cut.E_norm)
             efield_norm_dB = 20 * np.log10(efield / np.max(efield))
 
-            # Clip deeper nulls to the floor so they don't wrap through the
-            # centre of the polar axis.
+            # Autoscale to the pattern unless the user sets a floor, and clip
+            # deeper nulls (an exact null is -inf dB) to the floor so they
+            # don't wrap through the centre.
+            if floor_db is None:
+                axis_floor = np.min(efield_norm_dB[np.isfinite(efield_norm_dB)])
+            else:
+                axis_floor = floor_db
             lines = ax.plot(
                 sweep,
-                np.maximum(efield_norm_dB, -dynamic_range_db),
+                np.maximum(efield_norm_dB, axis_floor),
                 linewidth=2,
                 label=label,
             )
-            ax.set_rlim(-dynamic_range_db, 0)
+            if floor_db is not None:
+                ax.set_rlim(axis_floor, 0)
 
             cursor = themed_cursor(lines)
             cursor.connect(
@@ -1489,7 +1505,7 @@ class SimTools:
     @staticmethod
     def plot_2d_directivity(
         nf2ff_data: NF2FFData,
-        dynamic_range_db: float = 30.0,
+        floor_db: float | None = None,
         style: Literal["polar", "cartesian", "both"] = "both",
     ) -> None:
         """
@@ -1507,11 +1523,13 @@ class SimTools:
         ----------
         nf2ff_data : NF2FFData
             The far-field results returned by ``compute_nf2ff_data``.
-        dynamic_range_db : float, optional
-            Span of the directivity axis below the peak, in dB. The axis
-            starts at ``peak - dynamic_range_db``, so an omnidirectional cut
-            draws as a near-circle rather than filling the plot, and deeper
-            nulls clip at the axis floor. Default is 30.
+        floor_db : float or None, optional
+            Floor of the directivity axis relative to the peak, in dB, as a
+            negative number (e.g. ``-30``). When set, the axis starts at
+            ``peak + floor_db``, so an omnidirectional cut draws as a
+            near-circle rather than filling the plot, and deeper nulls clip
+            at the axis floor. Default is None, which starts the axis at the
+            minimum of the pattern.
         style : {"polar", "cartesian", "both"}, optional
             Which view to draw. ``"both"`` draws the polar and Cartesian
             views in two separate figures. Default is ``"both"``.
@@ -1524,12 +1542,15 @@ class SimTools:
         Raises
         ------
         ValueError
-            If ``style`` is not ``"polar"``, ``"cartesian"`` or ``"both"``.
+            If ``style`` is not ``"polar"``, ``"cartesian"`` or ``"both"``,
+            or ``floor_db`` is zero or positive.
         """
         if style not in ("polar", "cartesian", "both"):
             raise ValueError(
                 f"style must be 'polar', 'cartesian' or 'both', got {style!r}"
             )
+        if floor_db is not None and floor_db >= 0:
+            raise ValueError(f"floor_db must be negative, got {floor_db}")
 
         xz_cut = nf2ff_data.xz_cut
         sphere = nf2ff_data.sphere
@@ -1543,9 +1564,13 @@ class SimTools:
         max_directivity_db = 10.0 * np.log10(sphere.Dmax[0])
         directivity_dbi = e_field_norm_db + max_directivity_db
 
-        # Anchor the axis floor to the peak, not to the pattern minimum, and
-        # clip deeper nulls to the floor so they don't wrap through the centre.
-        axis_floor = np.max(directivity_dbi) - dynamic_range_db
+        # Start the axis at the pattern minimum unless the user sets a floor
+        # below the peak, and clip deeper nulls (an exact null is -inf dB) to
+        # the floor so they don't wrap through the centre.
+        if floor_db is None:
+            axis_floor = np.min(directivity_dbi[np.isfinite(directivity_dbi)])
+        else:
+            axis_floor = np.max(directivity_dbi) + floor_db
         clipped_directivity_dbi = np.maximum(directivity_dbi, axis_floor)
 
         # ---- HPBW calculation ----
@@ -1702,7 +1727,7 @@ class SimTools:
     @staticmethod
     def plot_2d_gain(
         nf2ff_data: NF2FFData,
-        dynamic_range_db: float = 30.0,
+        floor_db: float | None = None,
         style: Literal["polar", "cartesian", "both"] = "both",
     ) -> None:
         """
@@ -1720,11 +1745,13 @@ class SimTools:
         ----------
         nf2ff_data : NF2FFData
             The far-field results returned by ``compute_nf2ff_data``.
-        dynamic_range_db : float, optional
-            Span of the gain axis below the peak, in dB. The axis starts at
-            ``peak - dynamic_range_db``, so an omnidirectional cut draws as a
+        floor_db : float or None, optional
+            Floor of the gain axis relative to the peak, in dB, as a
+            negative number (e.g. ``-30``). When set, the axis starts at
+            ``peak + floor_db``, so an omnidirectional cut draws as a
             near-circle rather than filling the plot, and deeper nulls clip
-            at the axis floor. Default is 30.
+            at the axis floor. Default is None, which starts the axis at the
+            minimum of the pattern.
         style : {"polar", "cartesian", "both"}, optional
             Which view to draw. ``"both"`` draws the polar and Cartesian
             views in two separate figures. Default is ``"both"``.
@@ -1737,12 +1764,15 @@ class SimTools:
         Raises
         ------
         ValueError
-            If ``style`` is not ``"polar"``, ``"cartesian"`` or ``"both"``.
+            If ``style`` is not ``"polar"``, ``"cartesian"`` or ``"both"``,
+            or ``floor_db`` is zero or positive.
         """
         if style not in ("polar", "cartesian", "both"):
             raise ValueError(
                 f"style must be 'polar', 'cartesian' or 'both', got {style!r}"
             )
+        if floor_db is not None and floor_db >= 0:
+            raise ValueError(f"floor_db must be negative, got {floor_db}")
 
         xz_cut = nf2ff_data.xz_cut
         sphere = nf2ff_data.sphere
@@ -1759,9 +1789,13 @@ class SimTools:
         )
         gain_dbi = e_field_norm_db + max_gain_db
 
-        # Anchor the axis floor to the peak, not to the pattern minimum, and
-        # clip deeper nulls to the floor so they don't wrap through the centre.
-        axis_floor = np.max(gain_dbi) - dynamic_range_db
+        # Start the axis at the pattern minimum unless the user sets a floor
+        # below the peak, and clip deeper nulls (an exact null is -inf dB) to
+        # the floor so they don't wrap through the centre.
+        if floor_db is None:
+            axis_floor = np.min(gain_dbi[np.isfinite(gain_dbi)])
+        else:
+            axis_floor = np.max(gain_dbi) + floor_db
         clipped_gain_dbi = np.maximum(gain_dbi, axis_floor)
 
         # The last sample repeats the first direction, so leave it out.

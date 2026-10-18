@@ -330,21 +330,39 @@ class TestPlot2dRadPattern:
         labels = [ax.lines[0].get_label() for ax in figures.gcf().axes]
         assert labels == ["xz-plane", "yz-plane", "xy-plane"]
 
-    def test_the_radial_axis_spans_the_dynamic_range(self, nf2ff_data, figures):
+    def test_the_radial_axis_starts_at_the_floor(self, nf2ff_data, figures):
         """The axis is anchored to the peak, not to the pattern minimum, so an
         omnidirectional cut draws as a circle instead of filling the plot."""
-        SimTools.plot_2d_rad_pattern(nf2ff_data, dynamic_range_db=20)
+        SimTools.plot_2d_rad_pattern(nf2ff_data, floor_db=-20)
 
         for ax in figures.gcf().axes:
             assert ax.get_ylim() == pytest.approx((-20.0, 0.0))
 
+    @pytest.mark.parametrize("floor_db", [0.0, 30.0], ids=["zero", "positive"])
+    def test_a_non_negative_floor_is_rejected(self, nf2ff_data, floor_db):
+        with pytest.raises(ValueError, match="must be negative"):
+            SimTools.plot_2d_rad_pattern(nf2ff_data, floor_db=floor_db)
+
     def test_deep_nulls_clip_at_the_axis_floor(self, nf2ff_data, figures):
         """The fake pattern has a true null at theta = 180 degrees; it must
         land on the floor rather than wrap through the centre."""
-        SimTools.plot_2d_rad_pattern(nf2ff_data)
+        SimTools.plot_2d_rad_pattern(nf2ff_data, floor_db=-30)
 
         ydata = figures.gcf().axes[0].lines[0].get_ydata()
         assert np.min(ydata) == pytest.approx(-30.0)
+
+    def test_the_radial_axis_reaches_the_pattern_minimum_by_default(
+        self, nf2ff_data, figures
+    ):
+        """Without a floor the axis autoscales to the whole pattern,
+        and the exact null clips to the deepest finite point, not -inf."""
+        SimTools.plot_2d_rad_pattern(nf2ff_data)
+
+        ax = figures.gcf().axes[0]
+        ydata = ax.lines[0].get_ydata()
+        assert np.all(np.isfinite(ydata))
+        assert np.min(ydata) < -30.0
+        assert ax.get_ylim()[0] <= np.min(ydata)
 
     def test_the_frequency_is_in_the_title(self, nf2ff_data, figures):
         SimTools.plot_2d_rad_pattern(nf2ff_data)
@@ -466,6 +484,11 @@ class TestPlot2dDirectivity:
     def test_an_unknown_style_is_rejected(self, nf2ff_data):
         with pytest.raises(ValueError, match="style must be"):
             SimTools.plot_2d_directivity(nf2ff_data, style="smith")
+
+    @pytest.mark.parametrize("floor_db", [0.0, 30.0], ids=["zero", "positive"])
+    def test_a_non_negative_floor_is_rejected(self, nf2ff_data, floor_db):
+        with pytest.raises(ValueError, match="must be negative"):
+            SimTools.plot_2d_directivity(nf2ff_data, floor_db=floor_db)
 
     @pytest.mark.parametrize(
         "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
@@ -599,6 +622,11 @@ class TestPlot2dGain:
     def test_an_unknown_style_is_rejected(self, nf2ff_data):
         with pytest.raises(ValueError, match="style must be"):
             SimTools.plot_2d_gain(nf2ff_data, style="smith")
+
+    @pytest.mark.parametrize("floor_db", [0.0, 30.0], ids=["zero", "positive"])
+    def test_a_non_negative_floor_is_rejected(self, nf2ff_data, floor_db):
+        with pytest.raises(ValueError, match="must be negative"):
+            SimTools.plot_2d_gain(nf2ff_data, floor_db=floor_db)
 
     @pytest.mark.parametrize(
         "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
