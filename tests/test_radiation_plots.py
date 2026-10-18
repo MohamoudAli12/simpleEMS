@@ -568,25 +568,39 @@ class TestPlot2dDirectivity:
         value = float(hpbw_annotation(figures).split("=")[1].split("°")[0])
         assert value == pytest.approx(130.8, abs=1.0)
 
-    def test_cartesian_beam_edges_fold_back_into_the_theta_range(
+    def test_cartesian_view_keeps_a_backward_lobe_whole(
         self, sim_data, tmp_path, figures
     ):
-        """A beam straddling +-180 deg has an edge past 180 deg; the cartesian
-        view folds it back so both edge markers land on the plotted axis, one
-        near each end."""
+        """A beam straddling +-180 deg would split across both edges of a
+        -180..180 axis; the cartesian view runs 0..360 instead, so the lobe
+        sits in the middle with an edge marker on each side of its peak."""
         nf2ff_data = far_field_from(BackwardNF2FF(), sim_data, tmp_path)
 
         SimTools.plot_2d_directivity(nf2ff_data, style="cartesian")
 
         ax = figures.gcf().axes[0]
-        vertical_x = [
+        vertical_x = sorted(
             line.get_xdata()[0]
             for line in ax.lines[1:]
             if line.get_xdata()[0] == line.get_xdata()[1]
-        ]
-        edges = sorted(x for x in vertical_x if abs(abs(x) - 180.0) > 1e-9)
-        assert all(-180.0 <= x <= 180.0 for x in vertical_x)
-        assert edges == pytest.approx([-114.6, 114.6], abs=1.0)
+        )
+        assert ax.get_xlim() == pytest.approx((0.0, 360.0))
+        assert vertical_x == pytest.approx([114.6, 180.0, 245.4], abs=1.0)
+
+    @pytest.mark.parametrize(
+        "style", ["polar", "cartesian"], ids=["polar", "cartesian"]
+    )
+    def test_a_backward_lobe_is_reported_at_180_degrees(
+        self, sim_data, tmp_path, figures, style
+    ):
+        """The sweep starts at -180 deg, but the direction reads 180 deg."""
+        nf2ff_data = far_field_from(BackwardNF2FF(), sim_data, tmp_path)
+
+        SimTools.plot_2d_directivity(nf2ff_data, style=style)
+
+        annotation = hpbw_annotation(figures)
+        direction = float(annotation.split("Main Lobe Direction =")[1].split("°")[0])
+        assert direction == pytest.approx(180.0)
 
     def test_the_frequency_is_in_the_title(self, nf2ff_data, figures):
         SimTools.plot_2d_directivity(nf2ff_data, style="polar")

@@ -1580,7 +1580,8 @@ class SimTools:
         theta_step = theta[1] - theta[0]
         pattern = directivity_dbi[:-1]
         peak_idx = np.argmax(pattern)
-        peak_theta = theta[peak_idx]
+        # Report the direction in (-180°, 180°], so a backward lobe reads 180°
+        peak_theta = 180.0 - (180.0 - theta[peak_idx]) % 360.0
         peak_val = pattern[peak_idx]
 
         # Half-power level (−3 dB)
@@ -1609,6 +1610,15 @@ class SimTools:
             f"Main Lobe Direction = {peak_theta:.2f}°"
             f"\nMain Lobe Magnitude = {main_lobe_mag:.2f} dBi"
         )
+
+        # A lobe pointing near ±180° would split across both edges of the
+        # cartesian view, so run that axis from 0° to 360° to keep it whole.
+        axis_start = 0.0 if abs(peak_theta) > 90.0 else -180.0
+        axis_theta = (theta[:-1] - axis_start) % 360.0 + axis_start
+        axis_order = np.argsort(axis_theta)
+        axis_theta = np.append(axis_theta[axis_order], axis_theta[axis_order[0]] + 360)
+        axis_directivity_dbi = clipped_directivity_dbi[:-1][axis_order]
+        axis_directivity_dbi = np.append(axis_directivity_dbi, axis_directivity_dbi[0])
 
         # ---- Plotting ----
         views = ["polar", "cartesian"] if style == "both" else [style]
@@ -1673,20 +1683,20 @@ class SimTools:
             else:
                 ax = figure.add_subplot(1, 1, 1)
                 lines = ax.plot(
-                    theta,
-                    clipped_directivity_dbi,
+                    axis_theta,
+                    axis_directivity_dbi,
                     linewidth=2,
                     label="xz-plane",
                 )
 
                 if has_beamwidth:
+                    # Fold the peak and both beam edges into the plotted range
+                    peak_line, left_edge, right_edge = (
+                        (angle - axis_start) % 360.0 + axis_start
+                        for angle in (peak_theta, left_theta, right_theta)
+                    )
                     ax.axhline(hpbw_level, linestyle="--", color=HIGHLIGHT, lw=1)
-                    ax.axvline(peak_theta, linestyle="--", color=HIGHLIGHT, lw=1)
-
-                    # The beam can straddle ±180°: fold both edges back into
-                    # the plotted theta range.
-                    left_edge = (left_theta + 180.0) % 360.0 - 180.0
-                    right_edge = (right_theta + 180.0) % 360.0 - 180.0
+                    ax.axvline(peak_line, linestyle="--", color=HIGHLIGHT, lw=1)
                     ax.axvline(left_edge, linestyle="--", color=HIGHLIGHT, lw=1)
                     ax.axvline(right_edge, linestyle="--", color=HIGHLIGHT, lw=1)
 
@@ -1699,8 +1709,8 @@ class SimTools:
                         f"\nDirectivity = {sel.target[1]:.2f} dBi"
                     ),
                 )
-                ax.set_xlim(-180.0, 180.0)
-                ax.set_xticks(np.arange(-180, 181, 45))
+                ax.set_xlim(axis_start, axis_start + 360.0)
+                ax.set_xticks(np.arange(axis_start, axis_start + 361.0, 45.0))
                 ax.set_ylim(axis_floor, peak_val + 3.0)
                 ax.set_ylabel("Directivity (dBi)")
                 ax.legend(loc="lower right")
@@ -1800,13 +1810,23 @@ class SimTools:
 
         # The last sample repeats the first direction, so leave it out.
         peak_idx = np.argmax(gain_dbi[:-1])
-        peak_theta = theta[peak_idx]
+        # Report the direction in (-180°, 180°], so a backward lobe reads 180°
+        peak_theta = 180.0 - (180.0 - theta[peak_idx]) % 360.0
         peak_val = gain_dbi[peak_idx]
 
         annotation = (
             f"Main Lobe Direction = {peak_theta:.2f}°"
             f"\nMain Lobe Magnitude = {peak_val:.2f} dBi"
         )
+
+        # A lobe pointing near ±180° would split across both edges of the
+        # cartesian view, so run that axis from 0° to 360° to keep it whole.
+        axis_start = 0.0 if abs(peak_theta) > 90.0 else -180.0
+        axis_theta = (theta[:-1] - axis_start) % 360.0 + axis_start
+        axis_order = np.argsort(axis_theta)
+        axis_theta = np.append(axis_theta[axis_order], axis_theta[axis_order[0]] + 360)
+        axis_gain_dbi = clipped_gain_dbi[:-1][axis_order]
+        axis_gain_dbi = np.append(axis_gain_dbi, axis_gain_dbi[0])
 
         # ---- Plotting ----
         views = ["polar", "cartesian"] if style == "both" else [style]
@@ -1840,8 +1860,8 @@ class SimTools:
             else:
                 ax = figure.add_subplot(1, 1, 1)
                 lines = ax.plot(
-                    theta,
-                    clipped_gain_dbi,
+                    axis_theta,
+                    axis_gain_dbi,
                     linewidth=2,
                     label="xz-plane",
                 )
@@ -1855,8 +1875,8 @@ class SimTools:
                         f"\nRealized Gain = {sel.target[1]:.2f} dBi"
                     ),
                 )
-                ax.set_xlim(-180.0, 180.0)
-                ax.set_xticks(np.arange(-180, 181, 45))
+                ax.set_xlim(axis_start, axis_start + 360.0)
+                ax.set_xticks(np.arange(axis_start, axis_start + 361.0, 45.0))
                 ax.set_ylim(axis_floor, peak_val + 3.0)
                 ax.set_ylabel("Realized Gain (dBi)")
                 ax.legend(loc="lower right")
