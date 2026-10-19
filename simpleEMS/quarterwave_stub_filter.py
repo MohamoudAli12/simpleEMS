@@ -28,6 +28,7 @@ import math
 import numpy as np
 from numpy.typing import NDArray
 from dataclasses import dataclass, field
+from functools import cached_property
 
 from openEMS.ports import LumpedPort
 
@@ -180,7 +181,7 @@ class QuarterWaveFilterParams(SimParams):
         """
         return self.centre_freq
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """
         Return the total substrate length based on filter geometry.
@@ -190,13 +191,14 @@ class QuarterWaveFilterParams(SimParams):
         float
             Substrate length in mm.
         """
+        # The board ends at the ports, which sit on the filter's two ends
         return _get_total_length(
             self.filter_order,
             self.line_length_mm,
             self.shunt_line_width_mm,
         )
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width based on filter geometry.
@@ -210,7 +212,8 @@ class QuarterWaveFilterParams(SimParams):
         float
             Substrate width in mm.
         """
-        return self.series_line_width_mm + self.line_length_mm
+        # A quarter lambda0 of board beside the line and beyond the stubs
+        return self.series_line_width_mm + self.line_length_mm + self.lambda0 / 2
 
     @property
     def _default_simulation_box(self) -> NDArray:
@@ -443,14 +446,23 @@ class QuarterWaveFilter(SimTools):
             kappa=self.params.substrate_kappa,
         )
         substrate.SetColor("#0F8A00", 100)
+        # Centre the board on the filter: the line runs from x = 0 to its
+        # total length and the stubs reach up in +y
+        total_length = _get_total_length(
+            self.params.filter_order,
+            self.params.line_length_mm,
+            self.params.shunt_line_width_mm,
+        )
+        centre_x = total_length / 2
+        centre_y = (self.params.series_line_width_mm + self.params.line_length_mm) / 2
         substrate_start = [
-            -self.params.substrate_length_mm / 2,
-            -self.params.lambda0 / 4,
+            centre_x - self.params.substrate_length_mm / 2,
+            centre_y - self.params.substrate_width_mm / 2,
             0,
         ]
         substrate_stop = [
-            self.params.substrate_length_mm + self.params.substrate_length_mm / 2,
-            self.params.substrate_width_mm + self.params.lambda0 / 4,
+            centre_x + self.params.substrate_length_mm / 2,
+            centre_y + self.params.substrate_width_mm / 2,
             self.params.substrate_thickness_mm,
         ]
         substrate.AddBox(priority=0, start=substrate_start, stop=substrate_stop)
@@ -469,14 +481,22 @@ class QuarterWaveFilter(SimTools):
         """
         ground = self.CSX.AddMetal("ground")
         ground.SetColor("#B87333", 255)
+        # Same footprint as the substrate, centred on the filter
+        total_length = _get_total_length(
+            self.params.filter_order,
+            self.params.line_length_mm,
+            self.params.shunt_line_width_mm,
+        )
+        centre_x = total_length / 2
+        centre_y = (self.params.series_line_width_mm + self.params.line_length_mm) / 2
         ground_start = [
-            -self.params.substrate_length_mm / 2,
-            -self.params.lambda0 / 4,
+            centre_x - self.params.substrate_length_mm / 2,
+            centre_y - self.params.substrate_width_mm / 2,
             0,
         ]
         ground_stop = [
-            self.params.substrate_length_mm + self.params.substrate_length_mm / 2,
-            self.params.substrate_width_mm + self.params.lambda0 / 4,
+            centre_x + self.params.substrate_length_mm / 2,
+            centre_y + self.params.substrate_width_mm / 2,
             -self.params.copper_thickness_mm,
         ]
         ground.AddBox(priority=2, start=ground_start, stop=ground_stop)

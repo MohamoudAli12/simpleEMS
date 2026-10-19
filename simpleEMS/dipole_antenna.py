@@ -24,6 +24,7 @@ feed gap in openEMS.
 """
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
 from numpy.typing import NDArray
@@ -143,7 +144,7 @@ class PrintedDipoleAntennaParams(SimParams):
         """
         return self.resonant_freq
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """
         Return the substrate length along x including the board-edge margin.
@@ -157,7 +158,7 @@ class PrintedDipoleAntennaParams(SimParams):
         """
         return self.dipole_length_mm + 12 * self.substrate_thickness_mm
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width along y including the board-edge margin.

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 import cadquery as cq
@@ -165,12 +166,12 @@ class StepFDTDParams(SimParams):
         fmin, fmax = self.freq_range
         return 0.5 * (fmin + fmax)
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """Width of the imported structure, in mm."""
         return self.struct_bbox_mm[1] - self.struct_bbox_mm[0]
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """Length of the imported structure, in mm."""
         return self.struct_bbox_mm[3] - self.struct_bbox_mm[2]

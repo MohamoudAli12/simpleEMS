@@ -24,6 +24,7 @@ patch antenna geometries in openEMS.
 """
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
 
@@ -145,7 +146,7 @@ class InsetFedPatchParams(SimParams):
         """
         return self.resonant_freq
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """
         Return the substrate length including lambda0 padding.
@@ -157,7 +158,7 @@ class InsetFedPatchParams(SimParams):
         """
         return self.patch_length_mm + 2 * self.lambda0
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width including lambda0 padding.
@@ -738,7 +739,7 @@ class ProbeFedPatchParams(SimParams):
         """
         return self.resonant_freq
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """
         Return the substrate length including lambda0 padding.
@@ -750,7 +751,7 @@ class ProbeFedPatchParams(SimParams):
         """
         return self.patch_length_mm + 2 * self.lambda0
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width including lambda0 padding.

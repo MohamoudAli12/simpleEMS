@@ -24,6 +24,7 @@ ground plane and the feed port in openEMS.
 """
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
 from numpy.typing import NDArray
@@ -163,7 +164,7 @@ class PrintedMonopoleAntennaParams(SimParams):
         """
         return self.resonant_freq
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """
         Return the substrate length along x including the board-edge margin.
@@ -182,7 +183,7 @@ class PrintedMonopoleAntennaParams(SimParams):
             + 6 * self.substrate_thickness_mm
         )
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width along y, which the ground plane spans.

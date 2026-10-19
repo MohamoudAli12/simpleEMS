@@ -25,6 +25,7 @@ and mesh) using openEMS.
 """
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
 from numpy.typing import NDArray
@@ -145,7 +146,7 @@ class QuadratureBranchLineHybridCouplerParams(SimParams):
         """
         return self.centre_freq
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """
         Return the substrate length along x, which the feed lines span.
@@ -164,7 +165,7 @@ class QuadratureBranchLineHybridCouplerParams(SimParams):
             + 2 * self.feed_line_length_mm
         )
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width along y including the board-edge margin.

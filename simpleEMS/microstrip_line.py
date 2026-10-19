@@ -24,6 +24,7 @@ trace, ports, and mesh) using openEMS.
 """
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
 from numpy.typing import NDArray
@@ -110,7 +111,7 @@ class MicrostripLineParams(SimParams):
         """
         return self.target_freq
 
-    @property
+    @cached_property
     def substrate_length_mm(self) -> float:
         """
         Return the substrate length, which the trace spans end to end.
@@ -125,7 +126,7 @@ class MicrostripLineParams(SimParams):
         """
         return self.microstrip_length_mm
 
-    @property
+    @cached_property
     def substrate_width_mm(self) -> float:
         """
         Return the substrate width including the board-edge margin.
