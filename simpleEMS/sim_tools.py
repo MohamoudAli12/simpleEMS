@@ -1901,57 +1901,102 @@ class SimTools:
             )
 
     @staticmethod
-    def plot_efficiency(nf2ff_data: NF2FFData) -> None:
+    def plot_efficiency(
+        nf2ff_data: NF2FFData,
+        unit: Literal["percent", "db", "both"] = "both",
+    ) -> None:
         """
         Plot an antenna's radiation and total efficiency against frequency.
 
         Draws the efficiency curve ``compute_nf2ff_data`` worked out across
         the antenna's -10 dB band, with markers on the frequencies it was
         actually computed at, so the line between them reads as interpolated.
+        The efficiency shows in percent, in dB (``10 log10`` of the power
+        ratio), or both in separate figures.
 
         Parameters
         ----------
         nf2ff_data : NF2FFData
             The far-field results returned by ``compute_nf2ff_data``.
+        unit : {"percent", "db", "both"}, optional
+            Which scale to draw. ``"both"`` draws the percent and dB views in
+            two separate figures. Default is ``"both"``.
 
         Returns
         -------
         None
             Plots the efficiency curves; does not return a value.
+
+        Raises
+        ------
+        ValueError
+            If ``unit`` is not ``"percent"``, ``"db"`` or ``"both"``.
         """
+        if unit not in ("percent", "db", "both"):
+            raise ValueError(f"unit must be 'percent', 'db' or 'both', got {unit!r}")
+
         curve = nf2ff_data.efficiency_curve
+        views = ["percent", "db"] if unit == "both" else [unit]
 
-        plt.figure()
-        for values, computed, label in [
-            (curve.radiation, curve.computed_radiation, "Radiation Efficiency"),
-            (curve.total, curve.computed_total, "Total Efficiency"),
-        ]:
-            lines = plt.plot(curve.freqs, 100.0 * values, label=label)
-            plt.plot(
-                curve.computed_freqs,
-                100.0 * computed,
-                linestyle="none",
-                marker="o",
-                color=lines[0].get_color(),
-            )
-            cursor = themed_cursor(lines)
-            cursor.connect(
-                "add",
-                lambda sel, label=label: sel.annotation.set_text(
-                    f"Freq={freq_formatter(sel.target[0])}\n"
-                    f"{label}={sel.target[1]:.1f} %"
-                ),
-            )
+        for view in views:
+            if view == "percent":
+                curves = [
+                    (100.0 * values, 100.0 * computed, label)
+                    for values, computed, label in [
+                        (curve.radiation, curve.computed_radiation, "Radiation"),
+                        (curve.total, curve.computed_total, "Total"),
+                    ]
+                ]
+                value_unit = "%"
+                readout = "{:.1f} %"
+            else:
+                # A zero efficiency has no dB value; floor it at -60 dB
+                curves = [
+                    (
+                        10.0 * np.log10(np.maximum(values, 1e-6)),
+                        10.0 * np.log10(np.maximum(computed, 1e-6)),
+                        label,
+                    )
+                    for values, computed, label in [
+                        (curve.radiation, curve.computed_radiation, "Radiation"),
+                        (curve.total, curve.computed_total, "Total"),
+                    ]
+                ]
+                value_unit = "dB"
+                readout = "{:.2f} dB"
 
-        plt.gca().xaxis.set_major_formatter(freq_formatter)
-        # A narrow band in GHz makes long tick labels; five keep them apart
-        plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=5))
-        plt.ylim(0.0, 100.0)
-        plt.xlabel("Frequency")
-        plt.ylabel("Efficiency (%)")
-        plt.title("Efficiency vs Frequency")
-        plt.grid(True)
-        plt.legend()
+            plt.figure()
+            for values, computed, label in curves:
+                label = f"{label} Efficiency"
+                lines = plt.plot(curve.freqs, values, label=label)
+                plt.plot(
+                    curve.computed_freqs,
+                    computed,
+                    linestyle="none",
+                    marker="o",
+                    color=lines[0].get_color(),
+                )
+                cursor = themed_cursor(lines)
+                cursor.connect(
+                    "add",
+                    lambda sel, label=label, readout=readout: sel.annotation.set_text(
+                        f"Freq={freq_formatter(sel.target[0])}\n"
+                        f"{label}={readout.format(sel.target[1])}"
+                    ),
+                )
+
+            plt.gca().xaxis.set_major_formatter(freq_formatter)
+            # A narrow band in GHz makes long tick labels; five keep them apart
+            plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=5))
+            if view == "percent":
+                plt.ylim(0.0, 100.0)
+            else:
+                plt.ylim(top=0.0)
+            plt.xlabel("Frequency")
+            plt.ylabel(f"Efficiency ({value_unit})")
+            plt.title("Efficiency vs Frequency")
+            plt.grid(True)
+            plt.legend()
 
     @staticmethod
     def plot_3d_directivity(

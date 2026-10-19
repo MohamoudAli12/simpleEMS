@@ -980,14 +980,14 @@ class TestEfficiencyCurve:
 class TestPlotEfficiency:
     def test_draws_both_curves_in_percent(self, nf2ff_data, figures):
         """The fixture's FEM fake gives 75% everywhere, matched (S11 = 0)."""
-        SimTools.plot_efficiency(nf2ff_data)
+        SimTools.plot_efficiency(nf2ff_data, unit="percent")
 
         radiation, _, total, _ = figures.gcf().axes[0].lines
         np.testing.assert_allclose(radiation.get_ydata(), 75.0)
         np.testing.assert_allclose(total.get_ydata(), 75.0)
 
     def test_marks_the_computed_points(self, nf2ff_data, figures):
-        SimTools.plot_efficiency(nf2ff_data)
+        SimTools.plot_efficiency(nf2ff_data, unit="percent")
 
         _, radiation_markers, _, total_markers = figures.gcf().axes[0].lines
         curve = nf2ff_data.efficiency_curve
@@ -1006,9 +1006,41 @@ class TestPlotEfficiency:
         assert (len(nf2ff.calls), len(nf2ff.power_calls)) == calls_before
 
     def test_the_axis_spans_zero_to_one_hundred_percent(self, nf2ff_data, figures):
-        SimTools.plot_efficiency(nf2ff_data)
+        SimTools.plot_efficiency(nf2ff_data, unit="percent")
 
         assert figures.gca().get_ylim() == (0.0, 100.0)
+
+    def test_draws_both_curves_in_db(self, nf2ff_data, figures):
+        """75% is 10 log10(0.75), about -1.25 dB."""
+        SimTools.plot_efficiency(nf2ff_data, unit="db")
+
+        radiation, radiation_markers, total, _ = figures.gcf().axes[0].lines
+        expected = 10.0 * np.log10(0.75)
+        np.testing.assert_allclose(radiation.get_ydata(), expected)
+        np.testing.assert_allclose(total.get_ydata(), expected)
+        np.testing.assert_allclose(radiation_markers.get_ydata(), expected)
+
+    def test_the_db_axis_tops_out_at_zero(self, nf2ff_data, figures):
+        SimTools.plot_efficiency(nf2ff_data, unit="db")
+
+        assert figures.gca().get_ylim()[1] == 0.0
+        assert figures.gca().get_ylabel() == "Efficiency (dB)"
+
+    @pytest.mark.parametrize(
+        ("unit", "expected_figures"),
+        [("percent", 1), ("db", 1), ("both", 2)],
+        ids=["percent", "db", "both"],
+    )
+    def test_draws_one_figure_per_unit(
+        self, nf2ff_data, figures, unit, expected_figures
+    ):
+        SimTools.plot_efficiency(nf2ff_data, unit=unit)
+
+        assert len(figures.get_fignums()) == expected_figures
+
+    def test_rejects_an_unknown_unit(self, nf2ff_data):
+        with pytest.raises(ValueError, match="unit must be"):
+            SimTools.plot_efficiency(nf2ff_data, unit="linear")
 
 
 # ---------------------------------------------------------------------
