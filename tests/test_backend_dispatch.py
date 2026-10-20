@@ -8,6 +8,7 @@ dispatch -- what is called, with what -- and never run a solve.
 
 import os
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -17,7 +18,12 @@ pytestmark = pytest.mark.needs_csxcad
 pytest.importorskip("CSXCAD")
 pytest.importorskip("openEMS")
 
-from simpleEMS import fem_backend, fem_field_dump, sim_tools  # noqa: E402
+from simpleEMS import (  # noqa: E402
+    fem_backend,
+    fem_field_dump,
+    fem_materials,
+    sim_tools,
+)
 from simpleEMS.sim_tools import SimTools, setup_simulation  # noqa: E402
 
 
@@ -140,13 +146,17 @@ class TestRunSimulationFEM:
 class TestFEMMeshViewer:
     @pytest.fixture
     def viewer(self, monkeypatch, tmp_path):
-        """Stub the mesher with a two-cell grid and record the viewer calls."""
+        """Stub the mesher with a substrate-and-air grid and record the viewer."""
         import pyvista as pv
 
         msh_path = tmp_path / "mesh" / "model.msh"
         msh_path.parent.mkdir()
-        grid = pv.ImageData(dimensions=(3, 2, 2)).cast_to_unstructured_grid()
-        grid.cell_data["CellEntityIds"] = np.array([1, 2])
+        grid = pv.ImageData(dimensions=(3, 2, 2), spacing=(1e-3, 1e-3, 1e-3))
+        grid = grid.triangulate()
+        lower_half = grid.cell_centers().points[:, 0] < 1e-3
+        grid.cell_data["CellEntityIds"] = np.where(
+            lower_half, fem_materials.dielectric_region(0), fem_materials.AIR
+        )
         grid.save(msh_path.with_suffix(".vtk"))
 
         recorded = {"build": [], "plotters": [], "themes": []}
@@ -156,18 +166,30 @@ class TestFEMMeshViewer:
             return str(msh_path)
 
         class RecordingPlotter:
-            def __init__(self):
-                self.meshes, self.shown, self.calls = [], False, []
+            def __init__(self, **kwargs):
+                self.meshes, self.texts, self.shown, self.calls = [], [], False, []
                 recorded["plotters"].append(self)
 
             def add_mesh(self, mesh, **kwargs):
-                self.meshes.append((mesh, kwargs))
+                actor = MagicMock()
+                self.meshes.append((mesh, kwargs, actor))
+                return actor
 
-            def add_axes(self):
+            def add_text(self, text, **kwargs):
+                self.texts.append(text)
+                return MagicMock()
+
+            def add_checkbox_button_widget(self, callback, **kwargs):
+                pass
+
+            def add_legend(self, labels, **kwargs):
+                pass
+
+            def add_axes(self, **kwargs):
                 self.calls.append("add_axes")
 
-            def view_xy(self):
-                self.calls.append("view_xy")
+            def view_isometric(self):
+                self.calls.append("view_isometric")
 
             def show(self):
                 self.shown = True
@@ -192,32 +214,40 @@ class TestFEMMeshViewer:
         assert options is sim.FEM_options
         (plotter,) = viewer["plotters"]
         assert plotter.shown
-        assert plotter.calls == ["add_axes", "view_xy"]
+        assert plotter.calls == ["add_axes", "view_isometric"]
 
-    def test_colours_the_cells_by_region(self, fem_sim, viewer, tmp_path):
+    def test_draws_each_region_in_its_own_colour(self, fem_sim, viewer, tmp_path):
         sim, _params = fem_sim
 
         SimTools.write_and_show_structure(sim, tmp_path)
 
-        ((mesh, kwargs),) = viewer["plotters"][0].meshes
-        assert mesh.n_cells == 2
-        assert kwargs["scalars"] == "CellEntityIds"
+        meshes = viewer["plotters"][0].meshes
+        colours = [kwargs["color"] for _mesh, kwargs, _actor in meshes]
+        cell_ids = [set(mesh.cell_data["CellEntityIds"]) for mesh, _k, _a in meshes]
+        assert cell_ids == [{fem_materials.dielectric_region(0)}, {fem_materials.AIR}]
+        assert len(set(colours)) == 2
 
-    @pytest.mark.parametrize(
-        ("mesh_style", "show_edges"),
-        [("wireframe", False), ("surface", True)],
-        ids=["wireframe", "surface"],
-    )
-    def test_edges_show_unless_drawing_a_wireframe(
-        self, fem_sim, viewer, tmp_path, mesh_style, show_edges
-    ):
+    def test_air_starts_hidden(self, fem_sim, viewer, tmp_path):
         sim, _params = fem_sim
 
-        SimTools.write_and_show_structure(sim, tmp_path, mesh_style=mesh_style)
+        SimTools.write_and_show_structure(sim, tmp_path)
 
-        ((_mesh, kwargs),) = viewer["plotters"][0].meshes
-        assert kwargs["style"] == mesh_style
-        assert kwargs["show_edges"] is show_edges
+        (substrate_actor, air_actor) = [
+            actor for _mesh, _kwargs, actor in viewer["plotters"][0].meshes
+        ]
+        substrate_actor.SetVisibility.assert_called_once_with(True)
+        air_actor.SetVisibility.assert_called_once_with(False)
+
+    def test_lists_the_mesh_statistics(self, fem_sim, viewer, tmp_path):
+        sim, _params = fem_sim
+
+        SimTools.write_and_show_structure(sim, tmp_path)
+
+        stats = viewer["plotters"][0].texts[-1]
+        assert "Tetrahedra" in stats
+        assert "Worst quality" in stats
+        assert "Substrate 1" in stats
+        assert "Air" in stats
 
     def test_keeps_the_active_theme_by_default(self, fem_sim, viewer, tmp_path):
         sim, _params = fem_sim

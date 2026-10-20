@@ -1008,6 +1008,115 @@ def build_mesh(
     return _mesh_problem(prob, output_path, verbose, fingerprint)
 
 
+def show_fem_mesh(msh_path: str | Path) -> None:
+    """
+    Show a Gmsh mesh in PyVista, one coloured, switchable actor per region.
+
+    Each region (dielectric, air, PEC, port, absorbing boundary, ...) gets a
+    fixed colour, a legend entry and a checkbox that hides or shows it; air and
+    the absorbing boundary start hidden so the structure is visible. A corner
+    table lists the node and tetrahedron counts, the shortest and longest edge,
+    the worst scaled Jacobian and the tetrahedra in each volume region.
+
+    Parameters
+    ----------
+    msh_path : str | Path
+        The Gmsh ``.msh`` file. Its ``.vtk`` sibling, written alongside by the
+        mesher, is read when present.
+
+    Returns
+    -------
+    None
+    """
+    import pyvista as pv
+
+    vtk_path = Path(msh_path).with_suffix(".vtk")
+    grid = pv.read(str(vtk_path if vtk_path.exists() else msh_path))
+    grid.points *= 1e3  # metres -> millimetres, so the axes read in mm
+    region_ids = grid.cell_data["CellEntityIds"]
+    volume_cells = grid.celltypes == pv.CellType.TETRA
+    tetrahedra = grid.extract_cells(np.flatnonzero(volume_cells))
+
+    plotter = pv.Plotter(window_size=(1200, 850), title="simpleEMS FEM mesh")
+    legend = []
+    volume_counts = []
+    for row, region_id in enumerate(np.unique(region_ids)):
+        if fem_materials.dielectric_region(0) <= region_id < fem_materials.AIR:
+            name = f"Substrate {region_id - fem_materials.dielectric_region(0) + 1}"
+            color = "#3a9e5c"
+        elif fem_materials.port_region(0) < region_id < fem_materials.ABC:
+            name = f"Port {region_id - fem_materials.port_region(0)}"
+            color = "#e0383b"
+        else:
+            name, color = {
+                fem_materials.AIR: ("Air", "#7fb3ff"),
+                fem_materials.PML: ("PML", "#b38fff"),
+                fem_materials.PEC: ("PEC", "#d98c3a"),
+                fem_materials.LOSSY_CONDUCTOR: ("Lossy conductor", "#a0703a"),
+                fem_materials.ABC: ("ABC", "#9aa4b2"),
+                fem_materials.SYM: ("Symmetry", "#f2c94c"),
+            }.get(int(region_id), (f"Region {region_id}", "#ffffff"))
+        in_region = region_ids == region_id
+        is_volume = bool(np.any(in_region & volume_cells))
+        if is_volume:
+            volume_counts.append((name, int(np.sum(in_region & volume_cells))))
+        actor = plotter.add_mesh(
+            grid.extract_cells(np.flatnonzero(in_region & (volume_cells == is_volume))),
+            color=color,
+            show_edges=True,
+            edge_color="black",
+            line_width=0.3,
+            opacity=0.25 if is_volume else 1.0,
+        )
+        visible = region_id not in (fem_materials.AIR, fem_materials.ABC)
+        actor.SetVisibility(visible)
+        plotter.add_checkbox_button_widget(
+            lambda state, actor=actor: actor.SetVisibility(state),
+            value=visible,
+            position=(10, 10 + row * 45),
+            size=35,
+            color_on=color,
+        )
+        plotter.add_text(name, position=(55, 18 + row * 45), font_size=10)
+        legend.append([name, color])
+    plotter.add_legend(legend, size=(0.18, 0.2))
+
+    rows = [("Nodes", f"{grid.n_points:,}"), ("Tetrahedra", f"{tetrahedra.n_cells:,}")]
+    if tetrahedra.n_cells:
+        quality = tetrahedra.cell_quality("scaled_jacobian")["scaled_jacobian"]
+        edge_lengths = (
+            tetrahedra.extract_all_edges()
+            .compute_cell_sizes(area=False, volume=False)
+            .cell_data["Length"]
+        )
+        rows += [
+            ("Shortest edge", f"{edge_lengths.min() * 1e3:.2f} um"),
+            ("Longest edge", f"{edge_lengths.max():.2f} mm"),
+            ("Worst quality", f"{quality.min():.3f}"),
+        ]
+    rows += [(f"  {name}", f"{count:,}") for name, count in volume_counts]
+    label_width = max(len(label) for label, _ in rows)
+    value_width = max(len(value) for _, value in rows)
+    stats_actor = plotter.add_text(
+        "\n".join(
+            f" {label:<{label_width}}  {value:>{value_width}} " for label, value in rows
+        ),
+        position="upper_left",
+        font_size=12,
+        font="courier",
+        color="#f2f2f2",
+    )
+    stats_property = stats_actor.GetTextProperty()
+    stats_property.SetBackgroundColor(0.08, 0.08, 0.1)
+    stats_property.SetBackgroundOpacity(0.75)
+    stats_property.SetFrame(True)
+    stats_property.SetFrameColor(0.45, 0.45, 0.5)
+
+    plotter.add_axes(viewport=(0.86, 0.0, 1.0, 0.16))
+    plotter.view_isometric()
+    plotter.show()
+
+
 def _renormalise(s: NDArray, z_old: NDArray, z_new: NDArray) -> NDArray:
     """
     Re-reference an S-matrix from one set of port impedances to another.
@@ -1489,7 +1598,6 @@ def simulate_step_FEM(
     output_path: str | Path = "Sim_Path",
     run: bool = True,
     show_mesh: bool = True,
-    mesh_style: str = "wireframe",
     verbose: bool = True,
 ) -> SimData:
     """
@@ -1565,11 +1673,9 @@ def simulate_step_FEM(
         Whether to solve. If ``False``, the geometry is only meshed and the
         results are read back from an earlier run in ``output_path``. Default
         ``True``.
-    show_mesh:bool
-        Whether to show the created mesh. Default is ``True``.
-    mesh_style: str
-        mesh style to be used for visualisation. default is "wireframe".
-        other options are: "surface" | "wireframe" | "points",
+    show_mesh : bool
+        Whether to show the created mesh with :func:`show_fem_mesh` before the
+        sweep. Default ``True``.
     verbose : bool
         Print progress. Default ``True``.
 
@@ -1623,23 +1729,7 @@ def simulate_step_FEM(
 
     msh_path = _mesh_problem(prob, output_path, verbose)
     if show_mesh:
-        import pyvista as pv
-
-        vtk_path = Path(msh_path).with_suffix(".vtk")
-        grid = pv.read(str(vtk_path if vtk_path.exists() else msh_path))
-        plotter = pv.Plotter()
-        plotter.add_mesh(
-            grid,
-            style=mesh_style,
-            show_edges=mesh_style != "wireframe",
-            opacity=0.5,
-            scalars="CellEntityIds",
-            cmap="tab20",
-            show_scalar_bar=False,
-        )
-        plotter.add_axes()
-        plotter.view_xy()
-        plotter.show()
+        show_fem_mesh(msh_path)
     if run:
         _sweep_from_meta(
             freqs,

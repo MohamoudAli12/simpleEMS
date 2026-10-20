@@ -391,7 +391,6 @@ class SimTools:
     def write_and_show_structure(
         sim: SimSetup,
         output_path: Path | None = None,
-        mesh_style: str = "wireframe",
         theme: str | None = None,
     ) -> None:
         """
@@ -401,8 +400,9 @@ class SimTools:
         FEM backend it (re-)meshes the current ``CSX``/``FEM_options`` with
         Gmsh -- reusing the existing mesh instead of rebuilding if neither
         has changed since the last call on this ``output_path`` -- and
-        renders it with PyVista, coloring cells by their Gmsh
-        physical-group id.
+        shows it with :func:`simpleEMS.fem_backend.show_fem_mesh`: one
+        coloured, switchable region per material or boundary, plus a table
+        of mesh statistics.
 
         Parameters
         ----------
@@ -411,11 +411,6 @@ class SimTools:
         output_path : Path, optional
             Directory to write/read the structure XML (FDTD) or mesh files
             (FEM). Defaults to ``cwd / "Sim_Path"``, created if missing.
-        mesh_style : str
-            FEM mesh only. PyVista ``add_mesh`` representation: ``"surface"``,
-            ``"wireframe"`` (default), or ``"points"``. Mesh cells are colored
-            by their Gmsh physical-group id (``CellEntityIds``: dielectric,
-            PEC, port, absorbing boundary, ...).
         theme : str, optional
             FEM mesh only. ``None`` (default) keeps the active simpleEMS theme
             (see :func:`simpleEMS.plot_theme.use_dark_theme`). A PyVista theme
@@ -440,22 +435,7 @@ class SimTools:
             msh_path = fem_backend.build_mesh(
                 sim.CSX, sim.freqs, output_path, FEM_options=sim.FEM_options
             )
-            vtk_path = Path(msh_path).with_suffix(".vtk")
-            grid = pv.read(str(vtk_path if vtk_path.exists() else msh_path))
-
-            plotter = pv.Plotter()
-            plotter.add_mesh(
-                grid,
-                style=mesh_style,
-                show_edges=mesh_style != "wireframe",
-                opacity=0.5,
-                scalars="CellEntityIds",
-                cmap="tab20",
-                show_scalar_bar=False,
-            )
-            plotter.add_axes()
-            plotter.view_xy()
-            plotter.show()
+            fem_backend.show_fem_mesh(msh_path)
             return
 
         structure_3d = output_path / "structure.xml"

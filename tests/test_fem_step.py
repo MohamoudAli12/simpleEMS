@@ -12,6 +12,8 @@ exist.
 solve stages get one test each at the bottom.
 """
 
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 
@@ -443,15 +445,10 @@ class TestMeshing:
         grid.save(msh_path.with_suffix(".vtk"))
         shown = []
 
-        class RecordingPlotter:
+        class RecordingPlotter(MagicMock):
             def add_mesh(self, mesh, **kwargs):
                 shown.append(kwargs)
-
-            def add_axes(self):
-                pass
-
-            def view_xy(self):
-                pass
+                return MagicMock()
 
             def show(self):
                 shown.append("shown")
@@ -470,11 +467,9 @@ class TestMeshing:
                 output_path=tmp_path / "out",
                 run=False,
                 show_mesh=True,
-                mesh_style="surface",
                 verbose=False,
             )
 
-        assert shown[0]["scalars"] == "CellEntityIds"
         assert shown[0]["show_edges"] is True
         assert shown[-1] == "shown"
 
