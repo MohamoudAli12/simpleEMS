@@ -6,7 +6,7 @@ from pathlib import Path
 from simpleEMS import (
     ProbeFedPatchAntenna,
     ProbeFedPatchParams,
-    optimize_s11,
+    minimize_s_param,
     optimize_s_params,
     param_sweep,
     setup_simulation,
@@ -54,7 +54,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
     if optimize:
         patch.run_simulation(sim, output_path)
         sim_data = patch.compute_sim_data(sim, port, output_path)
-        return optimize_s11(
+        return minimize_s_param(
             sim_data.freqs,
             sim_data.s11,
             target_freq=params.resonant_freq,

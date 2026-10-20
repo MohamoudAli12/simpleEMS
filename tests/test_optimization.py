@@ -1,6 +1,6 @@
 """Tests for the objective functions, sweep, and optimizer in ``sim_tools``.
 
-``optimize_s11``/``optimize_s21`` are pure functions of an S-parameter array,
+``minimize_s_param``/``maximize_s_param`` are pure functions of an S-parameter array,
 so they are tested directly against hand-computed dB values. ``param_sweep``
 and ``optimize_s_params`` take a user-supplied ``simulate_fn``, which makes
 them testable with a cheap analytic stand-in instead of a solver -- the thing
@@ -20,8 +20,8 @@ pytest.importorskip("openEMS")
 
 from simpleEMS.sim_tools import (  # noqa: E402
     SimData,
-    optimize_s11,
-    optimize_s21,
+    maximize_s_param,
+    minimize_s_param,
     optimize_s_params,
     param_sweep,
 )
@@ -42,22 +42,24 @@ def notch_at(centre, depth_db=-30.0, width=0.2e9):
 
 
 # ---------------------------------------------------------------------
-# optimize_s11
+# minimize_s_param
 # ---------------------------------------------------------------------
-class TestOptimizeS11:
+class TestMinimizeSParam:
     def test_target_freq_returns_the_value_at_that_point(self):
         s11 = notch_at(2.45e9)
         index = np.abs(FREQS - 2.45e9).argmin()
         expected = 20 * np.log10(np.abs(s11[index]))
 
-        assert optimize_s11(FREQS, s11, target_freq=2.45e9) == pytest.approx(expected)
+        assert minimize_s_param(FREQS, s11, target_freq=2.45e9) == pytest.approx(
+            expected
+        )
 
     def test_target_freq_snaps_to_the_nearest_grid_point(self):
         """The requested frequency need not be on the grid."""
         s11 = notch_at(2.45e9)
 
-        exact = optimize_s11(FREQS, s11, target_freq=2.45e9)
-        offset = optimize_s11(FREQS, s11, target_freq=2.4500001e9)
+        exact = minimize_s_param(FREQS, s11, target_freq=2.45e9)
+        offset = minimize_s_param(FREQS, s11, target_freq=2.4500001e9)
 
         assert exact == offset
 
@@ -66,24 +68,24 @@ class TestOptimizeS11:
         ``threshold`` are ignored."""
         s11 = notch_at(2.45e9)
 
-        with_band = optimize_s11(
+        with_band = minimize_s_param(
             FREQS, s11, target_freq=2.45e9, freq_band=(1e9, 3e9), mode="mean"
         )
-        without = optimize_s11(FREQS, s11, target_freq=2.45e9)
+        without = minimize_s_param(FREQS, s11, target_freq=2.45e9)
 
         assert with_band == without
 
     def test_worst_mode_returns_the_maximum_in_band(self):
         s11 = s_from_db(np.linspace(-30, -3, len(FREQS)))
 
-        assert optimize_s11(
+        assert minimize_s_param(
             FREQS, s11, freq_band=(1e9, 3e9), mode="worst"
         ) == pytest.approx(-3, abs=0.1)
 
     def test_mean_mode_returns_the_band_average(self):
         s11 = s_from_db(np.full(len(FREQS), -20.0))
 
-        assert optimize_s11(
+        assert minimize_s_param(
             FREQS, s11, freq_band=(1e9, 3e9), mode="mean"
         ) == pytest.approx(-20.0, abs=1e-9)
 
@@ -91,7 +93,7 @@ class TestOptimizeS11:
         """Nothing exceeds -15 dB, so there is no penalty to pay."""
         s11 = s_from_db(np.full(len(FREQS), -30.0))
 
-        assert optimize_s11(
+        assert minimize_s_param(
             FREQS, s11, freq_band=(1e9, 3e9), mode="threshold", threshold=-15
         ) == pytest.approx(0.0)
 
@@ -99,7 +101,7 @@ class TestOptimizeS11:
         s11 = s_from_db(np.full(len(FREQS), -10.0))
         in_band = np.sum((FREQS >= 1e9) & (FREQS <= 3e9))
 
-        penalty = optimize_s11(
+        penalty = minimize_s_param(
             FREQS, s11, freq_band=(1e9, 3e9), mode="threshold", threshold=-15
         )
 
@@ -109,46 +111,46 @@ class TestOptimizeS11:
         """A bad match outside the band of interest must not be counted."""
         s11 = s_from_db(np.where(FREQS < 2e9, -3.0, -30.0))
 
-        assert optimize_s11(
+        assert minimize_s_param(
             FREQS, s11, freq_band=(2.5e9, 3e9), mode="worst"
         ) == pytest.approx(-30.0, abs=0.1)
 
     def test_lower_cost_means_a_better_match(self):
         """The optimizer minimises this, so the ordering has to be right."""
-        good = optimize_s11(FREQS, notch_at(2.45e9, -30), target_freq=2.45e9)
-        bad = optimize_s11(FREQS, notch_at(2.45e9, -5), target_freq=2.45e9)
+        good = minimize_s_param(FREQS, notch_at(2.45e9, -30), target_freq=2.45e9)
+        bad = minimize_s_param(FREQS, notch_at(2.45e9, -5), target_freq=2.45e9)
 
         assert good < bad
 
     @pytest.mark.parametrize("mode", ["best", "min", "", "WORST"])
     def test_unknown_mode_raises(self, mode):
         with pytest.raises(ValueError, match="mode must be"):
-            optimize_s11(FREQS, notch_at(2.45e9), freq_band=(1e9, 3e9), mode=mode)
+            minimize_s_param(FREQS, notch_at(2.45e9), freq_band=(1e9, 3e9), mode=mode)
 
     def test_missing_target_and_band_raises(self):
         with pytest.raises(ValueError, match="Provide target_freq or freq_band"):
-            optimize_s11(FREQS, notch_at(2.45e9))
+            minimize_s_param(FREQS, notch_at(2.45e9))
 
 
 # ---------------------------------------------------------------------
-# optimize_s21
+# maximize_s_param
 # ---------------------------------------------------------------------
-class TestOptimizeS21:
-    """Note the sign asymmetry against ``optimize_s11``: both are costs to be
-    minimised, but *more* transmission is better while *less* reflection is
-    better, so ``optimize_s21`` negates the dB value. Flipping that turns an
+class TestMaximizeSParam:
+    """Note the sign asymmetry against ``minimize_s_param``: both are costs
+    to be minimised, but here a *higher* S-parameter is better, so
+    ``maximize_s_param`` negates the dB value. Flipping that turns an
     optimizer into a pessimizer, which is why it is pinned here."""
 
     def test_cost_is_the_negated_insertion_loss(self):
         s21 = s_from_db(np.full(len(FREQS), -1.5))
 
-        assert optimize_s21(FREQS, s21, target_freq=2.45e9) == pytest.approx(1.5)
+        assert maximize_s_param(FREQS, s21, target_freq=2.45e9) == pytest.approx(1.5)
 
     def test_better_transmission_gives_a_lower_cost(self):
-        lossy = optimize_s21(
+        lossy = maximize_s_param(
             FREQS, s_from_db(np.full(len(FREQS), -10.0)), target_freq=2.45e9
         )
-        good = optimize_s21(
+        good = maximize_s_param(
             FREQS, s_from_db(np.full(len(FREQS), -0.5)), target_freq=2.45e9
         )
 
@@ -156,37 +158,53 @@ class TestOptimizeS21:
 
     def test_worst_mode_takes_the_least_transmitting_point(self):
         """``worst`` is ``-min(S21_dB)`` -- the opposite reduction to the S11
-        version, since here the worst case is the smallest value."""
+        function, since here the worst case is the smallest value."""
         s21 = s_from_db(np.linspace(-1.0, -20.0, len(FREQS)))
 
-        assert optimize_s21(
+        assert maximize_s_param(
             FREQS, s21, freq_band=(1e9, 3e9), mode="worst"
         ) == pytest.approx(20.0, abs=0.1)
 
     def test_mean_mode_returns_the_negated_band_average(self):
         s21 = s_from_db(np.full(len(FREQS), -1.5))
 
-        assert optimize_s21(
+        assert maximize_s_param(
             FREQS, s21, freq_band=(1e9, 3e9), mode="mean"
         ) == pytest.approx(1.5, abs=1e-6)
 
     def test_target_freq_takes_precedence_over_freq_band(self):
         s21 = s_from_db(np.linspace(-1.0, -20.0, len(FREQS)))
 
-        assert optimize_s21(
+        assert maximize_s_param(
             FREQS, s21, target_freq=2.45e9, freq_band=(1e9, 3e9), mode="mean"
-        ) == optimize_s21(FREQS, s21, target_freq=2.45e9)
+        ) == maximize_s_param(FREQS, s21, target_freq=2.45e9)
 
     def test_missing_target_and_band_raises(self):
         with pytest.raises(ValueError, match="Provide target_freq or freq_band"):
-            optimize_s21(FREQS, s_from_db(np.full(len(FREQS), -1.5)))
+            maximize_s_param(FREQS, s_from_db(np.full(len(FREQS), -1.5)))
 
-    @pytest.mark.parametrize("mode", ["best", "", "threshold"])
+    def test_threshold_mode_is_zero_when_fully_above_threshold(self):
+        """Nothing drops below -1 dB, so there is no shortfall to pay."""
+        s21 = s_from_db(np.full(len(FREQS), -0.5))
+
+        assert maximize_s_param(
+            FREQS, s21, freq_band=(1e9, 3e9), mode="threshold", threshold=-1
+        ) == pytest.approx(0.0)
+
+    def test_threshold_mode_accumulates_the_shortfall(self):
+        s21 = s_from_db(np.full(len(FREQS), -4.0))
+        in_band = np.sum((FREQS >= 1e9) & (FREQS <= 3e9))
+
+        shortfall = maximize_s_param(
+            FREQS, s21, freq_band=(1e9, 3e9), mode="threshold", threshold=-1
+        )
+
+        assert shortfall == pytest.approx(3.0 * in_band, rel=1e-6)
+
+    @pytest.mark.parametrize("mode", ["best", "min", "", "WORST"])
     def test_unknown_mode_raises(self, mode):
-        """``threshold`` exists on ``optimize_s11`` but not here; asking for
-        it must fail loudly rather than silently falling back."""
-        with pytest.raises(ValueError, match="mode must be 'mean' or 'worst'"):
-            optimize_s21(
+        with pytest.raises(ValueError, match="mode must be"):
+            maximize_s_param(
                 FREQS,
                 s_from_db(np.full(len(FREQS), -1.5)),
                 freq_band=(1e9, 3e9),

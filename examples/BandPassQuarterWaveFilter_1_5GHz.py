@@ -7,7 +7,7 @@ from pathlib import Path
 from simpleEMS import (
     BandPassQuarterWaveFilter,
     QuarterWaveFilterParams,
-    optimize_s21,
+    maximize_s_param,
     optimize_s_params,
     param_sweep,
     setup_simulation,
@@ -58,13 +58,11 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         filter.run_simulation(sim, output_path)
         sim_data = filter.compute_sim_data(sim, ports, output_path)
 
-        s21_cost = optimize_s21(
+        return maximize_s_param(
             sim_data.freqs,
             sim_data.s21,
-            params.centre_freq,
+            target_freq=params.centre_freq,
         )
-
-        return s21_cost
 
     if not (sweep or optimize):
         filter.run_simulation(sim, output_path)

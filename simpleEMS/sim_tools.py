@@ -78,8 +78,8 @@ __all__ = [
     "SimTools",
     "setup_simulation",
     "optimize_s_params",
-    "optimize_s11",
-    "optimize_s21",
+    "minimize_s_param",
+    "maximize_s_param",
     "param_sweep",
     "mm_to_m",
     "m_to_mm",
@@ -2580,155 +2580,160 @@ class SimTools:
             file.writelines(lines)
 
 
-def optimize_s11(
+def minimize_s_param(
     freqs: NDArray,
-    s11: NDArray,
+    s_param: NDArray,
     target_freq: float | None = None,
     freq_band: tuple[float, float] | None = None,
     mode: str = "worst",
     threshold: float = -15,
 ) -> np.floating:
     """
-    Objective function for S11 (reflection) optimization. Lower is better.
+    Cost function that drives an S-parameter down. Lower cost is better.
 
-    Intended as a scalar cost function for ``optimize_s_params``: converts
-    S11 to dB and reduces it to a single number, either at one frequency
-    or over a band. If ``target_freq`` is given it takes precedence over
-    ``freq_band`` (and ``mode``/``threshold`` are ignored).
+    Use it as the return value of the ``simulate_fn`` passed to
+    :func:`optimize_s_params`, for S11 matching or a band-stop S21. It
+    converts ``s_param`` to dB and reduces it to one number, either at a
+    single frequency or over a band. ``target_freq`` takes precedence over
+    ``freq_band``.
 
     Parameters
     ----------
     freqs : NDArray
-        Array of frequencies in Hz, matching ``s11``.
-    s11 : NDArray
-        Complex S11 parameter array across the frequency range.
+        Frequencies in Hz, matching ``s_param``.
+    s_param : NDArray
+        Complex S-parameter to drive down, e.g. ``sim_data.s11``.
     target_freq : float, optional
-        If given, evaluate S11 (in dB) at the frequency in ``freqs``
-        closest to this value, ignoring ``freq_band``/``mode``/
-        ``threshold``.
+        Evaluate at the frequency in ``freqs`` closest to this value,
+        ignoring ``freq_band``, ``mode`` and ``threshold``.
     freq_band : tuple of (float, float), optional
-        Frequency band ``(f_min, f_max)`` in Hz over which to evaluate S11
-        when ``target_freq`` is not given.
+        Band ``(start, stop)`` in Hz to evaluate over when ``target_freq``
+        is not given.
     mode : str, optional
-        Evaluation mode within the frequency band:
+        How to reduce the band to one number:
 
-        - ``"worst"`` : the maximum S11 in dB (worst-case reflection).
-        - ``"mean"`` : the mean S11 in dB across the band.
-        - ``"threshold"`` : sum, over the band, of the amount (in dB) each
-          point exceeds ``threshold`` (0 if none exceed it).
+        - ``"worst"`` : the highest value in dB.
+        - ``"mean"`` : the mean value in dB.
+        - ``"threshold"`` : the sum of how far, in dB, each point rises
+          above ``threshold`` (0 when none do).
 
         Default is ``"worst"``.
     threshold : float, optional
-        S11 threshold in dB, used only when ``mode="threshold"``. Default
-        is ``-15``.
+        Ceiling in dB, used only when ``mode="threshold"``. Default is
+        ``-15``.
 
     Returns
     -------
     float
-        Scalar cost value (S11 in dB); lower means better matched.
+        Scalar cost; lower means a lower S-parameter.
 
     Raises
     ------
     ValueError
-        If ``mode`` is not one of ``"mean"``, ``"worst"``, or
-        ``"threshold"``, or if neither ``target_freq`` nor ``freq_band``
-        is provided.
+        If ``mode`` is unknown, or neither ``target_freq`` nor
+        ``freq_band`` is given.
     """
-
-    s11_db = 20.0 * np.log10(np.abs(s11))
+    s_param_db = 20.0 * np.log10(np.abs(s_param))
 
     if target_freq is not None:
-        idx = (np.abs(freqs - target_freq)).argmin()
-        return s11_db[idx]
+        closest_index = (np.abs(freqs - target_freq)).argmin()
+        return s_param_db[closest_index]
 
     if freq_band is not None:
-        f_min, f_max = freq_band
-        mask = (freqs >= f_min) & (freqs <= f_max)
+        band_start, band_stop = freq_band
+        in_band = (freqs >= band_start) & (freqs <= band_stop)
 
         if mode == "worst":
-            return np.max(s11_db[mask])  # -3, -13, -23 return -3
+            return np.max(s_param_db[in_band])
 
         elif mode == "mean":
-            return np.mean(s11_db[mask])  # -3, -13, -23 return average
+            return np.mean(s_param_db[in_band])
 
         elif mode == "threshold":
-            penalty = np.maximum(s11_db[mask] - threshold, 0)
-            return np.sum(penalty)
+            excess = np.maximum(s_param_db[in_band] - threshold, 0)
+            return np.sum(excess)
 
         else:
-            raise ValueError("mode must be 'mean', 'worst', 'threshold'")
+            raise ValueError("mode must be 'mean', 'worst' or 'threshold'")
 
     raise ValueError("Provide target_freq or freq_band")
 
 
-def optimize_s21(
+def maximize_s_param(
     freqs: NDArray,
-    s21: NDArray,
+    s_param: NDArray,
     target_freq: float | None = None,
     freq_band: tuple[float, float] | None = None,
     mode: str = "worst",
+    threshold: float = -1,
 ) -> np.floating:
     """
-    Objective function for S21 (transmission) optimization. Higher S21 is
-    better.
+    Cost function that drives an S-parameter up. Lower cost is better.
 
-    Computes a scalar cost from S21 data for use with ``optimize_s_params``.
-    Since ``scipy.optimize.minimize`` minimizes its objective, the cost is
-    the *negated* S21 in dB, so maximizing S21 corresponds to minimizing
-    the cost. If ``target_freq`` is given it takes precedence over
-    ``freq_band`` (and ``mode`` is ignored).
+    Use it as the return value of the ``simulate_fn`` passed to
+    :func:`optimize_s_params`, for example a band-pass S21. Because
+    ``scipy.optimize.minimize`` minimizes, the cost is the *negated* value
+    in dB, so a lower cost means a higher S-parameter. ``target_freq``
+    takes precedence over ``freq_band``.
 
     Parameters
     ----------
     freqs : NDArray
-        Array of frequencies in Hz, matching ``s21``.
-    s21 : NDArray
-        Complex S21 parameter array across the frequency range.
+        Frequencies in Hz, matching ``s_param``.
+    s_param : NDArray
+        Complex S-parameter to drive up, e.g. ``sim_data.s21``.
     target_freq : float, optional
-        If given, evaluate S21 (in dB) at the frequency in ``freqs``
-        closest to this value, ignoring ``freq_band``/``mode``.
+        Evaluate at the frequency in ``freqs`` closest to this value,
+        ignoring ``freq_band``, ``mode`` and ``threshold``.
     freq_band : tuple of (float, float), optional
-        Frequency band ``(f_min, f_max)`` in Hz over which to evaluate S21
-        when ``target_freq`` is not given.
+        Band ``(start, stop)`` in Hz to evaluate over when ``target_freq``
+        is not given.
     mode : str, optional
-        Evaluation mode within the frequency band:
+        How to reduce the band to one number:
 
-        - ``"mean"`` : negative mean of S21 in dB across the band.
-        - ``"worst"`` : negative minimum of S21 in dB across the band
-          (worst-case transmission).
+        - ``"worst"`` : the negated lowest value in dB.
+        - ``"mean"`` : the negated mean value in dB.
+        - ``"threshold"`` : the sum of how far, in dB, each point drops
+          below ``threshold`` (0 when none do).
 
         Default is ``"worst"``.
+    threshold : float, optional
+        Floor in dB, used only when ``mode="threshold"``. Default is
+        ``-1``.
 
     Returns
     -------
     float
-        Scalar cost value (negated S21 in dB); lower means higher
-        transmission.
+        Scalar cost; lower means a higher S-parameter.
 
     Raises
     ------
     ValueError
-        If ``mode`` is not ``"mean"`` or ``"worst"``, or if neither
-        ``target_freq`` nor ``freq_band`` is provided.
+        If ``mode`` is unknown, or neither ``target_freq`` nor
+        ``freq_band`` is given.
     """
-    s21_db = 20.0 * np.log10(np.abs(s21))
+    s_param_db = 20.0 * np.log10(np.abs(s_param))
 
     if target_freq is not None:
-        idx = (np.abs(freqs - target_freq)).argmin()
-        return -s21_db[idx]
+        closest_index = (np.abs(freqs - target_freq)).argmin()
+        return -s_param_db[closest_index]
 
     if freq_band is not None:
-        f_min, f_max = freq_band
-        mask = (freqs >= f_min) & (freqs <= f_max)
+        band_start, band_stop = freq_band
+        in_band = (freqs >= band_start) & (freqs <= band_stop)
 
-        if mode == "mean":
-            return -np.mean(s21_db[mask])
+        if mode == "worst":
+            return -np.min(s_param_db[in_band])
 
-        elif mode == "worst":
-            return -np.min(s21_db[mask])
+        elif mode == "mean":
+            return -np.mean(s_param_db[in_band])
+
+        elif mode == "threshold":
+            shortfall = np.maximum(threshold - s_param_db[in_band], 0)
+            return np.sum(shortfall)
 
         else:
-            raise ValueError("mode must be 'mean' or 'worst'")
+            raise ValueError("mode must be 'mean', 'worst' or 'threshold'")
 
     raise ValueError("Provide target_freq or freq_band")
 
@@ -2756,7 +2761,8 @@ def optimize_s_params(
         ``simulate_fn(output_path=output_path, optimize=True,
         optimize_val=x)``, where ``x`` is the current parameter vector (in
         the order of ``x0``'s values). Must return a scalar cost to
-        minimize, e.g. via ``optimize_s11`` or ``optimize_s21``.
+        minimize, e.g. via ``minimize_s_param`` or
+        ``maximize_s_param``.
     x0 : dict[str, float]
         Initial parameter values, used as the optimization starting point.
         Keys are used only for the final printout; the order of the
