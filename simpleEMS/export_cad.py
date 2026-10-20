@@ -236,7 +236,7 @@ def _cut_shape(solid: cq.Workplane, prim: object) -> cq.Workplane:
     leave a collar of plane copper hugging the barrel -- which is the short
     the antipad exists to prevent. The Gerber exporter clears the same disc
     for the same reason (see
-    :func:`simpleEMS.export_gerber.primitive_cylindrical_shell`).
+    :func:`simpleEMS.export_layout.primitive_cylindrical_shell`).
     """
     if prim.__class__.__name__ != "CSPrimCylindricalShell":
         return solid

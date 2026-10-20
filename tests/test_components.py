@@ -92,7 +92,7 @@ class TestViaAntipad:
         even a warning -- the antipad is a material, and the warning was
         gated on metal.
         """
-        from simpleEMS.export_gerber import export_gerber
+        from simpleEMS.export_layout import export_gerber
 
         structure, params = generic_structure
         copper = params.copper_thickness_mm

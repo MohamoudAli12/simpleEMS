@@ -1,4 +1,4 @@
-"""Tests for :mod:`simpleEMS.export_gerber`.
+"""Tests for :mod:`simpleEMS.export_layout`.
 
 Gerber output is plain deterministic text, which makes golden files the right
 tool: they pin the header, the coordinate format, the X2 attributes and the
@@ -26,7 +26,7 @@ pytest.importorskip("openEMS")
 
 from CSXCAD import ContinuousStructure  # noqa: E402
 
-from simpleEMS.export_gerber import (  # noqa: E402
+from simpleEMS.export_layout import (  # noqa: E402
     export_gerber,
     gerber_coord,
     infer_layers,

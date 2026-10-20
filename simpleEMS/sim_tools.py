@@ -61,7 +61,7 @@ from openEMS.nf2ff import nf2ff_results
 
 # ----------------------------
 from .console import console
-from .export_gerber import export_gerber
+from .export_layout import export_dxf, export_gerber, export_kicad_footprint
 from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
 from .export_touchstone import write_touchstone
 from .fdtd_mesh import Mesh, auto_simulation_bounds, geometry_extent
@@ -2629,7 +2629,7 @@ class SimTools:
         (``F_Cu``), the lowest the bottom layer (``B_Cu``), and anything
         in between an inner layer. Z-axis cylinders (vias) are written to
         an Excellon drill file and the substrate footprint to the board
-        outline. See :func:`simpleEMS.export_gerber.export_gerber`.
+        outline. See :func:`simpleEMS.export_layout.export_gerber`.
 
         """
         if options is None:
@@ -2646,6 +2646,126 @@ class SimTools:
             output_path=gerber_path,
             options=options,
             prefix=prefix,
+        )
+
+    @staticmethod
+    def export_dxf(
+        sim: SimSetup,
+        output_path: Path | None = None,
+        options: dict[str, list] | None = None,
+        filename: str = "layout",
+    ) -> Path:
+        """
+        Export CSXCAD geometry to a DXF drawing for PCB or mechanical CAD.
+
+        Writes ``output_path / "dxf" / "<filename>.dxf"`` in millimetres, with
+        one DXF layer per copper layer (``F_Cu``, ``In<n>_Cu``, ``B_Cu``), plus
+        ``Edge_Cuts`` for the board outline, ``Drills`` for the vias and a
+        ``<layer>_Clearance`` layer for any antipads.
+
+        Parameters
+        ----------
+        sim : SimSetup
+            Simulation setup named tuple returned by ``setup_simulation``.
+        output_path : Path, optional
+            Directory to save the ``dxf`` subdirectory under. Defaults
+            to ``cwd / "Sim_Path"``.
+        options : dict[str, list], optional
+            Dictionary of export options. Supported key ``"ignore"``: a
+            list of property names to skip. Defaults to ``{}``.
+        filename : str, optional
+            Base name of the file (``.dxf`` is added). Default ``"layout"``.
+
+        Returns
+        -------
+        Path
+            The DXF file written.
+
+        Notes
+        -----
+        Layers are inferred from the Z position of the metal, as for
+        ``export_gerber``. See :func:`simpleEMS.export_layout.export_dxf`.
+        """
+        if options is None:
+            options = {}
+
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+
+        dxf_path = output_path / "dxf"
+        dxf_path.mkdir(parents=True, exist_ok=True)
+
+        return export_dxf(
+            CSX=sim.CSX,
+            output_path=dxf_path,
+            options=options,
+            filename=filename,
+        )
+
+    @staticmethod
+    def export_kicad_footprint(
+        sim: SimSetup,
+        port: LumpedPort,
+        output_path: Path | None = None,
+        options: dict[str, list] | None = None,
+        name: str = "antenna",
+        ground: list[str] | tuple[str, ...] = ("ground",),
+    ) -> Path:
+        """
+        Export CSXCAD geometry as a KiCad footprint to place on a board.
+
+        Writes ``output_path / "kicad_footprint" / "<name>.kicad_mod"``. To use
+        it, add the ``kicad_footprint`` folder to KiCad as a footprint library.
+        The footprint's origin is the feed point. Pad ``1`` carries the feed
+        and every copper region not named in ``ground``; pad ``2`` carries
+        the ground copper and the vias. Assign the feed trace's net to pad
+        ``1`` and GND to pad ``2``.
+
+        Parameters
+        ----------
+        sim : SimSetup
+            Simulation setup named tuple returned by ``setup_simulation``.
+        port : openEMS.ports.LumpedPort
+            The excitation port the structure's build method returned. It
+            sets the feed point and the feed pad size.
+        output_path : Path, optional
+            Directory to save the ``kicad_footprint`` subdirectory under.
+            Defaults to ``cwd / "Sim_Path"``.
+        options : dict[str, list], optional
+            Dictionary of export options. Supported key ``"ignore"``: a
+            list of property names to skip. Defaults to ``{}``.
+        name : str, optional
+            Footprint name, also the file name. Default ``"antenna"``.
+        ground : list of str, optional
+            Property names of the copper that belongs to ground. Default
+            ``("ground",)``, the name every simpleEMS structure uses.
+
+        Returns
+        -------
+        Path
+            The footprint file written.
+
+        Notes
+        -----
+        Antipads are not written, since a pad cannot cut a hole in another
+        pad. See :func:`simpleEMS.export_layout.export_kicad_footprint`.
+        """
+        if options is None:
+            options = {}
+
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+
+        library_path = output_path / "kicad_footprint"
+        library_path.mkdir(parents=True, exist_ok=True)
+
+        return export_kicad_footprint(
+            CSX=sim.CSX,
+            port=port,
+            output_path=library_path,
+            options=options,
+            name=name,
+            ground=ground,
         )
 
     @staticmethod

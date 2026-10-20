@@ -44,7 +44,7 @@ from pysmithchart import S_PARAMETER
 
 from . import __version__
 from .console import console
-from .export_gerber import infer_layers
+from .export_layout import infer_layers
 
 if TYPE_CHECKING:
     from .sim_params import SimParams

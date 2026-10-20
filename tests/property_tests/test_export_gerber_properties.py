@@ -1,4 +1,4 @@
-"""Property tests for :mod:`simpleEMS.export_gerber`.
+"""Property tests for :mod:`simpleEMS.export_layout`.
 
 Two helpers decide whether a Gerber file is right before any geometry is
 involved: the coordinate formatter, which must place every point within
@@ -17,7 +17,7 @@ from hypothesis import strategies as st
 # even be collected.
 pytest.importorskip("CSXCAD")
 
-from simpleEMS.export_gerber import (  # noqa: E402
+from simpleEMS.export_layout import (  # noqa: E402
     _EPS,
     _merge_intervals,
     gerber_coord,

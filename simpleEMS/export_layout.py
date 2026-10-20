@@ -15,17 +15,25 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Gerber RS-274X export utilities for CSXCAD geometries.
+Layout export of CSXCAD geometries: Gerber, DXF and KiCad footprints.
 
-CSXCAD has no notion of PCB layers, so they are inferred from the Z position
-of the metal. Planar metal primitives whose Z ranges overlap form one copper
-layer; the highest layer is the top (``F_Cu``), the lowest the bottom
-(``B_Cu``), and anything in between an inner layer (``In1_Cu``, ...).
-Z-axis cylinders (via barrels) go to an Excellon drill file, material
-primitives lying inside a copper layer (antipads) are written as clearances,
-and the substrate footprint becomes the board outline. File names, the
-``4.5`` millimetre coordinate format and the X2 attributes follow KiCad's
-Gerber plot output.
+CSXCAD has no notion of PCB layers, so :func:`infer_layers` works them out
+from the Z position of the metal. Planar metal primitives whose Z ranges
+overlap form one copper layer; the highest layer is the top (``F_Cu``), the
+lowest the bottom (``B_Cu``), and anything in between an inner layer
+(``In1_Cu``, ...). Z-axis cylinders (via barrels) become drills, material
+primitives lying inside a copper layer (antipads) become clearances, and the
+substrate footprint becomes the board outline.
+
+Three writers share that layout:
+
+- :func:`export_gerber` writes RS-274X copper, outline and Excellon drill
+  files for fabrication. File names, the ``4.5`` millimetre coordinate format
+  and the X2 attributes follow KiCad's Gerber plot output.
+- :func:`export_dxf` writes one DXF drawing with a layer per copper layer,
+  for importing the shape into PCB or mechanical CAD.
+- :func:`export_kicad_footprint` writes a KiCad ``.kicad_mod`` footprint
+  whose copper joins the feed pad's net, for placing the design on a board.
 
 Box, polygon and extruded-polygon primitives are exported as copper;
 Z-axis cylinders as drills; Z-axis cylindrical shells as round clearances.
@@ -39,6 +47,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
+import numpy as np
+
 from CSXCAD import ContinuousStructure
 from CSXCAD.CSPrimitives import (
     CSPrimBox,
@@ -46,6 +56,7 @@ from CSXCAD.CSPrimitives import (
     CSPrimLinPoly,
     CSPrimPolygon,
 )
+from openEMS.ports import LumpedPort
 
 from .console import console
 
@@ -53,11 +64,14 @@ __all__ = [
     "BoardLayout",
     "CopperLayer",
     "Drill",
+    "export_dxf",
     "export_gerber",
+    "export_kicad_footprint",
     "gerber_coord",
     "infer_layers",
     "primitive_box",
     "primitive_cylindrical_shell",
+    "primitive_outline",
     "primitive_polygon",
     "write_copper_layer",
     "write_drill",
@@ -71,6 +85,13 @@ _EPS = 1e-6
 # sagitta of a 60-gon on a 1 mm antipad is under a micron -- far inside any
 # fab tolerance, though not below the file's own 1e-5 mm coordinate step.
 _CIRCLE_SEGMENTS = 60
+
+# Copper ring (mm) the KiCad footprint puts around each via hole. Drill.diameter
+# is the plated conductor, so the pad needs a land of its own around it.
+_VIA_ANNULAR_RING = 0.15
+
+# Side (mm) of the feed pad when the port has no width in the XY plane.
+_DEFAULT_FEED_PAD = 0.2
 
 
 # ---------------------------------------------------------------------
@@ -424,8 +445,77 @@ def infer_layers(
 
 
 # ---------------------------------------------------------------------
-# Primitive exporters
+# Primitive outlines
 # ---------------------------------------------------------------------
+def primitive_outline(
+    prim: CSPrimBox | CSPrimCylindricalShell | CSPrimPolygon | CSPrimLinPoly,
+) -> list[tuple[float, float]]:
+    """
+    Return the closed XY outline of a copper or clearance primitive.
+
+    Every layout writer draws from this outline, so Gerber, DXF and KiCad
+    see the same shape. The last vertex does not repeat the first.
+
+    Parameters
+    ----------
+    prim : CSPrimBox, CSPrimCylindricalShell, CSPrimPolygon or CSPrimLinPoly
+        The primitive. A box gives its four corners; a Z-axis cylindrical
+        shell gives its outer disc as a 60-sided polygon (see
+        :func:`primitive_cylindrical_shell` for why the whole disc); a
+        polygon gives its vertices.
+
+    Returns
+    -------
+    list of (float, float)
+        Outline vertices in drawing units, with the primitive's transform
+        applied.
+    """
+    cls = prim.__class__.__name__
+    if cls == "CSPrimBox":
+        start = prim.GetStart()
+        stop = prim.GetStop()
+        elevation = start[2]
+
+        # (start.x, stop.y)  ┌───────────────┐ (stop.x, stop.y)
+        #                    │               │
+        #                    │               │
+        # (start.x,start.y)  └───────────────┘ (stop.x,start.y)
+        corners = [
+            (start[0], start[1]),
+            (stop[0], start[1]),
+            (stop[0], stop[1]),
+            (start[0], stop[1]),
+        ]
+    elif cls == "CSPrimCylindricalShell":
+        start = prim.GetStart()
+        elevation = start[2]
+        outer_radius = prim.GetRadius() + prim.GetShellWidth() / 2
+        corners = _circle_points(start[0], start[1], outer_radius)
+    else:
+        x_coords, y_coords = prim.GetCoords()
+        elevation = prim.GetElevation()
+        corners = list(zip(x_coords, y_coords, strict=True))
+
+    if prim.HasTransform():
+        transform = prim.GetTransform()
+        corners = [
+            tuple(transform.Transform([x, y, elevation])[:2]) for x, y in corners
+        ]
+    return corners
+
+
+# ---------------------------------------------------------------------
+# Gerber primitive exporters
+# ---------------------------------------------------------------------
+def _write_gerber_region(file: TextIO, corners: list[tuple[float, float]]) -> None:
+    """Write a closed outline as one Gerber ``G36``/``G37`` region."""
+    file.write("G36*\n")
+    file.write(gerber_coord(corners[0]) + "D02*\n")
+    for corner in (*corners[1:], corners[0]):
+        file.write(gerber_coord(corner) + "D01*\n")
+    file.write("G37*\n")
+
+
 def primitive_box(file: TextIO, box: CSPrimBox) -> None:
     """
     Export a CSXCAD box primitive as a closed Gerber region.
@@ -441,29 +531,7 @@ def primitive_box(file: TextIO, box: CSPrimBox) -> None:
     -------
     None
     """
-    start = box.GetStart()
-    stop = box.GetStop()
-
-    # (start.x, stop.y)  ┌───────────────┐ (stop.x, stop.y)
-    #                    │               │
-    #                    │               │
-    # (start.x,start.y)  └───────────────┘ (stop.x,start.y)
-    corners = [
-        (start[0], start[1]),
-        (stop[0], start[1]),
-        (stop[0], stop[1]),
-        (start[0], stop[1]),
-    ]
-
-    if box.HasTransform():
-        transform = box.GetTransform()
-        corners = [transform.Transform([x, y, start[2]])[:2] for x, y in corners]
-
-    file.write("G36*\n")
-    file.write(gerber_coord(corners[0]) + "D02*\n")
-    for corner in (*corners[1:], corners[0]):
-        file.write(gerber_coord(corner) + "D01*\n")
-    file.write("G37*\n")
+    _write_gerber_region(file, primitive_outline(box))
 
 
 def primitive_cylindrical_shell(file: TextIO, shell: CSPrimCylindricalShell) -> None:
@@ -491,19 +559,7 @@ def primitive_cylindrical_shell(file: TextIO, shell: CSPrimCylindricalShell) -> 
     -------
     None
     """
-    start = shell.GetStart()
-    outer_radius = shell.GetRadius() + shell.GetShellWidth() / 2
-    corners = _circle_points(start[0], start[1], outer_radius)
-
-    if shell.HasTransform():
-        transform = shell.GetTransform()
-        corners = [transform.Transform([x, y, start[2]])[:2] for x, y in corners]
-
-    file.write("G36*\n")
-    file.write(gerber_coord(corners[0]) + "D02*\n")
-    for corner in (*corners[1:], corners[0]):
-        file.write(gerber_coord(corner) + "D01*\n")
-    file.write("G37*\n")
+    _write_gerber_region(file, primitive_outline(shell))
 
 
 def primitive_polygon(file: TextIO, poly: CSPrimPolygon | CSPrimLinPoly) -> None:
@@ -529,26 +585,13 @@ def primitive_polygon(file: TextIO, poly: CSPrimPolygon | CSPrimLinPoly) -> None
         print("Skipping polygon: normal direction is not +Z")
         return
 
-    x0, x1 = poly.GetCoords()
+    corners = primitive_outline(poly)
 
-    if len(x0) < 3:
+    if len(corners) < 3:
         print("Skipping polygon: not enough points")
         return
-    if poly.HasTransform():
-        transform = poly.GetTransform()
-        elevation = poly.GetElevation()
-        transformed = [
-            transform.Transform([x, y, elevation])[:2]
-            for x, y in zip(x0, x1, strict=True)
-        ]
-        x0, x1 = zip(*transformed, strict=True)
 
-    file.write("G36*\n")
-    file.write(gerber_coord((x0[0], x1[0])) + "D02*\n")
-    for x, y in zip(x0[1:], x1[1:], strict=True):
-        file.write(gerber_coord((x, y)) + "D01*\n")
-    file.write(gerber_coord((x0[0], x1[0])) + "D01*\n")
-    file.write("G37*\n")
+    _write_gerber_region(file, corners)
 
 
 # ---------------------------------------------------------------------
@@ -749,3 +792,285 @@ def export_gerber(
         written.append(path)
 
     return written
+
+
+def export_dxf(
+    CSX: ContinuousStructure,
+    output_path: Path,
+    options: dict[str, list[str]],
+    filename: str = "layout",
+) -> Path:
+    """
+    Export CSX geometry to a DXF drawing, one DXF layer per copper layer.
+
+    Writes ``<filename>.dxf`` in the DXF R12 format, which every CAD tool
+    reads, in millimetres. Layers are inferred from the Z position of the
+    metal (see :func:`infer_layers`) and named as in KiCad:
+
+    - ``F_Cu``, ``In<n>_Cu``, ``B_Cu`` -- copper, as closed polylines;
+    - ``<layer>_Clearance`` -- antipads cut out of that copper layer. DXF
+      cannot subtract one shape from another, so they get a layer of their
+      own to remove after import;
+    - ``Edge_Cuts`` -- the board outline;
+    - ``Drills`` -- one circle per via, at the plated conductor diameter.
+
+    Parameters
+    ----------
+    CSX : ContinuousStructure
+        The CSXCAD geometry object containing the simulation structure.
+    output_path : Path
+        Directory where the file will be saved.
+    options : dict
+        Dictionary of export options. Supported keys:
+        - "ignore" : list of property names to skip during export.
+    filename : str, optional
+        Base name of the file (``.dxf`` is added). Default ``"layout"``.
+
+    Returns
+    -------
+    Path
+        The file written.
+    """
+    console.print("-------------------------------------------", style="info")
+    console.print("Exporting Geometry to DXF", style="info")
+    console.print("-------------------------------------------", style="info")
+
+    layout = infer_layers(CSX, options.get("ignore", []))
+
+    # Each entity is (DXF layer, outline vertices, (x, y, radius) or None).
+    entities: list[tuple[str, list[tuple[float, float]], tuple | None]] = []
+    for layer in layout.layers:
+        for _name, prim in layer.regions:
+            entities.append((layer.name, primitive_outline(prim), None))
+        for _name, prim in layer.clearances:
+            entities.append((f"{layer.name}_Clearance", primitive_outline(prim), None))
+    if layout.outline is not None:
+        x_min, y_min, x_max, y_max = layout.outline
+        corners = [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]
+        entities.append(("Edge_Cuts", corners, None))
+    for drill in layout.drills:
+        entities.append(("Drills", [], (drill.x, drill.y, drill.diameter / 2)))
+
+    layer_names = list(dict.fromkeys(name for name, _, _ in entities))
+
+    # DXF is a list of (group code, value) pairs, one per line each.
+    pairs: list[tuple[int, str]] = [
+        (0, "SECTION"),
+        (2, "HEADER"),
+        (9, "$ACADVER"),
+        (1, "AC1009"),
+        (9, "$INSUNITS"),
+        (70, "4"),  # millimetres
+        (0, "ENDSEC"),
+        (0, "SECTION"),
+        (2, "TABLES"),
+        (0, "TABLE"),
+        (2, "LAYER"),
+        (70, str(len(layer_names))),
+    ]
+    for color, name in enumerate(layer_names, start=1):
+        pairs += [
+            (0, "LAYER"),
+            (2, name),
+            (70, "0"),
+            (62, str(color)),
+            (6, "CONTINUOUS"),
+        ]
+    pairs += [(0, "ENDTAB"), (0, "ENDSEC"), (0, "SECTION"), (2, "ENTITIES")]
+
+    for layer_name, corners, circle in entities:
+        if circle is not None:
+            x, y, radius = circle
+            pairs += [
+                (0, "CIRCLE"),
+                (8, layer_name),
+                (10, f"{x:.6f}"),
+                (20, f"{y:.6f}"),
+                (30, "0.0"),
+                (40, f"{radius:.6f}"),
+            ]
+            continue
+        if len(corners) < 3:
+            continue
+        # A closed (flag 1) polyline: its vertices follow, then SEQEND.
+        pairs += [(0, "POLYLINE"), (8, layer_name), (66, "1"), (70, "1")]
+        pairs += [(10, "0.0"), (20, "0.0"), (30, "0.0")]
+        for x, y in corners:
+            pairs += [
+                (0, "VERTEX"),
+                (8, layer_name),
+                (10, f"{x:.6f}"),
+                (20, f"{y:.6f}"),
+                (30, "0.0"),
+            ]
+        pairs += [(0, "SEQEND"), (8, layer_name)]
+
+    pairs += [(0, "ENDSEC"), (0, "EOF")]
+
+    path = output_path / f"{filename}.dxf"
+    path.write_text(
+        "".join(f"{code}\n{value}\n" for code, value in pairs), newline="\n"
+    )
+    console.print(f"[info]DXF layers: {', '.join(layer_names)}[/info]")
+    return path
+
+
+def export_kicad_footprint(
+    CSX: ContinuousStructure,
+    port: LumpedPort,
+    output_path: Path,
+    options: dict[str, list[str]],
+    name: str = "antenna",
+    ground: list[str] | tuple[str, ...] = ("ground",),
+) -> Path:
+    """
+    Export CSX geometry as a KiCad footprint (``.kicad_mod``).
+
+    The footprint's origin sits at the feed point, the centre of ``port`` in
+    the XY plane, so it snaps onto the end of the feed trace. Copper turns
+    into custom-shape pads, so it belongs to a net and DRC treats it as
+    connected:
+
+    - pad ``1`` (the feed) holds every copper region not named in
+      ``ground``. On the feed's own layer it is anchored at the origin with
+      a square the width of the port;
+    - pad ``2`` (ground) holds the copper named in ``ground`` and a plated
+      through hole for each via, with a 0.15 mm annular ring.
+
+    The board outline goes to ``F.Fab`` and ``F.CrtYd``. KiCad's Y axis
+    points down, so Y is mirrored relative to the simulation.
+
+    Parameters
+    ----------
+    CSX : ContinuousStructure
+        The CSXCAD geometry object containing the simulation structure.
+    port : openEMS.ports.LumpedPort
+        The excitation port the structure's build method returned. Its
+        ``start`` and ``stop`` set the feed point and the feed pad size.
+    output_path : Path
+        Directory where the file will be saved.
+    options : dict
+        Dictionary of export options. Supported keys:
+        - "ignore" : list of property names to skip during export.
+    name : str, optional
+        Footprint name, also the file name. Default ``"antenna"``.
+    ground : list of str, optional
+        Property names of the copper that belongs to ground. Default
+        ``("ground",)``, the name every simpleEMS structure uses.
+
+    Returns
+    -------
+    Path
+        The file written.
+
+    Notes
+    -----
+    A pad cannot cut a hole in another pad, so antipads are not written; a
+    warning names any that were dropped. Every via becomes a through hole
+    on the ground pad, whatever layers it spans in the simulation. Each pad
+    other than the feed is anchored on a corner of its first region with a
+    10 um square, which KiCad requires and no fab can resolve.
+    """
+    console.print("-------------------------------------------", style="info")
+    console.print("Exporting Geometry to KiCad footprint", style="info")
+    console.print("-------------------------------------------", style="info")
+
+    layout = infer_layers(CSX, options.get("ignore", []))
+
+    port_start = np.asarray(port.start, dtype=float)
+    port_stop = np.asarray(port.stop, dtype=float)
+    feed_x, feed_y = (port_start[:2] + port_stop[:2]) / 2
+    port_spans = [
+        span for span in np.abs(port_stop[:2] - port_start[:2]) if span > _EPS
+    ]
+    feed_pad_size = min(port_spans) if port_spans else _DEFAULT_FEED_PAD
+    anchor_size = 0.01
+
+    def to_kicad(point: tuple[float, float]) -> tuple[float, float]:
+        """Simulation XY to footprint XY: origin at the feed, Y down."""
+        # Adding 0.0 turns a -0.0 left by the rounding into 0.0.
+        return (
+            round(point[0] - feed_x, 6) + 0.0,
+            round(feed_y - point[1], 6) + 0.0,
+        )
+
+    lines = [
+        f'(footprint "{name}"',
+        "  (version 20221018)",
+        '  (generator "simpleEMS")',
+        '  (layer "F.Cu")',
+        f'  (descr "{name}, exported by simpleEMS")',
+        "  (attr smd)",
+    ]
+
+    if layout.outline is not None:
+        x_min, y_min, x_max, y_max = layout.outline
+        left, top = to_kicad((x_min, y_max))
+        right, bottom = to_kicad((x_max, y_min))
+    else:
+        left = top = -feed_pad_size
+        right = bottom = feed_pad_size
+    lines += [
+        f'  (fp_text reference "REF**" (at 0 {top - 1:.6f}) (layer "F.SilkS")',
+        "    (effects (font (size 1 1) (thickness 0.15))))",
+        f'  (fp_text value "{name}" (at 0 {bottom + 1:.6f}) (layer "F.Fab")',
+        "    (effects (font (size 1 1) (thickness 0.15))))",
+    ]
+    for fab_layer, width in (("F.Fab", 0.1), ("F.CrtYd", 0.05)):
+        lines.append(
+            f"  (fp_rect (start {left:.6f} {top:.6f}) (end {right:.6f} {bottom:.6f})"
+            f' (stroke (width {width}) (type solid)) (fill none) (layer "{fab_layer}"))'
+        )
+
+    dropped_clearances = []
+    for layer in layout.layers:
+        kicad_layer = layer.name.replace("_", ".")
+        dropped_clearances += [clearance for clearance, _ in layer.clearances]
+        for pad_number in ("1", "2"):
+            outlines = [
+                [to_kicad(corner) for corner in primitive_outline(prim)]
+                for region_name, prim in layer.regions
+                if (region_name in ground) == (pad_number == "2")
+            ]
+            outlines = [outline for outline in outlines if len(outline) >= 3]
+            if not outlines:
+                continue
+
+            if pad_number == "1" and layer.index == 1:
+                pad_x, pad_y, size = 0.0, 0.0, feed_pad_size
+            else:
+                (pad_x, pad_y), size = outlines[0][0], anchor_size
+
+            lines += [
+                f'  (pad "{pad_number}" smd custom (at {pad_x:.6f} {pad_y:.6f})'
+                f' (size {size:.6f} {size:.6f}) (layers "{kicad_layer}")',
+                "    (options (clearance outline) (anchor rect))",
+                "    (primitives",
+            ]
+            for outline in outlines:
+                points = " ".join(
+                    f"(xy {x - pad_x:.6f} {y - pad_y:.6f})" for x, y in outline
+                )
+                lines.append(f"      (gr_poly (pts {points}) (width 0) (fill yes))")
+            lines += ["    )", "  )"]
+
+    for drill in layout.drills:
+        x, y = to_kicad((drill.x, drill.y))
+        land = drill.diameter + 2 * _VIA_ANNULAR_RING
+        lines.append(
+            f'  (pad "2" thru_hole circle (at {x:.6f} {y:.6f})'
+            f" (size {land:.6f} {land:.6f}) (drill {drill.diameter:.6f})"
+            ' (layers "*.Cu" "*.Mask"))'
+        )
+
+    lines.append(")")
+
+    if dropped_clearances:
+        console.print(
+            "[warning]antipads are not written to the footprint: "
+            f"{', '.join(dict.fromkeys(dropped_clearances))}[/warning]"
+        )
+
+    path = output_path / f"{name}.kicad_mod"
+    path.write_text("\n".join(lines) + "\n", newline="\n")
+    return path
