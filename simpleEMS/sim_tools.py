@@ -2400,6 +2400,201 @@ class SimTools:
         )
 
     @staticmethod
+    def export_csv(
+        freqs: NDArray | None = None,
+        s11: NDArray | None = None,
+        *,
+        s21: NDArray | None = None,
+        s_matrix: NDArray | None = None,
+        nf2ff_data: NF2FFData | None = None,
+        output_path: Path | None = None,
+        prefix: str = "",
+    ) -> list[Path]:
+        """
+        Export S-parameters and far-field results to CSV files.
+
+        Writes comma-separated tables to ``output_path / "csv"`` that Excel,
+        LibreOffice, MATLAB or pandas open directly. Each kind of result goes
+        to its own file:
+
+        - ``s_param.csv``, when ``freqs`` and S-parameters are given: the
+          frequency in GHz, then for each S-parameter its magnitude in dB,
+          its phase in degrees, and its real and imaginary parts. Pass
+          either ``s11`` (plus ``s21`` for a two-port) or the full
+          ``s_matrix``.
+        - ``radiation_pattern.csv``, when ``nf2ff_data`` is given: the
+          directivity and realized gain in dBi on the xz, yz and xy planes
+          at ``nf2ff_data.freq``, in 0.1 deg steps from -180 to 180 deg. The
+          angle column is theta for the xz and yz planes and phi for the xy
+          plane.
+        - ``efficiency.csv``, when ``nf2ff_data`` is given: the radiation and
+          total efficiency in percent and in dB across the -10 dB band, read
+          from ``nf2ff_data.efficiency_curve``.
+
+        Parameters
+        ----------
+        freqs : NDArray, optional
+            Frequency points (in Hz) of the S-parameters. Required with
+            ``s11`` or ``s_matrix``.
+        s11 : NDArray, optional
+            Complex S11 values across the frequency range.
+        s21 : NDArray, optional
+            Complex S21 values across the frequency range. Adds the S21
+            columns when provided. Default is ``None``.
+        s_matrix : NDArray, optional
+            Complex S-parameters of shape ``(F, P, P)``, with
+            ``s_matrix[:, i, j]`` holding S(i+1)(j+1). Writes every
+            S-parameter of a ``P``-port network. Cannot be combined with
+            ``s11`` or ``s21``. Default is ``None``.
+        nf2ff_data : NF2FFData, optional
+            The far-field results returned by ``compute_nf2ff_data``. Writes
+            the radiation pattern and efficiency files. Default is ``None``.
+        output_path : Path, optional
+            Directory to save the ``csv`` subdirectory under.
+            Defaults to ``cwd / "Sim_Path"``.
+        prefix : str, optional
+            Text put in front of every file name, e.g. ``"patch_"`` writes
+            ``patch_s_param.csv``. Default is ``""``.
+
+        Returns
+        -------
+        list of Path
+            Paths of the written CSV files.
+
+        Raises
+        ------
+        ValueError
+            If nothing is given to export, if ``s_matrix`` is combined with
+            ``s11`` / ``s21``, if ``freqs`` and the S-parameters do not come
+            together, or if the frequency count does not match the
+            S-parameter data.
+        """
+        console.print("-------------------------------------------", style="info")
+        console.print("Exporting results to CSV files", style="info")
+        console.print("-------------------------------------------", style="info")
+
+        has_s_params = s11 is not None or s21 is not None or s_matrix is not None
+        if not has_s_params and freqs is None and nf2ff_data is None:
+            raise ValueError("Pass S-parameters with freqs, nf2ff_data, or both.")
+        if has_s_params != (freqs is not None):
+            raise ValueError("Pass freqs together with s11 or s_matrix.")
+
+        # Each entry is one file: (name, column headers, column values).
+        tables = []
+        # Spreadsheets cannot parse -inf, so every dB conversion clips an
+        # exact zero to the smallest positive float first.
+        tiny = np.finfo(float).tiny
+
+        if has_s_params:
+            frequencies = np.asarray(freqs, dtype=float).ravel()
+            if s_matrix is None:
+                if s11 is None:
+                    raise ValueError(
+                        "Pass either s11 (and optionally s21) or s_matrix."
+                    )
+                named_params = {"S11": np.asarray(s11, dtype=complex).ravel()}
+                if s21 is not None:
+                    named_params["S21"] = np.asarray(s21, dtype=complex).ravel()
+            elif s11 is not None or s21 is not None:
+                raise ValueError("Pass s_matrix or s11/s21, not both.")
+            else:
+                matrix = np.asarray(s_matrix, dtype=complex)
+                port_count = matrix.shape[1]
+                named_params = {
+                    f"S{row + 1}{column + 1}": matrix[:, row, column]
+                    for row in range(port_count)
+                    for column in range(port_count)
+                }
+
+            header = ["Frequency (GHz)"]
+            columns = [frequencies / 1e9]
+            for name, values in named_params.items():
+                if values.size != frequencies.size:
+                    raise ValueError(
+                        f"{frequencies.size} frequencies but {values.size} "
+                        f"{name} values"
+                    )
+                header += [
+                    f"|{name}| (dB)",
+                    f"{name} phase (deg)",
+                    f"Re({name})",
+                    f"Im({name})",
+                ]
+                columns += [
+                    20 * np.log10(np.maximum(np.abs(values), tiny)),
+                    np.angle(values, deg=True),
+                    values.real,
+                    values.imag,
+                ]
+            tables.append(("s_param", header, columns))
+
+        if nf2ff_data is not None:
+            # Reference each cut to the sphere's peak, as plot_2d_directivity
+            # and plot_2d_gain do, so a cut that misses the main lobe sits
+            # below Dmax instead of being lifted to it.
+            sphere = nf2ff_data.sphere
+            sphere_peak = np.max(sphere.E_norm)
+            max_directivity_db = 10.0 * np.log10(sphere.Dmax[0])
+            gain_offset_db = 10.0 * np.log10(
+                nf2ff_data.efficiency * nf2ff_data.mismatch_efficiency
+            )
+            # All three cuts share the same 3601-point angle sweep.
+            header = ["Angle (deg)"]
+            columns = [np.rad2deg(np.ravel(nf2ff_data.xz_cut.theta))]
+            for plane, cut in (
+                ("xz", nf2ff_data.xz_cut),
+                ("yz", nf2ff_data.yz_cut),
+                ("xy", nf2ff_data.xy_cut),
+            ):
+                e_field_norm = np.maximum(np.squeeze(cut.E_norm) / sphere_peak, tiny)
+                directivity_dbi = 20 * np.log10(e_field_norm) + max_directivity_db
+                header += [
+                    f"{plane}-plane directivity (dBi)",
+                    f"{plane}-plane realized gain (dBi)",
+                ]
+                columns += [directivity_dbi, directivity_dbi + gain_offset_db]
+            tables.append(("radiation_pattern", header, columns))
+
+            curve = nf2ff_data.efficiency_curve
+            radiation = np.asarray(curve.radiation, dtype=float)
+            total = np.asarray(curve.total, dtype=float)
+            header = [
+                "Frequency (GHz)",
+                "Radiation efficiency (%)",
+                "Total efficiency (%)",
+                "Radiation efficiency (dB)",
+                "Total efficiency (dB)",
+            ]
+            columns = [
+                np.asarray(curve.freqs, dtype=float) / 1e9,
+                100 * radiation,
+                100 * total,
+                10 * np.log10(np.maximum(radiation, tiny)),
+                10 * np.log10(np.maximum(total, tiny)),
+            ]
+            tables.append(("efficiency", header, columns))
+
+        if output_path is None:
+            output_path = Path.cwd() / "Sim_Path"
+        csv_dir = output_path / "csv"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+
+        written = []
+        for name, header, columns in tables:
+            csv_path = csv_dir / f"{prefix}{name}.csv"
+            np.savetxt(
+                csv_path,
+                np.column_stack(columns),
+                delimiter=",",
+                header=",".join(header),
+                comments="",
+                fmt="%.10g",
+            )
+            console.print(f"CSV file saved to {csv_path}", style="info")
+            written.append(csv_path)
+        return written
+
+    @staticmethod
     def export_gerber(
         sim: SimSetup,
         output_path: Path | None = None,

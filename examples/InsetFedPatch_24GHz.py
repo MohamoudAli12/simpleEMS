@@ -93,6 +93,12 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
             charac_imp=params.charac_imp,
             output_path=output_path,
         )
+        patch.export_csv(
+            freqs=sim_data.freqs,
+            s11=sim_data.s11,
+            nf2ff_data=nf2ff_data,
+            output_path=output_path,
+        )
         patch.export_stl(sim, output_path)
         patch.export_gerber(sim, output_path)
         patch.export_step(sim, output_path)
