@@ -68,6 +68,7 @@ from .fdtd_mesh import Mesh, auto_simulation_bounds, geometry_extent
 from .fem_backend import FEMOptions
 from .fem_field_dump import FieldDumpRequest
 from .plot_theme import HIGHLIGHT, style_background_plotter, themed_cursor
+from .report import generate_report
 from .sim_params import SimParams
 
 # ----------------------------
@@ -2516,6 +2517,60 @@ class SimTools:
         step_path.mkdir(parents=True, exist_ok=True)
 
         export_csxcad_xml_to_step(structure_xml_path, output_path)
+
+    @staticmethod
+    def generate_report(
+        params: SimParams,
+        sim: SimSetup,
+        sim_data: SimData,
+        nf2ff_data: NF2FFData | None = None,
+        output_path: Path | None = None,
+        title: str | None = None,
+        author: str | None = None,
+    ) -> Path:
+        """
+        Write a PDF design report of the structure into a ``report`` folder
+        under ``output_path``.
+
+        The report holds the design target, the copper layout with its ports,
+        the design dimensions and the simulated performance -- matching,
+        transmission, input impedance and, with ``nf2ff_data``, the radiation
+        pattern and efficiency -- with a short note on how to read each page.
+        See :func:`simpleEMS.report.generate_report`.
+
+        Parameters
+        ----------
+        params : SimParams
+            Parameter object of the structure.
+        sim : SimSetup
+            Simulation setup named tuple returned by ``setup_simulation``.
+        sim_data : SimData
+            Network results returned by ``compute_sim_data``.
+        nf2ff_data : NF2FFData, optional
+            Far-field results returned by ``compute_nf2ff_data``. Adds the
+            radiation page. Default is ``None``.
+        output_path : Path, optional
+            Directory to create the ``report`` folder under. Defaults to
+            ``cwd / "Sim_Path"``.
+        title : str, optional
+            Report title. Defaults to ``"<Structure> design report"``.
+        author : str, optional
+            Name printed on the report and stored in the PDF metadata.
+
+        Returns
+        -------
+        Path
+            Path of the written PDF.
+        """
+        return generate_report(
+            params,
+            sim,
+            sim_data,
+            nf2ff_data,
+            output_path=output_path,
+            title=title,
+            author=author,
+        )
 
     @staticmethod
     def show_plots() -> None:

@@ -83,6 +83,9 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         patch.plot_3d_directivity(nf2ff_data, output_path)
         patch.plot_3d_gain(nf2ff_data, output_path)
         patch.save_plots(output_path)
+        patch.generate_report(
+            params, sim, sim_data, nf2ff_data, output_path=output_path
+        )
         patch.show_plots()
         patch.export_touchstone(
             freqs=sim_data.freqs,
