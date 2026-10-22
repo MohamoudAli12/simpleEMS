@@ -24,6 +24,9 @@ sim_data = simulate_step_FEM(
     ports={"port_resist_1": {"z0": 50.0, "direction": "z", "number": 1}},
     FEM_boundary="silver_muller",
     FEM_num_solve_points=12,
+    # Size the mesh and its quarter-wave air padding at the design frequency,
+    # where the far field is taken, not at the top of the sweep.
+    FEM_mesh_freq=resonant_freq,
     charac_imp=50.0,
 )
 # SIMULATE
