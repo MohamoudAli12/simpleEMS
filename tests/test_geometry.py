@@ -118,26 +118,20 @@ class TestSetupSimulation:
         assert sim.backend_engine == "FDTD"
         assert sim.charac_imp == inset_params.charac_imp
 
-    def test_fdtd_backend_carries_no_fem_options(self, inset_params):
-        """``FEM_options`` must be ``None`` for FDTD; a stray options object
-        would send ``compute_sim_data`` down the FEM branch."""
-        sim = setup_simulation(inset_params)
-
-        assert sim.FEM_options is None
-
-    def test_fem_backend_carries_the_bundled_options(self, fr4):
+    @pytest.mark.parametrize("backend", ["FDTD", "FEM"])
+    def test_carries_the_params_it_was_built_from(self, fr4, backend):
+        """The FEM backend reads its ``FEM_*`` settings off ``sim.params``."""
         params = InsetFedPatchParams(
             resonant_freq=2.45e9,
             span_freq=0.5e9,
-            backend_engine="FEM",
+            backend_engine=backend,
             FEM_fe_order=2,
             **fr4,
         )
 
         sim = setup_simulation(params)
 
-        assert sim.FEM_options is not None
-        assert sim.FEM_options.fe_order == 2
+        assert sim.params is params
 
     def test_default_boundaries_are_eight_cell_pml(self, inset_params, spy_openems):
         setup_simulation(inset_params)

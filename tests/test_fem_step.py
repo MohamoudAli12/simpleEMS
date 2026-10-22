@@ -39,7 +39,7 @@ except Exception as error:  # pragma: no cover - depends on the host
 import cadquery as cq  # noqa: E402
 
 from simpleEMS.fem_backend import (  # noqa: E402
-    FEMOptions,
+    Problem,
     _problem_from_step,
     simulate_step_FEM,
 )
@@ -91,7 +91,7 @@ def build(named_step, **overrides):
         lossy_conductor=None,
         ports=None,
         charac_imp=50.0,
-        FEM_options=None,
+        settings={},
     )
     kwargs.update(overrides)
     return _problem_from_step(**kwargs)
@@ -270,7 +270,7 @@ class TestProblemAssembly:
             None,
             {"port_a": {"number": 2}, "port_b": {"number": 1}},
             50.0,
-            None,
+            {},
         )
 
         assert [p.number for p in prob.ports] == [1, 2]
@@ -287,7 +287,7 @@ class TestProblemAssembly:
             None,
             {"port_a": {"number": 1}, "port_b": {"number": 1}},
             50.0,
-            None,
+            {},
         )
 
         assert len(prob.ports) == 1
@@ -301,23 +301,68 @@ class TestProblemAssembly:
             None,
             None,
             50.0,
-            None,
+            {},
         )
 
         assert sorted(p.number for p in prob.ports) == [1, 2]
 
-    def test_fem_options_are_applied(self, named_step):
-        options = FEMOptions(fe_order=2, num_solve_points=7)
-
-        prob = build(named_step, FEM_options=options)
+    def test_fem_settings_are_applied(self, named_step):
+        prob = build(named_step, settings={"fe_order": 2, "num_solve_points": 7})
 
         assert prob.fe_order == 2
         assert prob.num_solve_points == 7
 
-    def test_omitting_options_leaves_the_defaults(self, named_step):
+    def test_ports_are_lumped_by_default(self, named_step):
         prob = build(named_step)
 
-        assert prob.fe_order == FEMOptions().fe_order
+        assert [port.kind for port in prob.ports] == ["lumped"]
+
+    def test_the_port_type_makes_a_named_port_a_wave_port(self, named_step):
+        """A port found by its name has no dict to set its kind in."""
+        prob = build(named_step, settings={"port_type": "waveport"})
+
+        assert [port.kind for port in prob.ports] == ["wave"]
+
+    def test_the_port_type_makes_a_listed_port_a_wave_port(self, named_step):
+        prob = build(
+            named_step,
+            ports={"port_1": {"number": 1}},
+            settings={"port_type": "waveport"},
+        )
+
+        assert prob.ports[0].kind == "wave"
+
+    def test_a_ports_own_kind_wins_over_the_port_type(self, named_step):
+        prob = build(
+            named_step,
+            ports={"port_1": {"number": 1, "kind": "lumped"}},
+            settings={"port_type": "waveport"},
+        )
+
+        assert prob.ports[0].kind == "lumped"
+
+    def test_the_wave_port_settings_reach_the_problem(self, named_step):
+        prob = build(
+            named_step,
+            settings={
+                "port_type": "waveport",
+                "port_mode_modes": 8,
+                "port_mode_index": 2,
+                "port_mode_zc": 50.0,
+                "port_mode_eps_eff": 2.9,
+                "waveport_width_mm": 12.0,
+                "waveport_height_mm": 6.0,
+            },
+        )
+
+        assert (prob.port_mode_modes, prob.port_mode_index) == (8, 2)
+        assert (prob.port_mode_zc, prob.port_mode_eps_eff) == (50.0, 2.9)
+        assert (prob.waveport_width_mm, prob.waveport_height_mm) == (12.0, 6.0)
+
+    def test_omitting_settings_leaves_the_defaults(self, named_step):
+        prob = build(named_step)
+
+        assert prob.fe_order == Problem(step_file="s.step").fe_order
 
     def test_frequencies_are_stored_as_floats(self, named_step):
         prob = build(named_step, freqs=[2e9, 3e9])
@@ -522,6 +567,22 @@ class TestMeshing:
         wall = domain[axis] if mode["plane_at"] < 0 else domain[axis + 3]
 
         assert mode["plane_at"] == pytest.approx(wall, abs=1e-7)
+
+    @pytest.mark.slow
+    def test_the_port_type_meshes_a_wave_port(self, edge_port_step, tmp_path):
+        """FEM_port_type makes the port a wave port when its dict has no kind.
+
+        The port solid is a thin box rather than a sheet, so its axis is given.
+        """
+        meta = self.mesh_only(
+            edge_port_step,
+            tmp_path / "wave_type",
+            ports={"port_1": {"number": 1, "prop_dir": "y"}},
+            FEM_port_type="waveport",
+            FEM_air_pad_mm=3.0,
+        )
+
+        assert "1" in meta["port_modes"]
 
     @pytest.mark.slow
     def test_only_the_wave_port_face_loses_its_padding(self, edge_port_step, tmp_path):

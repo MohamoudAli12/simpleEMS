@@ -642,12 +642,22 @@ def _wave_port_sheet(bb: tuple, prop_dir: str) -> int:
     return gmsh.model.occ.addPlaneSurface([loop])
 
 
-def _init() -> None:
-    """Initialise a fresh, quiet Gmsh session."""
+def start_gmsh(verbose: bool = False) -> None:
+    """
+    Start a fresh Gmsh session, finalising any running one first.
+
+    Gmsh is a process-wide singleton, so every FEM module that opens a mesh or
+    a view starts here.
+
+    Parameters
+    ----------
+    verbose : bool
+        Let Gmsh print to the terminal. Default ``False``.
+    """
     if gmsh.isInitialized():
         gmsh.finalize()
     gmsh.initialize()
-    gmsh.option.setNumber("General.Terminal", 0)
+    gmsh.option.setNumber("General.Terminal", 1 if verbose else 0)
 
 
 @dataclass
@@ -678,7 +688,7 @@ def list_solids(step_file: str) -> list[str]:
     list[str]
         The solid names.
     """
-    _init()
+    start_gmsh()
     try:
         gmsh.model.add("probe")
         gmsh.option.setString("Geometry.OCCTargetUnit", "M")
@@ -1614,7 +1624,7 @@ def build_mesh(problem: Problem, workdir: str | Path, verbose: bool = True) -> M
     lambda_min = lambda0_mesh / (eps_max**0.5)
 
     Path(workdir).mkdir(parents=True, exist_ok=True)
-    _init()
+    start_gmsh()
     if verbose:
         gmsh.option.setNumber("General.Terminal", 1)
     gmsh.model.add(problem.name)

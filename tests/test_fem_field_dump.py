@@ -23,6 +23,7 @@ except Exception as error:  # pragma: no cover - depends on the host
 pv = pytest.importorskip("pyvista")
 
 from simpleEMS import fem_field_dump  # noqa: E402
+from simpleEMS.fem_geometry import start_gmsh  # noqa: E402
 from simpleEMS.fem_field_dump import (  # noqa: E402
     FieldDumpRequest,
     _curl,
@@ -31,7 +32,6 @@ from simpleEMS.fem_field_dump import (  # noqa: E402
     _frequency_label,
     _read_volume_fields,
     _sample,
-    _start_gmsh,
     _VolumeFields,
     _write_openems_files,
     write_field_dumps,
@@ -81,7 +81,7 @@ def write_pos(path, tets, values, data_tets=None):
     tags = list(range(1, len(tets) + 1))
     if data_tets is None:
         data_tets = tags
-    _start_gmsh()
+    start_gmsh()
     try:
         gmsh.model.add("field")
         entity = gmsh.model.addDiscreteEntity(3)
@@ -127,7 +127,7 @@ class TestReadVolumeFields:
     def test_start_gmsh_replaces_a_running_session(self):
         gmsh.initialize()
 
-        _start_gmsh()
+        start_gmsh()
 
         assert gmsh.isInitialized()
         gmsh.finalize()
@@ -138,7 +138,7 @@ class TestReadVolumeFields:
         e_pos = write_pos(tmp_path / "e.pos", [LOWER, UPPER], efield)
         h_pos = write_pos(tmp_path / "h.pos", [LOWER, UPPER], hfield)
 
-        _start_gmsh()
+        start_gmsh()
         try:
             fields = _read_volume_fields(e_pos, h_pos)
         finally:
@@ -153,7 +153,7 @@ class TestReadVolumeFields:
         efield = uniform([1, 0, 0], [0, 1, 0])
         e_pos = write_pos(tmp_path / "e.pos", [LOWER, UPPER], efield, data_tets=[2])
 
-        _start_gmsh()
+        start_gmsh()
         try:
             with pytest.raises(RuntimeError, match="does not follow its mesh"):
                 _read_volume_fields(e_pos, e_pos)
@@ -166,7 +166,7 @@ class TestReadVolumeFields:
         )
         h_pos = write_pos(tmp_path / "h.pos", [LOWER], uniform([1, 0, 0]))
 
-        _start_gmsh()
+        start_gmsh()
         try:
             with pytest.raises(RuntimeError, match="different meshes"):
                 _read_volume_fields(e_pos, h_pos)
@@ -375,6 +375,7 @@ class TestWriteFieldDumps:
                     "pro_path": "model.pro",
                     "msh_path": "model.msh",
                     "bbox": [0, 0, 0, 1, 1, 1],
+                    "domain_bbox": [0, 0, 0, 1, 1, 1],
                 }
             )
         )
@@ -447,7 +448,7 @@ class TestWriteFieldDumps:
 
         assert "FEM field dump" in capsys.readouterr().out
 
-    def test_prefers_the_domain_bbox_over_the_mesh_bbox(self, tmp_path, solves):
+    def test_the_dump_spans_the_domain_bbox(self, tmp_path, solves):
         meta_path = tmp_path / "fem_mesh.json"
         meta = json.loads(meta_path.read_text())
         meta["domain_bbox"] = [0, 0, 0, 0.12, 1, 1]

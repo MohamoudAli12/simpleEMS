@@ -22,7 +22,7 @@ except Exception as error:  # pragma: no cover - depends on the host
     pytest.skip(f"gmsh is not importable: {error}", allow_module_level=True)
 
 from simpleEMS import fem_geometry  # noqa: E402
-from simpleEMS.fem_backend import FEMOptions, PortSpec, Problem  # noqa: E402
+from simpleEMS.fem_backend import PortSpec, Problem  # noqa: E402
 
 MM = 1e-3
 
@@ -30,7 +30,7 @@ MM = 1e-3
 @pytest.fixture
 def session():
     """A fresh gmsh session, finalised afterwards whatever the test did."""
-    fem_geometry._init()
+    fem_geometry.start_gmsh()
     gmsh.model.add("test")
     yield
     if gmsh.isInitialized():
@@ -42,7 +42,7 @@ def wave_problem(*ports):
         step_file="s.step",
         freqs=np.array([1e9]),
         ports=list(ports),
-        options=FEMOptions(port_type="waveport"),
+        port_type="waveport",
     )
 
 
@@ -51,7 +51,7 @@ class TestInit:
         gmsh.initialize()
         gmsh.option.setNumber("General.Terminal", 1)
 
-        fem_geometry._init()
+        fem_geometry.start_gmsh()
         try:
             assert gmsh.option.getNumber("General.Terminal") == 0
         finally:

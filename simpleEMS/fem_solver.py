@@ -51,6 +51,11 @@ _STAGE_NOISE = re.compile(r"^(?:\(|Started|Stopped|\d+ KSP|Eigenvalue|[wf] =)", 
 _MEMORY = re.compile(r"Mem\s*=?\s*([\d.]+)\s*([kMG])b", re.IGNORECASE)
 _DOFS = re.compile(r"(\d+)\s+Dofs?\b", re.IGNORECASE)
 
+# The FEM stages hand state to each other through these two files in the
+# output directory: the mesh stage writes the first, the sweep the second.
+MESH_META = "fem_mesh.json"
+SWEEP_RESULTS = "fem_sparams.npz"
+
 
 class SolveInfo(NamedTuple):
     """
@@ -463,6 +468,35 @@ def _conductor_loss(outdir: Path) -> float:
     return sum(_read_power_value(outdir, p.name) for p in outdir.glob("Pcond_*.txt"))
 
 
+def read_powers(outdir: Path, port: int) -> tuple[float, float]:
+    """
+    Read the lost and radiated power of the solve that drove ``port``.
+
+    Parameters
+    ----------
+    outdir : Path
+        The ``output`` directory GetDP wrote the solve's results into.
+    port : int
+        Number of the port that was driven.
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(p_loss, p_rad)`` -- the power lost in the dielectrics and
+        conductors, and the power radiated. The two sum to the power the port
+        accepted. Only their ratio is meaningful.
+    """
+    # p_rad is what the port accepted less what the materials dissipated, not a
+    # flux through the outer boundary -- that reads ~0 behind a PML.
+    p_loss = _read_power_value(outdir, "Ploss.txt") + _conductor_loss(outdir)
+    voltage = read_complex(outdir / f"Vdrv_{port}.txt")
+    current = read_complex(outdir / f"Idrv_{port}.txt")
+    p_acc = 0.5 * float(np.real(voltage * np.conj(current)))
+    # Clamped at 0: a small negative value is numerical noise on a
+    # non-radiating structure.
+    return p_loss, max(p_acc - p_loss, 0.0)
+
+
 def solve_fields_and_power(
     pro_path: str | Path,
     msh_path: str | Path,
@@ -499,8 +533,6 @@ def solve_fields_and_power(
         Only their ratio, e.g. the radiation efficiency, is meaningful; their
         absolute magnitudes are not.
     """
-    # p_rad is what the port accepted less what the materials dissipated, not a
-    # flux through the outer boundary -- that reads ~0 behind a PML.
     run_getdp(
         pro_path,
         msh_path,
@@ -512,13 +544,5 @@ def solve_fields_and_power(
         verbose=verbose,
     )
     outdir = Path(workdir).absolute() / "output"
-
-    # Dielectric plus conductor loss, so p_rad + p_loss is the accepted power.
-    p_loss = _read_power_value(outdir, "Ploss.txt") + _conductor_loss(outdir)
-    v = read_complex(outdir / f"Vdrv_{active}.txt")
-    i = read_complex(outdir / f"Idrv_{active}.txt")
-    p_acc = 0.5 * float(np.real(v * np.conj(i)))
-    # Clamped at 0: a small negative value is numerical noise on a
-    # non-radiating structure.
-    p_rad = max(p_acc - p_loss, 0.0)
+    p_loss, p_rad = read_powers(outdir, active)
     return (str(outdir / "e.pos"), str(outdir / "h.pos"), p_loss, p_rad)

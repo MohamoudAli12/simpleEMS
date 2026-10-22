@@ -174,6 +174,38 @@ def _bisect_violation(
     return float(np.sqrt(below[-1] * above[0]))  # geometric midpoint
 
 
+def _normalise(freqs: NDArray, fmin: float, fmax: float) -> NDArray:
+    """Map ``[fmin, fmax]`` onto ``[-1, 1]``.
+
+    AAA is much better conditioned on data scaled to ``[-1, 1]`` than on raw Hz
+    (frequencies ~1e10), so every fit here runs in this coordinate.
+    """
+    return (2 * np.asarray(freqs) - (fmin + fmax)) / ((fmax - fmin) or 1.0)
+
+
+def interpolate(solved_freqs: NDArray, samples: NDArray, freqs: NDArray) -> NDArray:
+    """
+    Rational-interpolate samples taken at a few frequencies onto ``freqs``.
+
+    Parameters
+    ----------
+    solved_freqs : NDArray
+        Frequencies (Hz) the samples were solved at.
+    samples : NDArray
+        Complex value at each of ``solved_freqs``.
+    freqs : NDArray
+        Ascending frequencies (Hz) to evaluate the interpolant at.
+
+    Returns
+    -------
+    NDArray
+        The interpolated values over ``freqs``.
+    """
+    fmin, fmax = float(freqs[0]), float(freqs[-1])
+    model = AAA(_normalise(solved_freqs, fmin, fmax), samples)
+    return model(_normalise(freqs, fmin, fmax))
+
+
 def rational_sweep(
     freqs_out: NDArray,
     port_numbers: list[int],
@@ -226,18 +258,12 @@ def rational_sweep(
     """
     fgrid = np.asarray(freqs_out, dtype=float)
     fmin, fmax = float(fgrid[0]), float(fgrid[-1])
-    span = (fmax - fmin) or 1.0
     # The budget the caller asked for is what a passive response costs; the
     # ceiling is only ever reached chasing a passivity violation.
     ceiling = int(max_solves) if max_solves is not None else 2 * num_solves
     solve_cap = max(ceiling, num_solves)
 
-    # AAA is much better conditioned on data scaled to [-1, 1] than on raw Hz
-    # (frequencies ~1e10), so fit in this normalised coordinate throughout.
-    def zof(f: NDArray) -> NDArray:
-        return (2 * np.asarray(f) - (fmin + fmax)) / span  # scale to [-1, 1]
-
-    zg = zof(fgrid)
+    zg = _normalise(fgrid, fmin, fmax)
 
     # Seed with a few uniform full solves to give AAA something to fit.
     # A single-point grid has nothing to spread across: np.linspace(f, f, 5)
@@ -303,7 +329,7 @@ def rational_sweep(
     def build_model() -> tuple[NDArray, float, float]:
         """The best fit available: (curve on ``fgrid``, passivity excess, residual)."""
         fs = np.array(sorted(solved))
-        zs = zof(fs)
+        zs = _normalise(fs, fmin, fmax)
         s_arr = np.array([solved[f] for f in fs])  # [n, npt, npt]
         scored = []
         for terms in range(len(fs), 0, -1):  # richest order first

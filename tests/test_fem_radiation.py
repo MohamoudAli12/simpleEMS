@@ -199,6 +199,7 @@ class TestPecBoxRefusesAFarField:
                     "msh_path": str(tmp_path / "s.msh"),
                     "bbox": [0, 0, 0, 0.05, 0.05, 0.002],
                     "domain_bbox": [-0.05, -0.05, -0.05, 0.1, 0.1, 0.05],
+                    "symmetry_axis": None,
                 }
             )
         )
@@ -763,6 +764,7 @@ class TestPatternMetadata:
         pad = 0.25 * (C0 / 2.45e9) * 1.5
         bbox = [0, 0, 0, 0.05, 0.05, 0.002]
         meta = {
+            "boundary": "silver_muller",
             "pro_path": "p.pro",
             "msh_path": "m.msh",
             "bbox": bbox,
@@ -831,26 +833,6 @@ class TestPatternMetadata:
 
         assert patterns[0][1]["symmetry"] is None
 
-    def test_a_stale_symmetric_mesh_is_rejected(self, staged):
-        """Half the Huygens surface with no way to mirror it would give a wrong
-        pattern silently, so this refuses rather than guessing."""
-        out, _solves, _patterns = staged
-        self.write_meta(out, symmetry_axis=1, symmetry_plane=None)
-
-        with pytest.raises(RuntimeError, match="predates the far-field mirroring"):
-            FEMNF2FF()._pattern(str(out), 2.45e9)
-
-    def test_a_mesh_without_domain_bbox_warns_but_proceeds(self, staged, capsys):
-        out, _solves, patterns = staged
-        meta = self.write_meta(out)
-        del meta["domain_bbox"]
-        (out / "fem_mesh.json").write_text(json.dumps(meta))
-
-        FEMNF2FF()._pattern(str(out), 2.45e9)
-
-        assert "stale mesh" in capsys.readouterr().out
-        assert patterns[0][1]["domain_bbox"] is None
-
     def test_tight_padding_is_caught_before_solving(self, staged):
         """The check costs nothing; the solve it precedes costs minutes."""
         out, solves, _patterns = staged
@@ -915,6 +897,7 @@ class TestCalcPower:
             "bbox": bbox,
             "domain_bbox": [bbox[i] - pad for i in range(3)]
             + [bbox[3 + i] + pad for i in range(3)],
+            "symmetry_axis": None,
         }
         (path / "fem_mesh.json").write_text(json.dumps(meta))
 
@@ -986,13 +969,6 @@ class TestSweepEfficiency:
 
         np.testing.assert_array_equal(freqs, [2.4e9, 2.5e9])
         np.testing.assert_array_equal(efficiency, [0.8, 0.82])
-
-    def test_results_from_before_the_sweep_recorded_it_give_none(self, tmp_path):
-        """The caller then solves for the powers instead."""
-        self.write_meta(tmp_path)
-        np.savez(tmp_path / "fem_sparams.npz", freqs=np.array([2.4e9]))
-
-        assert FEMNF2FF().sweep_efficiency(tmp_path) is None
 
     def test_no_sweep_results_give_none(self, tmp_path):
         self.write_meta(tmp_path)

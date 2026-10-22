@@ -88,7 +88,7 @@ of the mesh, and the number of frequencies to solve at. `SimParams` gives the
 same settings the same names.
 
 ```{seealso}
-- {class}`simpleEMS.fem_backend.FEMOptions`
+- {class}`simpleEMS.sim_params.SimParams`
 ```
 
 The function returns the S-parameters, the impedance, the VSWR, and the port

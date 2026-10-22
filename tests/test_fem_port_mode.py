@@ -205,10 +205,10 @@ class TestSelectMode:
 
     @pytest.mark.needs_csxcad
     def test_an_eps_eff_below_one_is_rejected_up_front(self):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
         with pytest.raises(ValueError, match="cannot be below 1"):
-            FEMOptions(port_mode_eps_eff=0.5)
+            Problem(step_file="s.step", port_mode_eps_eff=0.5)
 
 
 class TestIntegration:
@@ -374,7 +374,7 @@ def _rect_section(path, w, h, eps_r=None, walls="all", split_at=None, lc=None):
 def _mode_problem(tmp_path, msh, *, eps_r=None, direction="z", freq=1e9):
     """Write the mode .pro for a hand-built cross-section and pair it with a setup."""
     from simpleEMS import fem_formulation
-    from simpleEMS.fem_backend import FEMOptions, PortSpec, Problem, SolidSpec
+    from simpleEMS.fem_backend import PortSpec, Problem, SolidSpec
 
     solids = {"port_1": SolidSpec("port_1", "port")}
     diel_regions = {}
@@ -390,7 +390,6 @@ def _mode_problem(tmp_path, msh, *, eps_r=None, direction="z", freq=1e9):
         solids=solids,
         ports=[PortSpec("port_1", 1, 50.0, direction, "wave", "y")],
         freqs=np.array([freq]),
-        options=FEMOptions(),
     )
     mesh = Mesh(
         msh_path=str(msh),
@@ -587,9 +586,9 @@ class TestLossTangentRoundTrip:
         design = 2.45e9
         csx = self._csx(self._kappa(0.001, design))
 
-        _roles, diels, _ports, _sigma = _csx_roles(csx, design)
+        solids, _ports = _csx_roles(csx, design)
 
-        assert diels["substrate"].tan_d == pytest.approx(0.001, rel=1e-9)
+        assert solids["substrate"].dielectric.tan_d == pytest.approx(0.001, rel=1e-9)
 
     def test_another_frequency_scales_it_by_the_ratio(self):
         """This is what a sweep's band centre used to do to a 2.45 GHz board."""
@@ -597,16 +596,18 @@ class TestLossTangentRoundTrip:
 
         csx = self._csx(self._kappa(0.001, 2.45e9))
 
-        _roles, diels, _ports, _sigma = _csx_roles(csx, 2.0e9)
+        solids, _ports = _csx_roles(csx, 2.0e9)
 
-        assert diels["substrate"].tan_d == pytest.approx(0.001 * 2.45 / 2.0, rel=1e-9)
+        assert solids["substrate"].dielectric.tan_d == pytest.approx(
+            0.001 * 2.45 / 2.0, rel=1e-9
+        )
 
     def test_a_lossless_board_stays_lossless(self):
         from simpleEMS.fem_backend import _csx_roles
 
-        _roles, diels, _ports, _sigma = _csx_roles(self._csx(0.0), 2.45e9)
+        solids, _ports = _csx_roles(self._csx(0.0), 2.45e9)
 
-        assert diels["substrate"].tan_d == 0.0
+        assert solids["substrate"].dielectric.tan_d == 0.0
 
 
 class TestModeAttenuation:
@@ -634,31 +635,31 @@ class TestModeAttenuation:
 
 
 @pytest.mark.needs_csxcad
-class TestFEMOptionsValidation:
+class TestProblemPortValidation:
     @pytest.mark.parametrize(
         "boundary", ["silver_muller", "pml", "pec"], ids=["abc", "pml", "pec"]
     )
     def test_every_outer_boundary_is_accepted(self, boundary):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
-        assert FEMOptions(boundary=boundary).boundary == boundary
+        assert Problem(step_file="s.step", boundary=boundary).boundary == boundary
 
     def test_an_unknown_outer_boundary_is_rejected_by_name(self):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
         with pytest.raises(ValueError, match="'silver_muller', 'pml' or 'pec'"):
-            FEMOptions(boundary="absorbing")
+            Problem(step_file="s.step", boundary="absorbing")
 
     def test_a_mode_index_beyond_the_modes_computed_is_rejected_up_front(self):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
         with pytest.raises(ValueError, match="out of reach"):
-            FEMOptions(port_mode_modes=2, port_mode_index=4)
+            Problem(step_file="s.step", port_mode_modes=2, port_mode_index=4)
 
     def test_defaults_select_the_fundamental(self):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
-        opts = FEMOptions()
+        opts = Problem(step_file="s.step")
         assert opts.port_mode_index == 0
         assert opts.port_mode_modes == 6
 
@@ -668,10 +669,10 @@ class TestFEMOptionsValidation:
         ids=["no-modes", "negative-index"],
     )
     def test_nonsense_is_rejected(self, kwargs):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
         with pytest.raises(ValueError):
-            FEMOptions(**kwargs)
+            Problem(step_file="s.step", **kwargs)
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -684,13 +685,14 @@ class TestFEMOptionsValidation:
         ids=["zero-width", "negative-width", "zero-height", "negative-height"],
     )
     def test_a_nonpositive_waveport_size_is_rejected(self, kwargs):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
         with pytest.raises(ValueError, match="must be positive"):
-            FEMOptions(**kwargs)
+            Problem(step_file="s.step", **kwargs)
 
-    def test_the_waveport_size_reaches_the_options_from_the_params(self):
+    def test_the_waveport_size_reaches_the_problem_from_the_params(self):
         from simpleEMS.components import GenericParams
+        from simpleEMS.fem_backend import _fem_settings
 
         params = GenericParams(
             min_freq=2e9,
@@ -704,34 +706,40 @@ class TestFEMOptionsValidation:
             FEM_waveport_width_mm=12.0,
             FEM_waveport_height_mm=8.0,
         )
-        assert params.fem_options.waveport_width_mm == 12.0
-        assert params.fem_options.waveport_height_mm == 8.0
+        settings = _fem_settings(params)
+        assert settings["waveport_width_mm"] == 12.0
+        assert settings["waveport_height_mm"] == 8.0
 
 
 @pytest.mark.needs_csxcad
 class TestPortTypeOption:
     def test_the_default_is_the_lumped_port_the_backend_always_had(self):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
-        assert FEMOptions().port_type == "lumpedport"
+        assert (
+            Problem(
+                step_file="s.step",
+            ).port_type
+            == "lumpedport"
+        )
 
     @pytest.mark.parametrize(
         "value", ["waveport", "lumpedport"], ids=["wave", "lumped"]
     )
     def test_both_choices_are_accepted(self, value):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
-        assert FEMOptions(port_type=value).port_type == value
+        assert Problem(step_file="s.step", port_type=value).port_type == value
 
     def test_a_typo_is_rejected_rather_than_silently_meaning_lumped(self):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
         with pytest.raises(ValueError, match="port_type must be"):
-            FEMOptions(port_type="wave")
+            Problem(step_file="s.step", port_type="wave")
 
-    def test_the_params_field_is_validated_at_construction(self):
-        # not only when fem_options is built, so a typo surfaces immediately
+    def test_the_params_field_is_validated_when_the_problem_is_built(self):
         from simpleEMS.components import GenericParams
+        from simpleEMS.fem_backend import Problem, _fem_settings
 
         kw = dict(
             min_freq=2e9,
@@ -743,12 +751,11 @@ class TestPortTypeOption:
             substrate_width_mm=20.0,
             substrate_length_mm=30.0,
         )
+        typo = _fem_settings(GenericParams(**kw, FEM_port_type="wave"))
         with pytest.raises(ValueError, match="FEM_port_type must be"):
-            GenericParams(**kw, FEM_port_type="wave")
-        assert (
-            GenericParams(**kw, FEM_port_type="waveport").fem_options.port_type
-            == "waveport"
-        )
+            Problem(step_file="s.step", **typo)
+        chosen = _fem_settings(GenericParams(**kw, FEM_port_type="waveport"))
+        assert Problem(step_file="s.step", **chosen).port_type == "waveport"
 
 
 class TestImpedanceOverride:
@@ -763,10 +770,10 @@ class TestImpedanceOverride:
 
     @pytest.mark.needs_csxcad
     def test_a_nonpositive_override_is_rejected(self):
-        from simpleEMS.fem_backend import FEMOptions
+        from simpleEMS.fem_backend import Problem
 
         with pytest.raises(ValueError, match="port_mode_zc must be positive"):
-            FEMOptions(port_mode_zc=0.0)
+            Problem(step_file="s.step", port_mode_zc=0.0)
 
 
 class TestPropagationAxis:
@@ -1038,23 +1045,21 @@ class TestPortSolidGrouping:
     """A CPW port is drawn as one solid per gap; both belong to one port."""
 
     def test_extra_solids_join_the_port_instead_of_being_dropped(self):
-        from simpleEMS.fem_backend import Problem, _register_port
+        from simpleEMS.fem_backend import PortSpec, Problem, _register_port
 
         prob = Problem(step_file="s.step")
-        seen: set[int] = set()
-        _register_port(prob, seen, "port_resist_1", 1, 50.0, "x", "wave")
-        _register_port(prob, seen, "port_resist_1_1", 1, 50.0, "x", "wave")
+        _register_port(prob, PortSpec("port_resist_1", 1, direction="x", kind="wave"))
+        _register_port(prob, PortSpec("port_resist_1_1", 1, direction="x", kind="wave"))
 
         assert len(prob.ports) == 1
         assert prob.ports[0].solids == ["port_resist_1", "port_resist_1_1"]
 
     def test_a_repeated_solid_is_not_added_twice(self):
-        from simpleEMS.fem_backend import Problem, _register_port
+        from simpleEMS.fem_backend import PortSpec, Problem, _register_port
 
         prob = Problem(step_file="s.step")
-        seen: set[int] = set()
-        _register_port(prob, seen, "port_resist_1", 1, 50.0)
-        _register_port(prob, seen, "port_resist_1", 1, 50.0)
+        _register_port(prob, PortSpec("port_resist_1", 1))
+        _register_port(prob, PortSpec("port_resist_1", 1))
         assert prob.ports[0].solids == ["port_resist_1"]
 
     def test_a_lumped_port_has_exactly_its_own_solid(self):
@@ -1063,12 +1068,11 @@ class TestPortSolidGrouping:
         assert PortSpec("port_resist_1", 1).solids == ["port_resist_1"]
 
     def test_different_port_numbers_stay_separate(self):
-        from simpleEMS.fem_backend import Problem, _register_port
+        from simpleEMS.fem_backend import PortSpec, Problem, _register_port
 
         prob = Problem(step_file="s.step")
-        seen: set[int] = set()
-        _register_port(prob, seen, "port_resist_1", 1, 50.0)
-        _register_port(prob, seen, "port_resist_2", 2, 50.0)
+        _register_port(prob, PortSpec("port_resist_1", 1))
+        _register_port(prob, PortSpec("port_resist_2", 2))
         assert [p.number for p in prob.ports] == [1, 2]
         assert prob.ports[0].solids == ["port_resist_1"]
         assert prob.ports[1].solids == ["port_resist_2"]
@@ -1098,41 +1102,37 @@ class TestPortKindFromGeometry:
     def test_one_box_is_a_lumped_port_by_default(self):
         from simpleEMS.fem_backend import _csx_roles
 
-        _roles, _diel, ports, _sigma = _csx_roles(self._csx(1, 50.0), 2.45e9)
-        z0, _dir, number, kind, is_cpw = ports["port_resist_1"]
-        assert (kind, is_cpw, number) == ("lumped", False, 1)
-        assert z0 == 50.0
+        _solids, ports = _csx_roles(self._csx(1, 50.0), 2.45e9)
+        port = ports["port_resist_1"]
+        assert (port.kind, port.number, port.z0) == ("lumped", 1, 50.0)
 
     def test_one_box_becomes_a_wave_port_when_asked(self):
         from simpleEMS.fem_backend import _csx_roles
 
-        _roles, _diel, ports, _sigma = _csx_roles(
-            self._csx(1, 50.0), 2.45e9, "waveport"
-        )
-        assert ports["port_resist_1"][3] == "wave"
+        _solids, ports = _csx_roles(self._csx(1, 50.0), 2.45e9, "waveport")
+        assert ports["port_resist_1"].kind == "wave"
 
     def test_two_boxes_are_a_cpw_port_and_a_wave_port_even_by_default(self):
         # a lumped sheet cannot represent the odd CPW mode, so this is not
         # left to the default -- it would return plausible wrong numbers
         from simpleEMS.fem_backend import _csx_roles
 
-        _roles, _diel, ports, _sigma = _csx_roles(self._csx(2, 100.0), 2.45e9)
-        _z0, _dir, _number, kind, is_cpw = ports["port_resist_1"]
-        assert (kind, is_cpw) == ("wave", True)
+        _solids, ports = _csx_roles(self._csx(2, 100.0), 2.45e9)
+        assert ports["port_resist_1"].kind == "wave"
 
     def test_a_cpw_ports_doubled_resistance_is_halved_back(self):
         # openEMS applies Feed_R "to each gap as 2*R", so 100 ohm on the
         # property is a 50 ohm line
         from simpleEMS.fem_backend import _csx_roles
 
-        _roles, _diel, ports, _sigma = _csx_roles(self._csx(2, 100.0), 2.45e9)
-        assert ports["port_resist_1"][0] == 50.0
+        _solids, ports = _csx_roles(self._csx(2, 100.0), 2.45e9)
+        assert ports["port_resist_1"].z0 == 50.0
 
     def test_a_lumped_ports_resistance_is_left_alone(self):
         from simpleEMS.fem_backend import _csx_roles
 
-        _roles, _diel, ports, _sigma = _csx_roles(self._csx(1, 100.0), 2.45e9)
-        assert ports["port_resist_1"][0] == 100.0
+        _solids, ports = _csx_roles(self._csx(1, 100.0), 2.45e9)
+        assert ports["port_resist_1"].z0 == 100.0
 
 
 # ---------------------------------------------------------------------

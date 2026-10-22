@@ -26,7 +26,6 @@ pytest.importorskip("openEMS")
 
 from simpleEMS import fem_formulation  # noqa: E402
 from simpleEMS.fem_backend import (  # noqa: E402
-    FEMOptions,
     PortSpec,
     Problem,
     SolidSpec,
@@ -57,7 +56,6 @@ def make_problem(**overrides):
         },
         "ports": [PortSpec("port_1", 1, 50.0, "z")],
         "freqs": np.array([2.45e9]),
-        "options": FEMOptions(),
     }
     defaults.update(overrides)
     return Problem(**defaults)
@@ -476,27 +474,19 @@ class TestOptions:
         """The second-order basis functions are always present in the file but
         gated behind ``If (FEorder == 2)``, so this single constant is what
         actually selects the element order."""
-        content = write(
-            make_problem(options=FEMOptions(fe_order=order)), make_mesh(), tmp_path
-        )
+        content = write(make_problem(fe_order=order), make_mesh(), tmp_path)
 
         assert f"FEorder = {order}" in content
 
     def test_the_gated_second_order_basis_function_is_present(self, tmp_path):
-        content = write(
-            make_problem(options=FEMOptions(fe_order=2)), make_mesh(), tmp_path
-        )
+        content = write(make_problem(fe_order=2), make_mesh(), tmp_path)
 
         assert "If (FEorder == 2)" in content
         assert "BF_Edge_2E" in content
 
     def test_element_order_is_the_only_difference_between_orders(self, tmp_path):
-        first = write(
-            make_problem(options=FEMOptions(fe_order=1)), make_mesh(), tmp_path
-        )
-        second = write(
-            make_problem(options=FEMOptions(fe_order=2)), make_mesh(), tmp_path
-        )
+        first = write(make_problem(fe_order=1), make_mesh(), tmp_path)
+        second = write(make_problem(fe_order=2), make_mesh(), tmp_path)
 
         assert first != second
         assert first.replace("FEorder = 1", "FEorder = 2") == second
@@ -522,7 +512,7 @@ class TestOptions:
 class TestWriteModeProblem:
     @pytest.fixture
     def pro_text(self, tmp_path):
-        from simpleEMS.fem_backend import FEMOptions, PortSpec, Problem, SolidSpec
+        from simpleEMS.fem_backend import PortSpec, Problem, SolidSpec
         from simpleEMS.fem_geometry import Mesh, PortMesh
         from simpleEMS.fem_materials import (
             ABC,
@@ -544,7 +534,6 @@ class TestWriteModeProblem:
             },
             ports=[PortSpec("port_1", 1, 50.0, "z", "wave", "y")],
             freqs=np.array([1e9]),
-            options=FEMOptions(),
         )
         mesh = Mesh(
             msh_path=str(tmp_path / "sec.msh"),

@@ -35,16 +35,11 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.interpolate import RegularGridInterpolator, griddata
 
-from . import fem_solver
+from . import fem_geometry, fem_solver
 from .console import console
 from .fem_materials import C0
 
 __all__ = ["FEMNF2FF"]
-
-_MESH_META = "fem_mesh.json"
-# Same name as fem_backend._SPARAMS, spelled out: importing fem_backend would
-# pull CSXCAD and CadQuery into the far-field path
-_SWEEP_RESULTS = "fem_sparams.npz"
 
 # CutBox places nodes exactly on the box faces, so this only absorbs float noise.
 _PLANE_TOL = 1e-12
@@ -147,10 +142,7 @@ def compute_pattern(
         and azimuth angles in radians, the radiation intensity over them as
         ``u_grid[n_phi, n_theta]``, and the peak directivity in dB.
     """
-    if gmsh.isInitialized():
-        gmsh.finalize()
-    gmsh.initialize()
-    gmsh.option.setNumber("General.Terminal", 1 if verbose else 0)
+    fem_geometry.start_gmsh(verbose)
 
     gmsh.merge(str(e_pos))  # view index 0 -> E
     gmsh.merge(str(h_pos))  # view index 1 -> H
@@ -499,6 +491,39 @@ def _check_farfield_margin(
         )
 
 
+def _radiating_meta(output_path: str | Path, quantity: str) -> dict:
+    """
+    Read ``fem_mesh.json``, refusing a mesh whose box cannot radiate.
+
+    Parameters
+    ----------
+    output_path : str | Path
+        Directory the simulation results were written to.
+    quantity : str
+        What was asked for, e.g. ``"far field"``, named in the error.
+
+    Returns
+    -------
+    dict
+        The mesh metadata.
+
+    Raises
+    ------
+    ValueError
+        If the mesh was built with ``FEM_boundary='pec'``, where nothing
+        radiates.
+    """
+    meta = json.loads((Path(output_path) / fem_solver.MESH_META).read_text())
+    if meta["boundary"] == "pec":
+        raise ValueError(
+            f"no {quantity} under FEM_boundary='pec': the outer box is a "
+            "perfect conductor, so the fields are those of a shielded "
+            "enclosure and nothing radiates out of it. Re-run with "
+            "FEM_boundary='silver_muller' or 'pml'."
+        )
+    return meta
+
+
 class FEMNF2FF:
     """
     Far-field calculator for the FEM backend.
@@ -517,46 +542,22 @@ class FEMNF2FF:
         """Solve the fields and powers at ``freq`` and build the pattern, once."""
         key = (output_path, freq)
         if key not in self._cache:
-            meta = json.loads((Path(output_path) / _MESH_META).read_text())
-            if meta.get("boundary") == "pec":
-                raise ValueError(
-                    "no far field under FEM_boundary='pec': the outer box is a "
-                    "perfect conductor, so the fields are those of a shielded "
-                    "enclosure and nothing radiates out of it. Re-run with "
-                    "FEM_boundary='silver_muller' or 'pml' to compute a pattern."
-                )
+            meta = _radiating_meta(output_path, "far field")
             pro, msh, bbox = meta["pro_path"], meta["msh_path"], tuple(meta["bbox"])
-            domain_bbox = tuple(meta["domain_bbox"]) if "domain_bbox" in meta else None
-            if domain_bbox is None:
-                console.print(
-                    "[warning]fem_mesh.json has no domain_bbox (stale mesh); "
-                    "falling back to a structure-relative Huygens box, which "
-                    "can land outside the meshed domain and zero out the far "
-                    "field. Re-run build_mesh to regenerate it.[/warning]"
-                )
-            else:
-                _check_farfield_margin(
-                    bbox, domain_bbox, freq, meta.get("symmetry_axis")
-                )
+            domain_bbox = tuple(meta["domain_bbox"])
+            sym_axis = meta["symmetry_axis"]
+            _check_farfield_margin(bbox, domain_bbox, freq, sym_axis)
             console.print(
                 f"[info]FEM far-field: solving fields at {freq / 1e9:.4f} GHz[/info]"
             )
             e_pos, h_pos, p_loss, p_rad = fem_solver.solve_fields_and_power(
                 pro, msh, output_path, freq
             )
-            sym_axis = meta.get("symmetry_axis")
             symmetry = (
                 (sym_axis, meta["symmetry_plane"], meta["symmetry_kind"])
-                if sym_axis is not None and meta.get("symmetry_plane") is not None
+                if sym_axis is not None
                 else None
             )
-            if sym_axis is not None and symmetry is None:
-                raise RuntimeError(
-                    "This mesh was built with a symmetry plane but predates the "
-                    "far-field mirroring, so fem_mesh.json has no symmetry_plane/"
-                    "symmetry_kind. Only half the Huygens surface can be sampled "
-                    "and the pattern would be wrong; re-run build_mesh."
-                )
             theta_axis, phi_axis, u_grid, dir_db = compute_pattern(
                 e_pos,
                 h_pos,
@@ -609,13 +610,7 @@ class FEMNF2FF:
             *_, p_rad, p_loss = self._cache[(output_path, freq)]
             return p_rad, p_loss
 
-        meta = json.loads((Path(output_path) / _MESH_META).read_text())
-        if meta.get("boundary") == "pec":
-            raise ValueError(
-                "no radiated power under FEM_boundary='pec': the outer box is a "
-                "perfect conductor, so nothing radiates out of it. Re-run with "
-                "FEM_boundary='silver_muller' or 'pml' to compute the efficiency."
-            )
+        meta = _radiating_meta(output_path, "radiated power")
         if verbose:
             console.print(
                 f"[info]FEM power: solving fields at {freq / 1e9:.4f} GHz[/info]"
@@ -644,8 +639,8 @@ class FEMNF2FF:
         -------
         tuple[NDArray, NDArray] | None
             ``(freqs, efficiency)`` at the sweep's solve frequencies, in
-            ascending order, or ``None`` when the results predate the
-            efficiency output and :meth:`calc_power` has to solve instead.
+            ascending order, or ``None`` when no sweep has run and
+            :meth:`calc_power` has to solve instead.
 
         Raises
         ------
@@ -653,19 +648,11 @@ class FEMNF2FF:
             If the mesh was built with ``FEM_boundary='pec'``, where nothing
             radiates.
         """
-        meta = json.loads((Path(output_path) / _MESH_META).read_text())
-        if meta.get("boundary") == "pec":
-            raise ValueError(
-                "no radiated power under FEM_boundary='pec': the outer box is a "
-                "perfect conductor, so nothing radiates out of it. Re-run with "
-                "FEM_boundary='silver_muller' or 'pml' to compute the efficiency."
-            )
-        sweep_file = Path(output_path) / _SWEEP_RESULTS
+        _radiating_meta(output_path, "radiated power")
+        sweep_file = Path(output_path) / fem_solver.SWEEP_RESULTS
         if not sweep_file.exists():
             return None
         with np.load(sweep_file) as sweep:
-            if "efficiency" not in sweep:
-                return None
             return sweep["efficiency_freqs"], sweep["efficiency"]
 
     def CalcNF2FF(  # noqa: N802  (matches the openEMS nf2ff method name)

@@ -36,12 +36,10 @@ import gmsh
 import numpy as np
 from numpy.typing import NDArray
 
-from . import fem_solver
+from . import fem_geometry, fem_solver
 from .console import console
 
 __all__ = ["FieldDumpRequest", "write_field_dumps"]
-
-_MESH_META = "fem_mesh.json"
 
 # openEMS's ProcessFieldsFD writes this many phases of one period per frequency.
 _PHASE_COUNT = 21
@@ -99,14 +97,6 @@ class _VolumeFields:
     tets: NDArray  # (n_tets, 4) indices into points
     efield: NDArray
     hfield: NDArray
-
-
-def _start_gmsh() -> None:
-    """Start a fresh, quiet gmsh session; gmsh is a process-wide singleton."""
-    if gmsh.isInitialized():
-        gmsh.finalize()
-    gmsh.initialize()
-    gmsh.option.setNumber("General.Terminal", 0)
 
 
 def _read_view(pos_path: Path) -> tuple[NDArray, NDArray, NDArray, NDArray]:
@@ -392,14 +382,14 @@ def write_field_dumps(
         If the simulation's mesh metadata is missing.
     """
     output_path = Path(output_path)
-    meta_file = output_path / _MESH_META
+    meta_file = output_path / fem_solver.MESH_META
     if not meta_file.exists():
         raise RuntimeError(
             f"FEM mesh metadata not found at {meta_file}; run the simulation first."
         )
     meta = json.loads(meta_file.read_text())
     driven_port = min(meta["port_numbers"])
-    domain_bbox = tuple(meta.get("domain_bbox") or meta["bbox"])
+    domain_bbox = tuple(meta["domain_bbox"])
     dump_dir = output_path / "field_dump"
     dump_dir.mkdir(parents=True, exist_ok=True)
 
@@ -416,7 +406,7 @@ def write_field_dumps(
             verbose=verbose,
         )
         result_dir = output_path.absolute() / "output"
-        _start_gmsh()
+        fem_geometry.start_gmsh()
         try:
             fields = _read_volume_fields(result_dir / "e.pos", result_dir / "h.pos")
         finally:

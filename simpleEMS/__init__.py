@@ -45,7 +45,7 @@ _NAMES_BY_MODULE = {
     "monopole_antenna": ["PrintedMonopoleAntennaParams", "PrintedMonopoleAntenna"],
     "fdtd_standalone_model": ["add_fdtd_setup", "simulate_model"],
     "fdtd_import_step": ["simulate_step_FDTD"],
-    "fem_backend": ["simulate_step_FEM", "FEMOptions"],
+    "fem_backend": ["simulate_step_FEM"],
     "fem_radiation": ["FEMNF2FF"],
     "plot_theme": ["use_dark_theme", "use_light_theme"],
     "sim_tools": [
@@ -131,7 +131,6 @@ __all__ = [
     "simulate_model",
     "simulate_step_FDTD",
     "simulate_step_FEM",
-    "FEMOptions",
     "FEMNF2FF",
     "use_dark_theme",
     "use_light_theme",

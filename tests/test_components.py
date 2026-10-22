@@ -271,8 +271,8 @@ def via_board_mesh(tmp_path_factory):
         sim.CSX,
         sim.freqs,
         tmp_path_factory.mktemp("via_board"),
+        params,
         verbose=False,
-        FEM_options=params.fem_options,
     )
 
 

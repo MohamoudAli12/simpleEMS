@@ -66,7 +66,6 @@ from .export_layout import export_dxf, export_gerber, export_kicad_footprint
 from .export_cad import export_stl, export_step, export_csxcad_xml_to_step
 from .export_touchstone import write_touchstone
 from .fdtd_mesh import Mesh, auto_simulation_bounds, geometry_extent
-from .fem_backend import FEMOptions
 from .fem_field_dump import FieldDumpRequest
 from .plot_theme import HIGHLIGHT, style_background_plotter, themed_cursor
 from .report import generate_report
@@ -291,9 +290,10 @@ class SimSetup(NamedTuple):
         backend these are the interpolated output points, not the solve points.
     backend_engine : str
         Solver backend, either ``"FDTD"`` (default) or ``"FEM"``.
-    FEM_options : FEMOptions | None
-        Global FEM solver/mesh options (boundary, symmetry, fe_order, mesh
-        tuning, port type, num_solve_points). ``None`` for FDTD.
+    params : SimParams | None
+        The parameters the setup was built from. The FEM backend reads its
+        ``FEM_*`` solver and mesh settings off them. ``None`` for a setup
+        built without one, such as a standalone FDTD model.
     charac_imp : float
         Reference impedance of the ports, in ohms.
     FEM_field_dumps : list[FieldDumpRequest] | None
@@ -306,7 +306,7 @@ class SimSetup(NamedTuple):
     FDTD: openEMS
     freqs: NDArray
     backend_engine: str = "FDTD"
-    FEM_options: FEMOptions | None = None
+    params: SimParams | None = None
     charac_imp: float = 50
     FEM_field_dumps: list[FieldDumpRequest] | None = None
 
@@ -321,9 +321,8 @@ def setup_simulation(
 
     Creates the ``ContinuousStructure`` and ``openEMS`` objects, applies the
     boundary conditions and Gaussian excitation derived from
-    ``params.freq_range``, and (for the FEM backend) carries
-    ``params.fem_options`` through to the returned :class:`SimSetup`, which
-    is passed to most other ``SimTools`` methods.
+    ``params.freq_range``, and carries ``params`` through to the returned
+    :class:`SimSetup`, which is passed to most other ``SimTools`` methods.
 
     Parameters
     ----------
@@ -343,7 +342,7 @@ def setup_simulation(
     SimSetup
         Named tuple with ``CSX`` (CSXCAD geometry), ``FDTD`` (openEMS FDTD
         object), ``freqs`` (frequency array), ``backend_engine``,
-        ``FEM_options`` (``None`` for FDTD), ``charac_imp``, and
+        ``params``, ``charac_imp``, and
         ``FEM_field_dumps`` (an empty list for FEM, ``None`` for FDTD).
     """
     if FDTD_boundary is None:
@@ -369,14 +368,12 @@ def setup_simulation(
 
     freqs = np.linspace(fmin, fmax, params.num_points)
 
-    FEM_options = params.fem_options if params.backend_engine == "FEM" else None
-
     return SimSetup(
         CSX=CSX,
         FDTD=FDTD,
         freqs=freqs,
         backend_engine=params.backend_engine,
-        FEM_options=FEM_options,
+        params=params,
         charac_imp=params.charac_imp,
         FEM_field_dumps=[] if params.backend_engine == "FEM" else None,
     )
@@ -405,7 +402,7 @@ class SimTools:
         Display the simulation geometry.
 
         For the FDTD backend this opens the structure in AppCSXCAD. For the
-        FEM backend it (re-)meshes the current ``CSX``/``FEM_options`` with
+        FEM backend it (re-)meshes the current ``CSX``/``params`` with
         Gmsh -- reusing the existing mesh instead of rebuilding if neither
         has changed since the last call on this ``output_path`` -- and
         shows it with :func:`simpleEMS.fem_backend.show_fem_mesh`: one
@@ -441,7 +438,7 @@ class SimTools:
                 pv.set_plot_theme(theme)
 
             msh_path = fem_backend.build_mesh(
-                sim.CSX, sim.freqs, output_path, FEM_options=sim.FEM_options
+                sim.CSX, sim.freqs, output_path, params=sim.params
             )
             fem_backend.show_fem_mesh(msh_path)
             return
@@ -491,9 +488,9 @@ class SimTools:
         Dispatches to the FDTD engine (``FDTD.Run``) or, for the FEM
         backend, to the adaptive GetDP frequency sweep
         (``fem_backend.run_sweep``), which performs up to
-        ``sim.FEM_options.num_solve_points`` full solves. For the FEM backend
+        ``sim.params.FEM_num_solve_points`` full solves. For the FEM backend
         this always (re-)meshes first, reusing the existing mesh if
-        ``sim.CSX``/``sim.FEM_options`` haven't changed since the last mesh
+        ``sim.CSX``/``sim.params`` haven't changed since the last mesh
         in this ``output_path`` (e.g. a prior ``write_and_show_structure``
         call) and rebuilding if they have -- so a sweep/optimize loop that
         calls this directly, varying the geometry across iterations into
@@ -525,7 +522,7 @@ class SimTools:
                 sim.CSX,
                 sim.freqs,
                 output_path,
-                FEM_options=sim.FEM_options,
+                params=sim.params,
             )
             if sim.FEM_field_dumps:
                 from . import fem_field_dump

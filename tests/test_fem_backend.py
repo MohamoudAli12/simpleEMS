@@ -1,11 +1,14 @@
 """Tests for the plain-data parts of :mod:`simpleEMS.fem_backend`.
 
-``Problem`` and ``FEMOptions`` are ordinary dataclasses, so the properties
-that read one off the other can be pinned without a mesh or a solve. The
-frequency the mesh is sized at is the one that matters most: it sets both the
-element size and the air padding, so getting it from the wrong place is a
-silent factor on the cost of every FEM run.
+``Problem`` is an ordinary dataclass that holds and checks the FEM solver and
+mesh settings, and ``_fem_settings`` fills it from a ``SimParams``, so both
+can be pinned without a mesh or a solve. The frequency the mesh is sized at
+is the setting that matters most: it sets both the element size and the air
+padding, so getting it from the wrong place is a silent factor on the cost of
+every FEM run.
 """
+
+import dataclasses
 
 import numpy as np
 import pytest
@@ -26,37 +29,132 @@ except Exception as error:  # pragma: no cover - depends on the host
     pytest.skip(f"gmsh is not importable: {error}", allow_module_level=True)
 
 from simpleEMS import fem_backend  # noqa: E402
-from simpleEMS.fem_backend import FEMOptions, PortSpec, Problem  # noqa: E402
+from simpleEMS.fem_backend import PortSpec, Problem  # noqa: E402
+from simpleEMS.sim_params import SimParams  # noqa: E402
+
+
+def make_problem(**settings):
+    """A problem swept 1-5 GHz, carrying no solids."""
+    return Problem(
+        step_file="structure.step", freqs=np.linspace(1e9, 5e9, 50), **settings
+    )
 
 
 class TestMeshFrequency:
-    def problem(self, **options):
-        """A problem swept 1-5 GHz. It carries no solids, because the mesh
-        frequency is read off the options and the sweep alone."""
-        return Problem(
-            step_file="structure.step",
-            freqs=np.linspace(1e9, 5e9, 50),
-            options=FEMOptions(**options),
-        )
-
     def test_it_falls_back_to_the_top_of_the_sweep(self):
         """``simulate_step_FEM`` and a hand-built ``Problem`` carry no design
         frequency, so they keep meshing at the top of the sweep."""
-        assert self.problem().mesh_freq == 5e9
+        assert make_problem().mesh_freq == 5e9
 
     def test_an_explicit_mesh_freq_is_used(self):
-        assert self.problem(mesh_freq=1.5e9).mesh_freq == 1.5e9
+        assert make_problem(mesh_freq=1.5e9).mesh_freq == 1.5e9
 
     @pytest.mark.parametrize("value", [0.0, -2.45e9], ids=["zero", "negative"])
     def test_a_non_positive_mesh_freq_is_refused(self, value):
         """A wavelength is divided by it, so the mistake has to be caught where
         it is made rather than inside gmsh."""
-        with pytest.raises(ValueError, match="mesh_freq must be > 0 Hz"):
-            FEMOptions(mesh_freq=value)
+        with pytest.raises(ValueError, match="FEM_mesh_freq must be > 0 Hz"):
+            make_problem(mesh_freq=value)
 
 
 # ---------------------------------------------------------------------
-# Option validation
+# SimParams -> Problem
+# ---------------------------------------------------------------------
+class TestFEMSettings:
+    def test_every_fem_field_reaches_the_problem(self, inset_params):
+        """``_fem_settings`` maps ``FEM_<name>`` onto ``Problem.<name>`` by
+        name, so a setting added to SimParams but not to Problem fails here
+        rather than being dropped."""
+        settings = fem_backend._fem_settings(inset_params)
+        problem = Problem(step_file="s.step", **settings)
+
+        for name, value in settings.items():
+            assert getattr(problem, name) == value
+
+    def test_every_problem_default_comes_from_simparams(self):
+        """Problem takes its defaults off the SimParams fields, so the two
+        cannot drift apart."""
+        settings = {
+            param_field.name.removeprefix("FEM_"): param_field.default
+            for param_field in dataclasses.fields(SimParams)
+            if param_field.name.startswith("FEM_")
+        }
+        defaults = {
+            problem_field.name: problem_field.default
+            for problem_field in dataclasses.fields(Problem)
+        }
+
+        for name, value in settings.items():
+            assert defaults[name] == value, name
+
+    def test_mesh_freq_defaults_to_main_freq(self, fr4):
+        """freq_range says where to plot the S-parameters; sizing the mesh off
+        its top end refines a wide plot window for nothing."""
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        params = InsetFedPatchParams(
+            resonant_freq=2.45e9,
+            span_freq=2.0e9,  # a plot window far wider than the design point
+            backend_engine="FEM",
+            **fr4,
+        )
+
+        mesh_freq = fem_backend._fem_settings(params)["mesh_freq"]
+
+        assert mesh_freq == params.main_freq
+        assert mesh_freq not in params.freq_range
+
+    def test_an_explicit_mesh_freq_wins(self, fr4):
+        """Checking the structure at the top of a wide band is still possible,
+        it just has to be asked for."""
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        params = InsetFedPatchParams(
+            resonant_freq=2.45e9,
+            span_freq=2.0e9,
+            backend_engine="FEM",
+            FEM_mesh_freq=4.45e9,
+            **fr4,
+        )
+
+        assert fem_backend._fem_settings(params)["mesh_freq"] == 4.45e9
+
+    def test_custom_values_reach_the_problem(self, fr4):
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        params = InsetFedPatchParams(
+            resonant_freq=2.45e9,
+            span_freq=0.5e9,
+            backend_engine="FEM",
+            FEM_fe_order=2,
+            FEM_boundary="pml",
+            FEM_air_pad_mm=((5, 5), (5, 5), (2, 30)),
+            FEM_num_solve_points=12,
+            **fr4,
+        )
+
+        problem = Problem(step_file="s.step", **fem_backend._fem_settings(params))
+
+        assert problem.fe_order == 2
+        assert problem.boundary == "pml"
+        assert problem.air_pad_faces_mm == ((5.0, 5.0), (5.0, 5.0), (2.0, 30.0))
+        assert problem.num_solve_points == 12
+
+    def test_bad_settings_pass_simparams_and_are_refused_by_the_problem(self, fr4):
+        """SimParams only declares the FEM settings; the backend checks them
+        when it builds its problem, a check the STEP path shares."""
+        from simpleEMS.patch_antenna import InsetFedPatchParams
+
+        params = InsetFedPatchParams(
+            resonant_freq=2.45e9, span_freq=0.5e9, FEM_num_solve_points=2, **fr4
+        )
+
+        with pytest.raises(ValueError, match="FEM_num_solve_points must be >= 4"):
+            Problem(step_file="s.step", **fem_backend._fem_settings(params))
+
+
+# ---------------------------------------------------------------------
+# Setting validation
 # ---------------------------------------------------------------------
 class TestAirPadFaces:
     def test_one_value_pads_every_face(self):
@@ -84,29 +182,111 @@ class TestAirPadFaces:
             fem_backend._air_pad_faces_mm(air_pad_mm)
 
 
-class TestFEMOptionsValidation:
+class TestProblemAirPad:
+    """The air box pads each of its six faces independently.
+
+    ``air_pad_mm`` is kept exactly as the caller gave it, and
+    ``air_pad_faces_mm`` expands it on demand.
+    """
+
     @pytest.mark.parametrize(
-        ("options", "message"),
+        ("value", "expected"),
         [
-            ({"fe_order": 3}, "fe_order must be 1 or 2"),
-            ({"num_solve_points": 3}, "num_solve_points must be >= 4"),
+            (3.0, ((3.0, 3.0), (3.0, 3.0), (3.0, 3.0))),
+            (3, ((3.0, 3.0), (3.0, 3.0), (3.0, 3.0))),
+            ((5, 5, 20), ((5.0, 5.0), (5.0, 5.0), (20.0, 20.0))),
+            ([5, 5, 20], ((5.0, 5.0), (5.0, 5.0), (20.0, 20.0))),
+            (((5, 5), (5, 5), (2, 30)), ((5.0, 5.0), (5.0, 5.0), (2.0, 30.0))),
+            ([[8, 8], [8, 8], [2, 30]], ((8.0, 8.0), (8.0, 8.0), (2.0, 30.0))),
+        ],
+        ids=["scalar", "int", "per-axis", "per-axis-list", "per-face", "per-face-list"],
+    )
+    def test_every_accepted_shape_expands_to_six_faces(self, value, expected):
+        assert make_problem(air_pad_mm=value).air_pad_faces_mm == expected
+
+    def test_no_padding_means_no_faces(self):
+        """``None`` hands the sizing back to the wavelength formula."""
+        assert make_problem().air_pad_faces_mm is None
+
+    def test_the_raw_value_is_kept_as_given(self):
+        assert make_problem(air_pad_mm=3.0).air_pad_mm == 3.0
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            (5, 5),
+            (5, 5, 5, 5),
+            ((5, 5), (5, 5)),
+            ((5, 5, 5), (5, 5, 5), (5, 5, 5)),
+            "wide",
+            -3.0,
+            (5, 5, -1),
+            ((5, 5), (5, 5), (2, -1)),
+        ],
+        ids=[
+            "two-values",
+            "four-values",
+            "two-pairs",
+            "triples",
+            "string",
+            "negative",
+            "negative-on-one-axis",
+            "negative-on-one-face",
+        ],
+    )
+    def test_a_bad_shape_or_value_is_rejected(self, value):
+        with pytest.raises(ValueError, match="FEM_air_pad_mm"):
+            make_problem(air_pad_mm=value)
+
+    def test_the_rejection_names_the_offending_face(self):
+        with pytest.raises(ValueError, match=r"z- face"):
+            make_problem(air_pad_mm=((4, 4), (4, 3), (-1, 4)))
+
+    @pytest.mark.parametrize(
+        "value",
+        [0, ((4, 4), (4, 3), (0, 4))],
+        ids=["scalar", "one-face"],
+    )
+    def test_zero_padding_is_allowed(self, value):
+        """Zero puts the domain boundary flush on that face of the structure,
+        which is a fair model for a ground-backed board and meshes."""
+        assert make_problem(air_pad_mm=value).air_pad_faces_mm is not None
+
+
+class TestProblemValidation:
+    @pytest.mark.parametrize(
+        ("settings", "message"),
+        [
+            ({"fe_order": 3}, "FEM_fe_order must be 1 or 2"),
+            ({"num_solve_points": 3}, "FEM_num_solve_points must be >= 4"),
+            ({"num_solve_points": -1}, "FEM_num_solve_points must be >= 4"),
             (
                 {"num_solve_points": 10, "max_solve_points": 6},
-                "max_solve_points must be >= num_solve_points",
+                "FEM_max_solve_points must be >= FEM_num_solve_points",
             ),
-            (
-                {"air_pad_mm": [(1, -1), (1, 1), (1, 1)]},
-                "air_pad_mm cannot be negative",
-            ),
+            ({"port_type": "lumped"}, "FEM_port_type must be"),
+            ({"port_type": "WavePort"}, "FEM_port_type must be"),
+            ({"boundary": "absorbing"}, "FEM_boundary must be"),
         ],
-        ids=["fe-order", "too-few-solves", "cap-below-budget", "negative-pad"],
+        ids=[
+            "fe-order",
+            "too-few-solves",
+            "negative-solves",
+            "cap-below-budget",
+            "port-type-short",
+            "port-type-case",
+            "boundary",
+        ],
     )
-    def test_a_bad_option_is_refused(self, options, message):
+    def test_a_bad_setting_is_refused(self, settings, message):
         with pytest.raises(ValueError, match=message):
-            FEMOptions(**options)
+            make_problem(**settings)
+
+    def test_four_solve_points_is_the_boundary_and_is_allowed(self):
+        assert make_problem(num_solve_points=4).num_solve_points == 4
 
     def test_a_zero_pad_is_allowed(self):
-        assert FEMOptions(air_pad_mm=0).air_pad_faces_mm == ((0.0, 0.0),) * 3
+        assert make_problem(air_pad_mm=0).air_pad_faces_mm == ((0.0, 0.0),) * 3
 
 
 class TestPortSpecValidation:
@@ -127,21 +307,6 @@ class TestPortSpecValidation:
             PortSpec("port_1", 1, **kwargs)
 
 
-class TestProblemOptions:
-    @pytest.mark.parametrize(
-        ("name", "value"),
-        [("air_pad_mm", 3.0), ("port_type", "waveport")],
-    )
-    def test_reads_the_option_through(self, name, value):
-        problem = Problem(
-            step_file="s.step",
-            freqs=np.array([1e9]),
-            options=FEMOptions(**{name: value}),
-        )
-
-        assert getattr(problem, name) == value
-
-
 # ---------------------------------------------------------------------
 # Roles, fingerprint, mesh reuse
 # ---------------------------------------------------------------------
@@ -152,10 +317,10 @@ class TestRolesAndFingerprint:
         csx = ContinuousStructure()
         csx.AddConductingSheet("trace", conductivity=5.8e7, thickness=35e-6)
 
-        roles, _dielectrics, _ports, sigmas = fem_backend._csx_roles(csx, 1e9)
+        solids, _ports = fem_backend._csx_roles(csx, 1e9)
 
-        assert roles["trace"] == "lossy_conductor"
-        assert sigmas["trace"] == pytest.approx(5.8e7)
+        assert solids["trace"].role == "lossy_conductor"
+        assert solids["trace"].sigma == pytest.approx(5.8e7)
 
     def test_an_unreadable_module_is_hashed_by_name(self, tmp_path):
         class Module:
@@ -166,13 +331,16 @@ class TestRolesAndFingerprint:
 
         assert fem_backend._module_bytes(Module()) == b"module-name"
 
-    @staticmethod
-    def fingerprint(build):
+    @pytest.fixture(autouse=True)
+    def _params(self, inset_params):
+        self.params = inset_params
+
+    def fingerprint(self, build):
         from CSXCAD import ContinuousStructure
 
         csx = ContinuousStructure()
         build(csx.AddMetal("metal"))
-        return fem_backend._mesh_fingerprint(csx, np.array([1e9]), None)
+        return fem_backend._mesh_fingerprint(csx, np.array([1e9]), self.params)
 
     @pytest.mark.parametrize(
         ("first", "second"),
@@ -220,13 +388,15 @@ class TestRolesAndFingerprint:
         (tmp_path / "fem_mesh.json").write_text(
             json.dumps(
                 {
-                    "fingerprint": fem_backend._mesh_fingerprint(csx, freqs, None),
+                    "fingerprint": fem_backend._mesh_fingerprint(
+                        csx, freqs, self.params
+                    ),
                     "msh_path": str(msh),
                 }
             )
         )
 
-        assert fem_backend.build_mesh(csx, freqs, tmp_path) == str(msh)
+        assert fem_backend.build_mesh(csx, freqs, tmp_path, self.params) == str(msh)
         assert "reusing unchanged FEM mesh" in capsys.readouterr().out
 
 
@@ -291,7 +461,9 @@ class TestRenormalise:
 # ---------------------------------------------------------------------
 @pytest.mark.needs_cadquery
 class TestCoplanarPortPromotion:
-    def test_a_two_gap_port_is_solved_as_a_wave_port(self, tmp_path, capsys):
+    def test_a_two_gap_port_is_solved_as_a_wave_port(
+        self, tmp_path, capsys, inset_params
+    ):
         """openEMS draws a CPW port as one box per gap with 2 * Z0 on each; the
         FEM backend has to solve it as a wave port at Z0."""
         from CSXCAD import ContinuousStructure
@@ -303,7 +475,9 @@ class TestCoplanarPortPromotion:
         port.AddBox([-0.8, -5, 1.6], [-0.5, -4.9, 1.635])
         port.AddBox([0.5, -5, 1.6], [0.8, -4.9, 1.635])
 
-        problem = fem_backend._build_problem(csx, np.array([1e9]), tmp_path)
+        problem = fem_backend._build_problem(
+            csx, np.array([1e9]), tmp_path, inset_params
+        )
 
         ((number, kind, z0),) = [(p.number, p.kind, p.z0) for p in problem.ports]
         assert (number, kind) == (1, "wave")

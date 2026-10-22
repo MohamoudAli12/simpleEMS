@@ -29,10 +29,6 @@ import numpy as np
 from numpy.typing import NDArray
 from openEMS.physical_constants import C0, EPS0
 
-from .fem_backend import FEMOptions
-
-_FEM_DEFAULTS = FEMOptions()  # single source of truth for the FEM_* defaults below
-
 
 @dataclass(kw_only=True)
 class SimParams:
@@ -115,15 +111,21 @@ class SimParams:
         ``FEMNF2FF.CalcNF2FF`` refuses a far field under it.
     FEM_symmetry : tuple, optional
         FEM backend only. Mirror-symmetry plane ``(axis, kind, at)`` used to
-        halve the mesh. ``None`` (default) disables symmetry.
+        halve the mesh, where ``axis`` is ``"x"``, ``"y"`` or ``"z"``,
+        ``kind`` is ``"pec"`` or ``"pmc"``, and ``at`` is the plane
+        coordinate in metres (``None`` for the structure centre). The plane
+        must be a symmetry of the excitation too; ``"pmc"`` is the usual
+        choice for a planar antenna fed on its centreline. ``None`` (default)
+        disables symmetry.
     FEM_fe_order : int, optional
         FEM backend only. Nedelec edge-element order: ``1`` (default) or
-        ``2``.
+        ``2``. Order ``1`` gets the guided propagation constant noticeably
+        wrong and mesh refinement does not fix it, so use ``2`` when phase or
+        group delay matter; it costs roughly three times as much to solve.
     FEM_air_pad_frac : float, optional
         FEM backend only. Air padding as a fraction of the free-space
-        wavelength at ``FEM_mesh_freq``. Defaults to
-        :attr:`FEMOptions.air_pad_frac`. Ignored when ``FEM_air_pad_mm`` is
-        set.
+        wavelength at ``FEM_mesh_freq``. Default is ``0.25``. Ignored when
+        ``FEM_air_pad_mm`` is set.
     FEM_air_pad_mm : float or tuple, optional
         FEM backend only. Explicit air padding in millimetres, added to the
         structure's bounding box in place of the ``FEM_air_pad_frac``
@@ -143,8 +145,7 @@ class SimParams:
         ``FEM_air_pad_frac``).
     FEM_elems_per_wavelength : float, optional
         FEM backend only. Target coarse mesh density, applied per material
-        against that material's own wavelength. Default is ``16.0``; see
-        :class:`FEMOptions` for why it is not ``8.0``.
+        against that material's own wavelength. Default is ``16.0``.
     FEM_mesh_freq : float, optional
         FEM backend only. Frequency the mesh is sized at, in Hz -- both the
         element size and the air padding come off its wavelength. Default is
@@ -153,8 +154,8 @@ class SimParams:
         no longer refines the mesh. Raise it to check the structure at the top
         of a wide band, at the usual cost in elements.
     FEM_mesh_fine_scale : float, optional
-        FEM backend only. Multiplier on the near-conductor element size.
-        Default is ``1.0``.
+        FEM backend only. Multiplier on the near-conductor element size;
+        values above ``1`` coarsen the mesh there. Default is ``1.0``.
     FEM_port_mode_modes : int, optional
         Number of eigenpairs each wave port's transverse mode solve computes.
         Raise it if a port reports finding no guided mode, or to reach a
@@ -257,24 +258,27 @@ class SimParams:
     backend_engine: str = "FDTD"
     simulation_box: NDArray | None = None
 
+    # The one place the FEM settings and their defaults are declared. The FEM
+    # backend checks them when it builds its problem, and its Problem dataclass
+    # and simulate_step_FEM take their defaults from these.
     FEM_num_solve_points: int = 10
-    FEM_max_solve_points: int | None = _FEM_DEFAULTS.max_solve_points
-    FEM_boundary: str = _FEM_DEFAULTS.boundary
-    FEM_symmetry: tuple | None = _FEM_DEFAULTS.symmetry
-    FEM_fe_order: int = _FEM_DEFAULTS.fe_order
-    FEM_air_pad_frac: float = _FEM_DEFAULTS.air_pad_frac
-    FEM_air_pad_mm: float | tuple | None = _FEM_DEFAULTS.air_pad_mm
-    FEM_elems_per_wavelength: float = _FEM_DEFAULTS.elems_per_wavelength
-    FEM_mesh_freq: float | None = _FEM_DEFAULTS.mesh_freq
-    FEM_mesh_fine_scale: float = _FEM_DEFAULTS.mesh_fine_scale
-    FEM_min_layers: int = _FEM_DEFAULTS.min_layers
-    FEM_port_type: str = _FEM_DEFAULTS.port_type
-    FEM_port_mode_modes: int = _FEM_DEFAULTS.port_mode_modes
-    FEM_port_mode_index: int = _FEM_DEFAULTS.port_mode_index
-    FEM_port_mode_zc: float | None = _FEM_DEFAULTS.port_mode_zc
-    FEM_port_mode_eps_eff: float | None = _FEM_DEFAULTS.port_mode_eps_eff
-    FEM_waveport_width_mm: float | None = _FEM_DEFAULTS.waveport_width_mm
-    FEM_waveport_height_mm: float | None = _FEM_DEFAULTS.waveport_height_mm
+    FEM_max_solve_points: int | None = None
+    FEM_boundary: str = "silver_muller"
+    FEM_symmetry: tuple | None = None
+    FEM_fe_order: int = 1
+    FEM_air_pad_frac: float = 0.25
+    FEM_air_pad_mm: float | tuple | None = None
+    FEM_elems_per_wavelength: float = 16.0
+    FEM_mesh_freq: float | None = None
+    FEM_mesh_fine_scale: float = 1.0
+    FEM_min_layers: int = 3
+    FEM_port_type: str = "lumpedport"
+    FEM_port_mode_modes: int = 6
+    FEM_port_mode_index: int = 0
+    FEM_port_mode_zc: float | None = None
+    FEM_port_mode_eps_eff: float | None = None
+    FEM_waveport_width_mm: float | None = None
+    FEM_waveport_height_mm: float | None = None
 
     FDTD_timestep: int = 90000000
     FDTD_end_criteria: float = 1e-4
@@ -290,34 +294,6 @@ class SimParams:
     fp_precision: int = 3
     charac_imp: float = 50
     lambda0: float = field(init=False)
-
-    @property
-    def fem_options(self) -> FEMOptions:
-        """Bundle the flat ``FEM_*`` fields into a :class:`FEMOptions` instance."""
-        return FEMOptions(
-            boundary=self.FEM_boundary,
-            symmetry=self.FEM_symmetry,
-            fe_order=self.FEM_fe_order,
-            air_pad_frac=self.FEM_air_pad_frac,
-            air_pad_mm=self.FEM_air_pad_mm,
-            elems_per_wavelength=self.FEM_elems_per_wavelength,
-            # freq_range is the plot window; the mesh is sized for the
-            # frequency the structure was designed at
-            mesh_freq=self.FEM_mesh_freq or self.main_freq,
-            mesh_fine_scale=self.FEM_mesh_fine_scale,
-            min_layers=self.FEM_min_layers,
-            num_solve_points=self.FEM_num_solve_points,
-            max_solve_points=self.FEM_max_solve_points,
-            port_type=self.FEM_port_type,
-            port_mode_modes=self.FEM_port_mode_modes,
-            port_mode_index=self.FEM_port_mode_index,
-            port_mode_zc=self.FEM_port_mode_zc,
-            port_mode_eps_eff=self.FEM_port_mode_eps_eff,
-            waveport_width_mm=self.FEM_waveport_width_mm,
-            waveport_height_mm=self.FEM_waveport_height_mm,
-            # substrate_kappa was built at main_freq; read it back there
-            kappa_freq=self.main_freq,
-        )
 
     @property
     def freq_range(self) -> tuple[float, float]:
@@ -437,35 +413,17 @@ class SimParams:
         """
         Validate the solver backend selection.
 
+        The ``FEM_*`` settings are checked by the FEM backend when it builds
+        its problem, which the standalone STEP path shares.
+
         Raises
         ------
         ValueError
-            If ``backend_engine`` is not ``"FDTD"`` or ``"FEM"``, if
-            ``FEM_port_type`` is not a supported choice, or if
-            ``FEM_num_solve_points`` is below the minimum needed for a stable
-            rational fit.
+            If ``backend_engine`` is not ``"FDTD"`` or ``"FEM"``.
         """
         if self.backend_engine not in ("FDTD", "FEM"):
             raise ValueError(
                 f"backend_engine must be 'FDTD' or 'FEM', got {self.backend_engine!r}"
-            )
-        if self.FEM_port_type not in ("lumpedport", "waveport"):
-            raise ValueError(
-                f"FEM_port_type must be 'lumpedport' or 'waveport', "
-                f"got {self.FEM_port_type!r}"
-            )
-        if self.FEM_num_solve_points < 4:
-            raise ValueError(
-                f"FEM_num_solve_points must be >= 4 for a stable rational fit, "
-                f"got {self.FEM_num_solve_points}"
-            )
-        if (
-            self.FEM_max_solve_points is not None
-            and self.FEM_max_solve_points < self.FEM_num_solve_points
-        ):
-            raise ValueError(
-                f"FEM_max_solve_points must be >= FEM_num_solve_points "
-                f"({self.FEM_num_solve_points}), got {self.FEM_max_solve_points}"
             )
 
     def _compute_common(self) -> None:

@@ -100,8 +100,8 @@ class TestRunSimulationFEM:
         monkeypatch.setattr(
             fem_backend,
             "run_sweep",
-            lambda csx, freqs, output_path, FEM_options: calls["sweep"].append(
-                (csx, freqs, output_path, FEM_options)
+            lambda csx, freqs, output_path, params: calls["sweep"].append(
+                (csx, freqs, output_path, params)
             ),
         )
         monkeypatch.setattr(
@@ -116,11 +116,11 @@ class TestRunSimulationFEM:
 
         SimTools.run_simulation(sim, tmp_path)
 
-        ((csx, freqs, output_path, options),) = recorded["sweep"]
+        ((csx, freqs, output_path, sweep_params),) = recorded["sweep"]
         assert csx is sim.CSX
         assert freqs is sim.freqs
         assert output_path == tmp_path
-        assert options is sim.FEM_options
+        assert sweep_params is sim.params
 
     def test_writes_no_dumps_unless_queued(self, fem_sim, recorded, tmp_path):
         sim, _params = fem_sim
@@ -161,8 +161,8 @@ class TestFEMMeshViewer:
 
         recorded = {"build": [], "plotters": [], "themes": []}
 
-        def fake_build_mesh(csx, freqs, output_path, FEM_options):
-            recorded["build"].append((csx, output_path, FEM_options))
+        def fake_build_mesh(csx, freqs, output_path, params):
+            recorded["build"].append((csx, output_path, params))
             return str(msh_path)
 
         class RecordingPlotter:
@@ -208,10 +208,10 @@ class TestFEMMeshViewer:
 
         SimTools.write_and_show_structure(sim, tmp_path)
 
-        ((csx, output_path, options),) = viewer["build"]
+        ((csx, output_path, mesh_params),) = viewer["build"]
         assert csx is sim.CSX
         assert output_path == tmp_path
-        assert options is sim.FEM_options
+        assert mesh_params is sim.params
         (plotter,) = viewer["plotters"]
         assert plotter.shown
         assert plotter.calls == ["add_axes", "view_isometric"]

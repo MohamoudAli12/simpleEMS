@@ -44,6 +44,7 @@ import gmsh
 import numpy as np
 from numpy.typing import NDArray
 
+from . import fem_geometry
 from .fem_materials import AIR, MU0, PEC, port_region
 
 if TYPE_CHECKING:
@@ -211,11 +212,8 @@ def extract_cross_section(
     ax_u, ax_v = _local_axes(prop_axis)
     tag = port_region(port.number)
 
-    if gmsh.isInitialized():
-        gmsh.finalize()
-    gmsh.initialize()
+    fem_geometry.start_gmsh()
     try:
-        gmsh.option.setNumber("General.Terminal", 0)
         gmsh.open(str(msh_path))
 
         coord_of: dict[int, NDArray] = {}
