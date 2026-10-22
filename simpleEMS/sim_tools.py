@@ -42,7 +42,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pyvista as pv
 from matplotlib.ticker import EngFormatter, MaxNLocator
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtCore import QCoreApplication, QTimer
+from PyQt6.QtWidgets import QApplication
 from pysmithchart import S_PARAMETER
 from pyvistaqt import BackgroundPlotter
 
@@ -70,6 +71,7 @@ from .fem_field_dump import FieldDumpRequest
 from .plot_theme import HIGHLIGHT, style_background_plotter, themed_cursor
 from .report import generate_report
 from .sim_params import SimParams
+from .visualise_field_dump import view_field_dump
 
 # ----------------------------
 # Public APIS
@@ -92,6 +94,12 @@ __all__ = [
 
 freq_formatter = EngFormatter(unit="Hz", places=3)
 time_formatter = EngFormatter(unit="s", places=3)
+
+# 3D windows carry this Qt property until show_plots() opens them, so they open
+# together with the matplotlib figures instead of sitting frozen while the
+# script keeps running. Its value is the time the window was made, so they open
+# in that order and the last plot ends up on top.
+SHOW_WITH_PLOTS = "simpleems_show_with_plots"
 
 
 class DumpType(Enum):
@@ -2036,7 +2044,12 @@ class SimTools:
         mesh["Directivity (dBi)"] = directivity_dbi.ravel(order="F")
         mesh.save(plots_3d_path / "3D_directivity.vtk")
 
-        plotter = BackgroundPlotter(title="Antenna 3D Pattern - Directivity (dBi)")
+        plotter = BackgroundPlotter(
+            title="Antenna 3D Pattern - Directivity (dBi)",
+            show=False,
+            auto_update=False,
+        )
+        plotter.app_window.setProperty(SHOW_WITH_PLOTS, time.monotonic())
         style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
@@ -2112,7 +2125,12 @@ class SimTools:
         mesh = pv.StructuredGrid(X, Y, Z)
         mesh["Realized Gain (dBi)"] = gain_dbi.ravel(order="F")
         mesh.save(plots_3d_path / "3D_Realized_Gain.vtk")
-        plotter = BackgroundPlotter(title="Antenna 3D Pattern - Realized Gain (dBi)")
+        plotter = BackgroundPlotter(
+            title="Antenna 3D Pattern - Realized Gain (dBi)",
+            show=False,
+            auto_update=False,
+        )
+        plotter.app_window.setProperty(SHOW_WITH_PLOTS, time.monotonic())
         style_background_plotter(plotter)
         plotter.add_mesh(
             mesh,
@@ -2291,6 +2309,39 @@ class SimTools:
         dump.AddBox(start=start, stop=stop)
         if dump_type.value[0] >= 10:
             dump.AddFrequency(dump_freq)
+
+    @staticmethod
+    def visualise_field_dump(output_path: Path | None = None) -> None:
+        """
+        Open an interactive 3-D viewer for a field dump.
+
+        Animates a dump added with :meth:`add_field_dump` over the structure,
+        with a control panel for arrow, surface, height-map, cut-plane,
+        iso-surface and volume plots. Shows E-field, H-field, current and
+        current-density dumps, in the time or frequency domain, from either
+        backend. When the simulation saved several dumps, a "Field dump" picker
+        in the window switches between them, starting from the first dump and
+        its lowest frequency. The window opens with the other
+        plots when you call :meth:`show_plots`; press ``q`` in it to close it.
+        Wraps :func:`simpleEMS.visualise_field_dump.view_field_dump`.
+
+        Parameters
+        ----------
+        output_path : Path, optional
+            Simulation directory holding the ``field_dump`` subdirectory and
+            ``structure.xml``. Defaults to ``cwd / "Sim_Path"``.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        FileNotFoundError
+            If the directory holds no field dump the viewer can show.
+        """
+        viewer = view_field_dump(output_path=output_path, show=False)
+        viewer.setProperty(SHOW_WITH_PLOTS, time.monotonic())
 
     @staticmethod
     def export_touchstone(
@@ -2873,8 +2924,10 @@ class SimTools:
         Display all generated plots. Blocks until the plot window(s) are
         closed.
 
-        If no matplotlib figures are open and a Qt application instance is
-        already running (e.g. a PyVista/FEM mesh viewer opened by
+        The 3D windows from :meth:`plot_3d_directivity`, :meth:`plot_3d_gain`
+        and :meth:`visualise_field_dump` open here, on top of the matplotlib
+        figures. If no matplotlib figures are open and a Qt application
+        instance is already running (e.g. a PyVista/FEM mesh viewer opened by
         ``write_and_show_structure``), blocks on that Qt event loop instead
         and exits the process once it closes. Otherwise calls
         ``matplotlib.pyplot.show()`` to display any open matplotlib figures.
@@ -2884,10 +2937,32 @@ class SimTools:
         None
             Does not return a value.
         """
+
+        def show_3d_windows() -> None:
+            waiting = [
+                window
+                for window in QApplication.topLevelWidgets()
+                if window.property(SHOW_WITH_PLOTS)
+            ]
+            for window in sorted(
+                waiting, key=lambda window: window.property(SHOW_WITH_PLOTS)
+            ):
+                window.setProperty(SHOW_WITH_PLOTS, None)
+                window.show()
+                window.raise_()
+                # Raising a window leaves the keyboard on the last figure, behind
+                # it, so q would close a window you cannot see.
+                window.activateWindow()
+
         if not plt.get_fignums():
             view_3d = QCoreApplication.instance()
             if view_3d is not None:
+                show_3d_windows()
                 sys.exit(view_3d.exec())
+        # plt.show() shows the figures and then runs the event loop, so the
+        # timer shows the 3D windows once the figures are up.
+        if QCoreApplication.instance() is not None:
+            QTimer.singleShot(0, show_3d_windows)
         plt.show()
 
     @staticmethod

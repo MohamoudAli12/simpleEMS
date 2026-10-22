@@ -148,6 +148,30 @@ def nf2ff_data(nf2ff, sim_data, tmp_path):
     return SimTools.compute_nf2ff_data(nf2ff, 2.45e9, sim_data, tmp_path)
 
 
+class FakeWindow:
+    """A Qt window stand-in that records being shown and keeps its properties."""
+
+    def __init__(self, name="window", events=None):
+        self.name = name
+        self.events = [] if events is None else events
+        self.properties = {}
+
+    def setProperty(self, key, value):  # noqa: N802 - Qt name
+        self.properties[key] = value
+
+    def property(self, key):
+        return self.properties.get(key)
+
+    def show(self):
+        self.events.append(f"show {self.name}")
+
+    def raise_(self):
+        pass
+
+    def activateWindow(self):  # noqa: N802 - Qt name
+        self.events.append(f"activate {self.name}")
+
+
 @pytest.fixture
 def no_windows(monkeypatch):
     """Replace the Qt-backed 3D plotter with a recorder.
@@ -160,6 +184,8 @@ def no_windows(monkeypatch):
     class Recorder:
         def __init__(self, title=None, **kwargs):
             self.title = title
+            self.kwargs = kwargs
+            self.app_window = FakeWindow()
             self.meshes = []
             self.texts = []
             opened.append(self)
@@ -171,6 +197,8 @@ def no_windows(monkeypatch):
             self.texts.append(text)
 
     monkeypatch.setattr(sim_tools, "BackgroundPlotter", Recorder)
+    # The window styling has its own tests in test_plot_theme.py.
+    monkeypatch.setattr(sim_tools, "style_background_plotter", lambda plotter: None)
     return opened
 
 
@@ -1513,6 +1541,53 @@ class TestShowPlots:
 
         with pytest.raises(SystemExit):
             SimTools.show_plots()
+
+    @pytest.mark.parametrize(
+        "plot_3d",
+        [SimTools.plot_3d_directivity, SimTools.plot_3d_gain],
+        ids=["directivity", "gain"],
+    )
+    def test_3d_plots_wait_for_show_plots(self, plot_3d, nf2ff_data, no_windows):
+        plot_3d(nf2ff_data)
+
+        assert no_windows[0].kwargs["show"] is False
+        assert no_windows[0].app_window.property(sim_tools.SHOW_WITH_PLOTS)
+
+    def test_shows_the_waiting_3d_windows_before_the_qt_loop(self, monkeypatch):
+        events = []
+        made_second = FakeWindow("made second", events)
+        made_second.setProperty(sim_tools.SHOW_WITH_PLOTS, 2.0)
+        made_first = FakeWindow("made first", events)
+        made_first.setProperty(sim_tools.SHOW_WITH_PLOTS, 1.0)
+        shown_earlier = FakeWindow("shown earlier", events)
+
+        class FakeApp:
+            def exec(self):
+                events.append("exec")
+                return 0
+
+        monkeypatch.setattr(
+            sim_tools.QApplication,
+            "topLevelWidgets",
+            staticmethod(lambda: [made_second, shown_earlier, made_first]),
+        )
+        monkeypatch.setattr(sim_tools.plt, "get_fignums", lambda: [])
+        monkeypatch.setattr(
+            sim_tools.QCoreApplication, "instance", staticmethod(lambda: FakeApp())
+        )
+
+        with pytest.raises(SystemExit):
+            SimTools.show_plots()
+
+        # The last window made opens last, on top, and takes the keyboard.
+        assert events == [
+            "show made first",
+            "activate made first",
+            "show made second",
+            "activate made second",
+            "exec",
+        ]
+        assert not made_second.property(sim_tools.SHOW_WITH_PLOTS)
 
     def test_without_figures_or_a_qt_app_it_just_returns(self, monkeypatch):
         shown = []
