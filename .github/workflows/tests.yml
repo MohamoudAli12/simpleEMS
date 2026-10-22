@@ -105,8 +105,13 @@ jobs:
         id: cache-openems
         uses: actions/cache@v4
         with:
-          path: ~/opt/openEMS
-          key: openems-${{ runner.os }}-csxcad-wrapper-fix-${{ hashFiles('pyproject.toml') }}
+          # Cache the sources with the install: the Python bindings must build
+          # from the same checkout as the C++ libraries, or upstream API changes
+          # break the build.
+          path: |
+            ~/opt/openEMS
+            ~/.cache/simpleems/openEMS-Project
+          key: openems-${{ runner.os }}-with-sources-${{ hashFiles('pyproject.toml') }}
 
       - name: Cache the getdp install
         id: cache-getdp
