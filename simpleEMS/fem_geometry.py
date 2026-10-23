@@ -1545,11 +1545,16 @@ def _mesh_and_write(
     lc_diel = lambda_min / problem.elems_per_wavelength
     lc_air = (lambda_air or lambda_min) / problem.elems_per_wavelength
     # Refine near the signal conductors + ports only (exclude the ground plane);
-    # extend the fine zone through the substrate so trace-to-ground is resolved.
+    # hold the fine size one dielectric thickness out from them, so the whole
+    # trace-to-ground gap is meshed at it before the size starts to grow --
+    # that gap holds the field that sets the line's impedance.
     refine_faces = ((faces.pec | faces.all_imped) - faces.ground) | faces.all_port
-    dist_max = max(15.0 * lc_fine, 4.0 * diel_min_thick)
+    dist_min = diel_min_thick
+    dist_max = dist_min + max(15.0 * lc_fine, 4.0 * diel_min_thick)
     diel_tags = sorted({t for tags in (diel_vols or {}).values() for t in tags})
-    _apply_size_field(refine_faces, lc_fine, lc_air, dist_max, diel_tags, lc_diel)
+    _apply_size_field(
+        refine_faces, lc_fine, lc_air, dist_max, diel_tags, lc_diel, dist_min
+    )
     gmsh.option.setNumber("Mesh.MeshSizeMax", max(lc_air, lc_diel))
     gmsh.option.setNumber("Mesh.MeshSizeMin", lc_fine / 5.0)
     gmsh.option.setNumber("Mesh.Optimize", 1)
@@ -1714,6 +1719,7 @@ def _apply_size_field(
     dist_max: float,
     diel_vols: list | None = None,
     lc_diel: float = 0.0,
+    dist_min: float = 0.0,
 ) -> None:
     """Set the element size everywhere in the mesh.
 
@@ -1726,13 +1732,16 @@ def _apply_size_field(
     lc_coarse : float
         Element size away from them, in metres.
     dist_max : float
-        Distance, in metres, over which ``lc_fine`` grows to ``lc_coarse``.
+        Distance, in metres, at which the size reaches ``lc_coarse``.
     diel_vols : list, optional
         Dielectric volume tags to hold at ``lc_diel``. Default ``None``,
         which sizes them like everything else.
     lc_diel : float
         Element size inside those volumes, in metres. Ignored unless smaller
         than ``lc_coarse``. Default ``0.0``.
+    dist_min : float
+        Distance, in metres, out to which the size holds at ``lc_fine``
+        before it starts to grow. Default ``0.0``, meaning ``lc_fine``.
     """
     # The two requirements are combined so the smaller wins at any point: a
     # distance threshold off the conductors, where the fields vary fastest,
@@ -1748,7 +1757,7 @@ def _apply_size_field(
         gmsh.model.mesh.field.setNumber(thr, "InField", dist)
         gmsh.model.mesh.field.setNumber(thr, "SizeMin", lc_fine)
         gmsh.model.mesh.field.setNumber(thr, "SizeMax", lc_coarse)
-        gmsh.model.mesh.field.setNumber(thr, "DistMin", lc_fine)
+        gmsh.model.mesh.field.setNumber(thr, "DistMin", dist_min or lc_fine)
         gmsh.model.mesh.field.setNumber(thr, "DistMax", dist_max)
         fields.append(thr)
     if diel_vols and 0.0 < lc_diel < lc_coarse:
