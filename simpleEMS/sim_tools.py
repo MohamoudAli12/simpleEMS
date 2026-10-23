@@ -1297,26 +1297,39 @@ class SimTools:
         # 0.1° steps from -180° to 180°; 180° repeats -180° so each cut closes.
         sweep = np.linspace(-180.0, 180.0, 3601)
 
-        # (theta, phi, outfile) for the full sphere and each principal cut
+        from .fem_solver import describe_solve, format_duration, last_solve
+
+        # (label, theta, phi, outfile) for the full sphere and each principal cut
         requests = [
-            (np.arange(0, 181, 2), np.arange(0, 361, 2), "nf2ff_3d.h5"),
-            (sweep, 0, "nf2ff_xz.h5"),
-            (sweep, 90, "nf2ff_yz.h5"),
-            (90, sweep, "nf2ff_xy.h5"),
+            ("full sphere", np.arange(0, 181, 2), np.arange(0, 361, 2), "nf2ff_3d.h5"),
+            ("xz cut, φ = 0°", sweep, 0, "nf2ff_xz.h5"),
+            ("yz cut, φ = 90°", sweep, 90, "nf2ff_yz.h5"),
+            ("xy cut, θ = 90°", 90, sweep, "nf2ff_xy.h5"),
         ]
-        console.print("Calculating Far Field.........", style="info")
-        sphere, xz_cut, yz_cut, xy_cut = [
-            nf2ff.CalcNF2FF(
-                output_path,
-                freq,
-                theta,
-                phi,
-                read_cached=read_cached,
-                outfile=outfile,
-                verbose=0,
+        console.rule(
+            f"[info]Far field · {freq / 1e9:.4f} GHz · full sphere and 3 cuts[/info]"
+        )
+        far_field_started = time.perf_counter()
+        results = []
+        for label, theta, phi, outfile in requests:
+            request_started = time.perf_counter()
+            results.append(
+                nf2ff.CalcNF2FF(
+                    output_path,
+                    freq,
+                    theta,
+                    phi,
+                    read_cached=read_cached,
+                    outfile=outfile,
+                    verbose=0,
+                )
             )
-            for theta, phi, outfile in requests
-        ]
+            direction_count = np.size(theta) * np.size(phi)
+            console.print(
+                f"[info]  {label:<17} {direction_count:>6} directions  "
+                f"{format_duration(time.perf_counter() - request_started):>7}[/info]"
+            )
+        sphere, xz_cut, yz_cut, xy_cut = results
 
         # Prad is at freq, so the accepted power has to be taken at freq too.
         # Only the full sphere integrates Prad over every direction.
@@ -1329,6 +1342,17 @@ class SimTools:
 
         # The share of the incident power the port mismatch lets through
         s11_magnitude = np.interp(freq, sim_data.freqs, np.abs(sim_data.s11))
+        directivity = getattr(sphere, "Dmax", None)
+        directivity_text = (
+            ""
+            if directivity is None
+            else f"directivity {10.0 * np.log10(directivity[0]):.2f} dBi · "
+        )
+        console.rule(
+            f"[info]{directivity_text}radiation efficiency "
+            f"{100.0 * radiated_power / accepted_power:.1f} % · "
+            f"{format_duration(time.perf_counter() - far_field_started)}[/info]"
+        )
 
         if efficiency_freqs is None:
             # Walk out from the S11 minimum while |S11| stays below -10 dB
@@ -1354,8 +1378,6 @@ class SimTools:
 
         from openEMS.nf2ff import nf2ff as openems_nf2ff
         from scipy.interpolate import AAA
-
-        from .fem_solver import describe_solve, format_duration, last_solve
 
         band_text = f"{band_low / 1e9:.3f}-{band_high / 1e9:.3f} GHz"
         started = time.perf_counter()
@@ -2300,13 +2322,15 @@ class SimTools:
         # Get all open figure numbers
         figures = plt.get_fignums()
 
+        console.rule(f"[info]Plots · {len(figures)} figures as {file_format}[/info]")
         for i, fig_num in enumerate(figures):
             fig = plt.figure(fig_num)
             fig = plt.gcf()  # Get the current figure
             fig.set_size_inches(12, 6)
             file_path = plot_path / f"plot_{i + 1}.{file_format}"
             fig.savefig(file_path, format=file_format, dpi=300)
-            console.print(f"Plot {i + 1} saved as {file_path}", style="info")
+            console.print(f"[info]  {file_path.name}[/info]")
+        console.rule(f"[info]{len(figures)} plots saved to {plot_path}[/info]")
 
     @staticmethod
     def add_field_dump(
@@ -2526,10 +2550,6 @@ class SimTools:
         S22 are written as zero (the reverse-direction parameters are not
         simulated). Pass ``s_matrix`` to export all of them.
         """
-        console.print("-------------------------------------------", style="info")
-        console.print("Exporting S-Parameters to Touchstone file", style="info")
-        console.print("-------------------------------------------", style="info")
-
         if s_matrix is None:
             if s11 is None:
                 raise ValueError("Pass either s11 (and optionally s21) or s_matrix.")
@@ -2544,12 +2564,19 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
-        return write_touchstone(
+        console.rule("[info]Touchstone export[/info]")
+        touchstone_path = write_touchstone(
             output_path / "touchstone" / filename,
             freqs,
             s_matrix,
             ref_impedance=charac_imp,
         )
+        console.print(
+            f"[info]  {touchstone_path.name:<28} {s_matrix.shape[1]} ports × "
+            f"{len(freqs)} frequencies[/info]"
+        )
+        console.rule(f"[info]written to {touchstone_path.parent}[/info]")
+        return touchstone_path
 
     @staticmethod
     def export_csv(
@@ -2621,10 +2648,6 @@ class SimTools:
             together, or if the frequency count does not match the
             S-parameter data.
         """
-        console.print("-------------------------------------------", style="info")
-        console.print("Exporting results to CSV files", style="info")
-        console.print("-------------------------------------------", style="info")
-
         has_s_params = s11 is not None or s21 is not None or s_matrix is not None
         if not has_s_params and freqs is None and nf2ff_data is None:
             raise ValueError("Pass S-parameters with freqs, nf2ff_data, or both.")
@@ -2731,6 +2754,7 @@ class SimTools:
         csv_dir = output_path / "csv"
         csv_dir.mkdir(parents=True, exist_ok=True)
 
+        console.rule(f"[info]CSV export · {len(tables)} files[/info]")
         written = []
         for name, header, columns in tables:
             csv_path = csv_dir / f"{prefix}{name}.csv"
@@ -2742,8 +2766,12 @@ class SimTools:
                 comments="",
                 fmt="%.10g",
             )
-            console.print(f"CSV file saved to {csv_path}", style="info")
+            console.print(
+                f"[info]  {csv_path.name:<28} {len(header)} columns × "
+                f"{len(columns[0])} rows[/info]"
+            )
             written.append(csv_path)
+        console.rule(f"[info]{len(written)} files written to {csv_dir}[/info]")
         return written
 
     @staticmethod
@@ -3353,9 +3381,7 @@ def optimize_s_params(
         If ``algorithm`` is not a supported method, or if ``bounds`` is
         given with ``"CG"`` or ``"BFGS"``.
     """
-    console.print("-------------------------------------", style="info")
-    console.print("Running Optimization", style="info")
-    console.print("-------------------------------------", style="info")
+    console.rule(f"[info]Optimization · {algorithm} · {len(x0)} parameters[/info]")
     x0_values = list(x0.values())
     x0_keys = list(x0.keys())
 
@@ -3421,8 +3447,10 @@ def optimize_s_params(
             callback=callback,
             options=options,
         )
+        console.rule(f"[info]Optimum after {res.nfev} simulations[/info]")
         for i, key in enumerate(x0_keys):
-            print(f"optimal {key} = {res.x[i]}")
+            console.print(f"[info]  optimal {key} = {res.x[i]}[/info]")
+        console.rule(style="info")
 
     except StopIteration:
         pass
@@ -3482,25 +3510,33 @@ def param_sweep(
         If ``sweep_vals`` has no combinations to run, or if a run returns
         different frequency points from the first run.
     """
-    console.print("-------------------------------------", style="info")
-    console.print("Running Parameter Sweep", style="info")
-    console.print("-------------------------------------", style="info")
-
     sweep_values = {key: np.linspace(*val).tolist() for key, val in sweep_vals.items()}
     cartesian_sweep = list(product(*sweep_values.values()))
     if not cartesian_sweep:
         raise ValueError("The sweep has no parameter combinations to run.")
 
+    from .fem_solver import format_duration
+
+    console.rule(
+        f"[info]Parameter sweep · {', '.join(sweep_values)} · "
+        f"{len(cartesian_sweep)} runs[/info]"
+    )
+    started = time.perf_counter()
+
     sim_data_list = []
     labels = []
     values_per_run = []
 
-    for values in cartesian_sweep:
+    for run_number, values in enumerate(cartesian_sweep, 1):
         named_values = dict(zip(sweep_values.keys(), values, strict=True))
         key_value = "_".join(f"{k}_{v}" for k, v in named_values.items())
         sweep_path = output_path / "sweep" / key_value
         sweep_path.mkdir(parents=True, exist_ok=True)
 
+        run_label = ", ".join(f"{k}={v:g}" for k, v in named_values.items())
+        console.print(
+            f"[info]{run_number:>3}/{len(cartesian_sweep)}  {run_label}[/info]"
+        )
         sim_data = simulate_fn(sweep_path, sweep, values)
         if sim_data_list and not np.array_equal(sim_data.freqs, sim_data_list[0].freqs):
             raise ValueError(
@@ -3511,6 +3547,11 @@ def param_sweep(
         labels.append(", ".join(f"{k}={v}" for k, v in named_values.items()))
         values_per_run.append(named_values)
 
+    console.rule(
+        f"[info]{len(cartesian_sweep)} runs in "
+        f"{format_duration(time.perf_counter() - started)} · "
+        f"saved under {output_path / 'sweep'}[/info]"
+    )
     first_run = sim_data_list[0]
     stacked_fields = {
         field: None

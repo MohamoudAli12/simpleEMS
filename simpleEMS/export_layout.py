@@ -754,9 +754,7 @@ def export_gerber(
     list of Path
         The files written.
     """
-    console.print("-------------------------------------------", style="info")
-    console.print("Exporting Geometry to Gerber", style="info")
-    console.print("-------------------------------------------", style="info")
+    console.rule(f"[info]Gerber export · {prefix}-*[/info]")
 
     layout = infer_layers(CSX, options.get("ignore", []))
     written: list[Path] = []
@@ -766,10 +764,8 @@ def export_gerber(
         with open(path, "w") as file:
             write_copper_layer(file, layer)
         names = ", ".join(dict.fromkeys(name for name, _ in layer.regions))
-        console.print(
-            f"[info]{layer.name}: z = {layer.z_min:g} .. {layer.z_max:g} "
-            f"({names})[/info]"
-        )
+        z_range = f"z {layer.z_min:g} … {layer.z_max:g}"
+        console.print(f"[info]  {layer.name:<10} {z_range:<20} {names}[/info]")
         written.append(path)
 
     if layout.outline is not None:
@@ -788,9 +784,10 @@ def export_gerber(
         path = output_path / f"{prefix}-{suffix}.drl"
         with open(path, "w") as file:
             write_drill(file, drills, span)
-        console.print(f"[info]{suffix}: {len(drills)} hole(s)[/info]")
+        console.print(f"[info]  {suffix:<10} {len(drills)} holes[/info]")
         written.append(path)
 
+    console.rule(f"[info]{len(written)} files written to {output_path}[/info]")
     return written
 
 
@@ -831,9 +828,7 @@ def export_dxf(
     Path
         The file written.
     """
-    console.print("-------------------------------------------", style="info")
-    console.print("Exporting Geometry to DXF", style="info")
-    console.print("-------------------------------------------", style="info")
+    console.rule(f"[info]DXF export · {filename}.dxf[/info]")
 
     layout = infer_layers(CSX, options.get("ignore", []))
 
@@ -911,7 +906,10 @@ def export_dxf(
     path.write_text(
         "".join(f"{code}\n{value}\n" for code, value in pairs), newline="\n"
     )
-    console.print(f"[info]DXF layers: {', '.join(layer_names)}[/info]")
+    for layer_name in layer_names:
+        shape_count = sum(1 for name, _, _ in entities if name == layer_name)
+        console.print(f"[info]  {layer_name:<14} {shape_count} shapes[/info]")
+    console.rule(f"[info]{len(layer_names)} layers written to {path}[/info]")
     return path
 
 
@@ -971,9 +969,7 @@ def export_kicad_footprint(
     other than the feed is anchored on a corner of its first region with a
     10 um square, which KiCad requires and no fab can resolve.
     """
-    console.print("-------------------------------------------", style="info")
-    console.print("Exporting Geometry to KiCad footprint", style="info")
-    console.print("-------------------------------------------", style="info")
+    console.rule(f"[info]KiCad footprint export · {name}.kicad_mod[/info]")
 
     layout = infer_layers(CSX, options.get("ignore", []))
 
@@ -1053,6 +1049,11 @@ def export_kicad_footprint(
                 )
                 lines.append(f"      (gr_poly (pts {points}) (width 0) (fill yes))")
             lines += ["    )", "  )"]
+            pad_role = "ground" if pad_number == "2" else "feed"
+            console.print(
+                f"[info]  pad {pad_number} {pad_role:<7} {kicad_layer:<8} "
+                f"{len(outlines)} regions[/info]"
+            )
 
     for drill in layout.drills:
         x, y = to_kicad((drill.x, drill.y))
@@ -1071,6 +1072,11 @@ def export_kicad_footprint(
             f"{', '.join(dict.fromkeys(dropped_clearances))}[/warning]"
         )
 
+    if layout.drills:
+        console.print(
+            f"[info]  pad 2 ground  *.Cu     {len(layout.drills)} holes[/info]"
+        )
     path = output_path / f"{name}.kicad_mod"
     path.write_text("\n".join(lines) + "\n", newline="\n")
+    console.rule(f"[info]footprint written to {path}[/info]")
     return path

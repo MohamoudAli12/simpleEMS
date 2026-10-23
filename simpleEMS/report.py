@@ -654,5 +654,5 @@ def generate_report(
                 )
                 pdf.savefig(figure)
 
-    console.print(f"Report saved as {report_path}", style="info")
+    console.rule(f"[info]{len(pages)}-page report written to {report_path}[/info]")
     return report_path

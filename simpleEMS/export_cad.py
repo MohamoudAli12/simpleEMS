@@ -140,6 +140,11 @@ def _apply_transform(solid: cq.Workplane, prim: object) -> cq.Workplane:
     return cq.Workplane(obj=solid.val().transformGeometry(matrix))
 
 
+def _format_point(point: object) -> str:
+    """Format a CSXCAD ``[x, y, z]`` as ``(x, y, z)`` with short numbers."""
+    return "(" + ", ".join(f"{float(value):g}" for value in point) + ")"
+
+
 def _process_property(
     prop: object,
 ) -> list[tuple[cq.Workplane, object]]:
@@ -164,7 +169,10 @@ def _process_property(
             start = prim.GetStart()
             stop = prim.GetStop()
             solids.append((_apply_transform(_make_box(start, stop), prim), prim))
-            console.print(f"[info]  box: {name} ({start} → {stop})[/info]")
+            console.print(
+                f"[info]  {name:<16} box       "
+                f"{_format_point(start)} → {_format_point(stop)}[/info]"
+            )
 
         elif cls == "CSPrimLinPoly":
             x_coords, y_coords = prim.GetCoords()
@@ -173,10 +181,9 @@ def _process_property(
             length = prim.GetLength()
             solid = _make_linpoly(x_coords, y_coords, elevation, normdir, length)
             solids.append((_apply_transform(solid, prim), prim))
-            nv = len(x_coords)
             console.print(
-                f"[info]  polygon: {name} ({nv} verts, elev={elevation}, "
-                f"norm={normdir})[/info]"
+                f"[info]  {name:<16} polygon   {len(x_coords)} vertices at "
+                f"{'xyz'[normdir]} = {elevation:g}[/info]"
             )
 
         # CSPrimCylindricalShell subclasses CSPrimCylinder, so it has to be
@@ -195,7 +202,9 @@ def _process_property(
                 solid = _make_cylinder(start, stop, radius)
             solids.append((_apply_transform(solid, prim), prim))
             console.print(
-                f"[info]  cylinder: {name} ({start} → {stop}, r={radius})[/info]"
+                f"[info]  {name:<16} cylinder  "
+                f"{_format_point(start)} → {_format_point(stop)}, "
+                f"r = {radius:g}[/info]"
             )
 
         else:
@@ -204,7 +213,8 @@ def _process_property(
             # cylinder support went unnoticed, since the property simply
             # exported empty.
             console.print(
-                f"[warning]  skipped: {name} ({cls} is not exported to CAD)[/warning]"
+                f"[warning]  {name:<16} skipped   "
+                f"{cls} is not exported to CAD[/warning]"
             )
 
     return solids
@@ -343,7 +353,6 @@ def _build_assembly(CSX: ContinuousStructure) -> tuple[cq.Assembly, int]:
     for prop in CSX.GetAllProperties():
         if prop.__class__.__name__ not in physical_types:
             continue
-        console.print(f"[info]processing {prop.GetName()}[/info]")
         built.append((prop, _process_property(prop)))
 
     cutters = _dielectric_cutters(built)
@@ -371,9 +380,7 @@ def _build_assembly(CSX: ContinuousStructure) -> tuple[cq.Assembly, int]:
 
 def _write_assembly(CSX: ContinuousStructure, filename: Path, export_type: str) -> None:
     """Build ``CSX``'s assembly and save it as ``export_type`` to ``filename``."""
-    console.print("-------------------------------------------", style="info")
-    console.print(f"Exporting Geometry to {export_type}", style="info")
-    console.print("-------------------------------------------", style="info")
+    console.rule(f"[info]{export_type} export · {filename.name}[/info]")
 
     assy, part_count = _build_assembly(CSX)
 
@@ -381,9 +388,8 @@ def _write_assembly(CSX: ContinuousStructure, filename: Path, export_type: str) 
         console.print("[warning]No physical geometry found to export[/warning]")
         return
 
-    console.print(f"[info]Writing {part_count} part(s) to {export_type}...[/info]")
     assy.save(str(filename), exportType=export_type)
-    console.print(f"[success]{export_type} file written to {filename}[/success]")
+    console.rule(f"[info]{part_count} parts written to {filename}[/info]")
 
 
 def export_step(
