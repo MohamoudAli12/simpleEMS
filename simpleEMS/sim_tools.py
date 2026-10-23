@@ -51,7 +51,6 @@ from pyvistaqt import BackgroundPlotter
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize
-from scipy.optimize import OptimizeResult
 
 # ----------------------------
 from CSXCAD import AppCSXCAD_BIN, ContinuousStructure
@@ -3290,13 +3289,15 @@ def optimize_s_params(
     x0: dict[str, float],
     output_path: Path,
     bounds: tuple | None = None,
+    algorithm: str = "Nelder-Mead",
 ) -> None:
     """
-    Optimize simulation parameters using SciPy's Nelder-Mead algorithm.
+    Optimize simulation parameters using a SciPy local optimizer.
 
-    Runs ``scipy.optimize.minimize(..., method="Nelder-Mead")`` over
+    Runs ``scipy.optimize.minimize(..., method=algorithm)`` over
     ``simulate_fn``, starting from ``x0``. Stops on SciPy's own
-    convergence criteria (``xatol=1e-3``, ``fatol=1e-3``), or early via a
+    convergence criteria (for Nelder-Mead, ``xatol=1e-3`` and
+    ``fatol=1e-3``; SciPy defaults for the other methods), or early via a
     callback that stops the optimization once the parameter vector moves
     by less than ``1e-4`` (Euclidean norm) for 5 consecutive iterations.
     Prints the optimal parameter values to stdout when finished.
@@ -3323,11 +3324,34 @@ def optimize_s_params(
         ``x0``'s values, passed through to ``scipy.optimize.minimize``.
         ``None`` in a pair means no bound on that side. Default is
         ``None`` (unbounded).
+    algorithm : str, optional
+        ``scipy.optimize.minimize`` method. Default is ``"Nelder-Mead"``.
+        Supported values:
+
+        - Derivative-free, support ``bounds``: ``"Nelder-Mead"``,
+          ``"Powell"``, ``"COBYLA"``, ``"COBYQA"``.
+        - Finite-difference gradient, support ``bounds``: ``"L-BFGS-B"``,
+          ``"TNC"``, ``"SLSQP"``, ``"trust-constr"``.
+        - Finite-difference gradient, no ``bounds``: ``"CG"``,
+          ``"BFGS"``.
+
+        Methods that need an analytic Jacobian (``"Newton-CG"``,
+        ``"dogleg"``, ``"trust-ncg"``, ``"trust-exact"``,
+        ``"trust-krylov"``) are not supported, since a simulation cannot
+        provide one. Gradient methods cost ``len(x0) + 1`` simulations per
+        gradient and react badly to the small numerical noise in simulated
+        S-parameters, so prefer the derivative-free methods.
 
     Returns
     -------
     None
         Does not return a value; prints the optimal parameters found.
+
+    Raises
+    ------
+    ValueError
+        If ``algorithm`` is not a supported method, or if ``bounds`` is
+        given with ``"CG"`` or ``"BFGS"``.
     """
     console.print("-------------------------------------", style="info")
     console.print("Running Optimization", style="info")
@@ -3340,9 +3364,10 @@ def optimize_s_params(
         prev_x = None
         stall = 0
 
-        def callback(xk: OptimizeResult) -> None:
+        def callback(xk: NDArray, *_: object) -> None:
             """Raise StopIteration once the parameter vector stalls for
             ``patience`` consecutive calls."""
+            # trust-constr also passes an optimizer state, which is ignored.
             nonlocal prev_x, stall
             if prev_x is not None:
                 if np.linalg.norm(xk - prev_x) < tol:
@@ -3362,14 +3387,39 @@ def optimize_s_params(
         """Call the simulation with the current parameter values."""
         return simulate_fn(output_path=output_path, optimize=True, optimize_val=x)
 
+    supported_algorithms = (
+        "Nelder-Mead",
+        "Powell",
+        "COBYLA",
+        "COBYQA",
+        "L-BFGS-B",
+        "TNC",
+        "SLSQP",
+        "trust-constr",
+        "CG",
+        "BFGS",
+    )
+    if algorithm not in supported_algorithms:
+        raise ValueError(
+            f"algorithm must be one of {supported_algorithms}, got {algorithm!r}"
+        )
+    if bounds is not None and algorithm in ("CG", "BFGS"):
+        raise ValueError(f"{algorithm} does not support bounds")
+
+    # xatol and fatol are Nelder-Mead options; other methods reject or ignore them.
+    # SciPy deprecates disp for L-BFGS-B.
+    options = {} if algorithm == "L-BFGS-B" else {"disp": True}
+    if algorithm == "Nelder-Mead":
+        options.update({"xatol": 1e-3, "fatol": 1e-3})
+
     try:
         res = minimize(
             optimize_fun,
             x0_values,
-            method="Nelder-Mead",
+            method=algorithm,
             bounds=bounds,
             callback=callback,
-            options={"disp": True, "xatol": 1e-3, "fatol": 1e-3},
+            options=options,
         )
         for i, key in enumerate(x0_keys):
             print(f"optimal {key} = {res.x[i]}")

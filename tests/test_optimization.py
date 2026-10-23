@@ -477,3 +477,81 @@ class TestOptimizeSParams:
             return float(optimize_val[0] ** 2)
 
         assert optimize_s_params(simulate, {"width": 1.0}, tmp_path) is None
+
+    @pytest.mark.filterwarnings("error")
+    @pytest.mark.parametrize(
+        ("algorithm", "bounds"),
+        [
+            ("Nelder-Mead", [(0.0, 5.0)]),
+            ("Powell", [(0.0, 5.0)]),
+            ("COBYLA", [(0.0, 5.0)]),
+            ("COBYQA", [(0.0, 5.0)]),
+            ("L-BFGS-B", [(0.0, 5.0)]),
+            ("TNC", [(0.0, 5.0)]),
+            ("SLSQP", [(0.0, 5.0)]),
+            ("trust-constr", [(0.0, 5.0)]),
+            ("CG", None),
+            ("BFGS", None),
+        ],
+        ids=[
+            "nelder-mead",
+            "powell",
+            "cobyla",
+            "cobyqa",
+            "l-bfgs-b",
+            "tnc",
+            "slsqp",
+            "trust-constr",
+            "cg",
+            "bfgs",
+        ],
+    )
+    def test_every_supported_algorithm_finds_the_minimum(
+        self, tmp_path, capsys, algorithm, bounds
+    ):
+        """Each supported method must reach the bowl's minimum at 3.0 without
+        a SciPy warning (unknown options, ignored bounds, deprecated options)."""
+
+        def simulate(output_path, optimize, optimize_val):
+            return float((optimize_val[0] - 3.0) ** 2)
+
+        optimize_s_params(
+            simulate, {"width": 0.5}, tmp_path, bounds=bounds, algorithm=algorithm
+        )
+
+        out = capsys.readouterr().out
+        value = float(out.split("optimal width =")[1].split()[0])
+        assert value == pytest.approx(3.0, abs=1e-2)
+
+    @pytest.mark.parametrize(
+        "algorithm",
+        ["Newton-CG", "dogleg", "trust-ncg", "trust-exact", "trust-krylov", "foo"],
+        ids=["newton-cg", "dogleg", "trust-ncg", "trust-exact", "trust-krylov", "foo"],
+    )
+    def test_rejects_an_unsupported_algorithm(self, tmp_path, algorithm):
+        """Methods that need an analytic Jacobian, and unknown names, fail
+        before any simulation runs."""
+        calls = []
+
+        def simulate(output_path, optimize, optimize_val):
+            calls.append(optimize_val)
+            return 0.0
+
+        with pytest.raises(ValueError, match="algorithm must be one of"):
+            optimize_s_params(simulate, {"width": 1.0}, tmp_path, algorithm=algorithm)
+
+        assert calls == []
+
+    @pytest.mark.parametrize("algorithm", ["CG", "BFGS"], ids=["cg", "bfgs"])
+    def test_rejects_bounds_for_an_unbounded_algorithm(self, tmp_path, algorithm):
+        def simulate(output_path, optimize, optimize_val):
+            return 0.0
+
+        with pytest.raises(ValueError, match="does not support bounds"):
+            optimize_s_params(
+                simulate,
+                {"width": 1.0},
+                tmp_path,
+                bounds=[(0.0, 2.0)],
+                algorithm=algorithm,
+            )
