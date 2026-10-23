@@ -117,13 +117,14 @@ class TestPlotSParam:
 
         assert labels == ["S11", "coupled", "isolated"]
 
-    def test_repeated_calls_overlay_on_one_figure(self):
-        """``param_sweep`` relies on this to build a comparison plot."""
+    def test_each_call_opens_its_own_figure(self):
+        """Like every other plot, so plotting S11 and then S21 never lands
+        both on one axes by accident."""
         SimTools.plot_s_param(FREQS, S11, label_s11="a")
         SimTools.plot_s_param(FREQS, S11 * 0.5, label_s11="b")
 
-        assert len(plt.get_fignums()) == 1
-        assert len(current_lines()) == 2
+        assert len(plt.get_fignums()) == 2
+        assert len(current_lines()) == 1
 
 
 # ---------------------------------------------------------------------
@@ -230,6 +231,91 @@ class TestOtherPlots:
         assert plt.gca().get_title()
         assert plt.gca().get_xlabel()
         assert plt.gca().get_ylabel()
+
+
+# ---------------------------------------------------------------------
+# Overlaying several runs (a parameter sweep)
+# ---------------------------------------------------------------------
+RUN_LABELS = ["w=1.0", "w=2.0", "w=3.0"]
+S11_RUNS = np.stack([S11, S11 * 0.5, S11 * 0.25])
+S21_RUNS = np.stack([S21, S21 * 0.5, S21 * 0.25])
+Z11_RUNS = np.stack([Z11, Z11 * 2, Z11 * 3])
+VSWR_RUNS = np.stack([VSWR, VSWR * 1.5, VSWR * 2])
+
+
+class TestOverlayRuns:
+    @pytest.mark.parametrize(
+        ("plotter", "args", "kwargs"),
+        [
+            (SimTools.plot_s_param, (FREQS, S11_RUNS), {"label_s11": RUN_LABELS}),
+            (SimTools.plot_vswr, (FREQS, VSWR_RUNS), {"label": RUN_LABELS}),
+            (SimTools.plot_phase, (FREQS, S21_RUNS), {"label_s21": RUN_LABELS}),
+            (SimTools.plot_group_delay, (FREQS, S21_RUNS), {"label": RUN_LABELS}),
+            (SimTools.plot_smith_chart, (FREQS, S11_RUNS), {"label": RUN_LABELS}),
+        ],
+        ids=["s_param", "vswr", "phase", "group_delay", "smith_chart"],
+    )
+    def test_one_labelled_trace_per_run_on_one_figure(self, plotter, args, kwargs):
+        """Read the legend: the Smith chart's grid is drawn as lines too."""
+        plotter(*args, **kwargs)
+
+        labels = [text.get_text() for text in plt.gca().get_legend().get_texts()]
+
+        assert len(plt.get_fignums()) == 1
+        assert labels == RUN_LABELS
+
+    def test_impedance_draws_a_real_and_imaginary_trace_per_run(self):
+        SimTools.plot_impedance(FREQS, Z11_RUNS, label=RUN_LABELS)
+
+        labels = [line.get_label() for line in current_lines()]
+
+        assert labels == [
+            f"{part} {label}" for label in RUN_LABELS for part in ("Real", "Imag")
+        ]
+
+    def test_each_row_is_plotted_as_its_own_data(self):
+        SimTools.plot_vswr(FREQS, VSWR_RUNS, label=RUN_LABELS)
+
+        for line, vswr_row in zip(current_lines(), VSWR_RUNS, strict=True):
+            assert line.get_ydata() == pytest.approx(vswr_row)
+
+    def test_s_param_rows_are_converted_to_decibels(self):
+        SimTools.plot_s_param(FREQS, S11_RUNS, label_s11=RUN_LABELS)
+
+        last_line = current_lines()[-1]
+
+        assert last_line.get_ydata() == pytest.approx(
+            20 * np.log10(np.abs(S11_RUNS[-1]))
+        )
+
+    def test_group_delay_is_computed_per_run(self):
+        """Each row is differentiated along frequency, not across runs."""
+        delays = [1e-9, 2e-9]
+        s21_runs = np.stack([np.exp(-2j * np.pi * FREQS * delay) for delay in delays])
+
+        SimTools.plot_group_delay(FREQS, s21_runs, label=["a", "b"])
+
+        for line, delay in zip(current_lines(), delays, strict=True):
+            assert np.mean(line.get_ydata()) == pytest.approx(delay, rel=0.05)
+
+    def test_a_single_label_is_repeated_for_every_run(self):
+        SimTools.plot_vswr(FREQS, VSWR_RUNS)
+
+        labels = [line.get_label() for line in current_lines()]
+
+        assert labels == ["VSWR"] * len(VSWR_RUNS)
+
+    def test_smith_chart_overlay_has_no_midpoint_marker(self):
+        """One marker per run would flood the legend."""
+        SimTools.plot_smith_chart(FREQS, S11_RUNS, label=RUN_LABELS)
+
+        labels = [line.get_label() for line in current_lines()]
+
+        assert not any(label.startswith("S11 is") for label in labels)
+
+    def test_too_few_labels_is_an_error(self):
+        with pytest.raises(ValueError):
+            SimTools.plot_vswr(FREQS, VSWR_RUNS, label=RUN_LABELS[:2])
 
 
 # ---------------------------------------------------------------------

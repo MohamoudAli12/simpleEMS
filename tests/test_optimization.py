@@ -10,6 +10,7 @@ order), not the electromagnetics.
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
@@ -20,6 +21,7 @@ pytest.importorskip("openEMS")
 
 from simpleEMS.sim_tools import (  # noqa: E402
     SimData,
+    SweepData,
     maximize_s_param,
     minimize_s_param,
     optimize_s_params,
@@ -297,23 +299,92 @@ class TestParamSweep:
 
         assert all(sweep is False for _p, sweep, _v in recorder.calls)
 
-    def test_returns_the_collected_results(self, recorder, tmp_path):
+    def test_returns_sweep_data(self, recorder, tmp_path):
         results = param_sweep(recorder, {"width": (1.0, 3.0, 3)}, tmp_path)
 
-        assert len(results) == 3
-        assert all(isinstance(item, SimData) for item in results)
+        assert isinstance(results, SweepData)
+
+    def test_stacks_one_row_per_run(self, recorder, tmp_path):
+        results = param_sweep(recorder, {"width": (1.0, 3.0, 3)}, tmp_path)
+
+        assert results.s11.shape == (3, len(FREQS))
+        assert results.z11.shape == (3, len(FREQS))
+        assert results.vswr.shape == (3, len(FREQS))
+        assert results.input_power.shape == (3,)
+
+    def test_freqs_are_shared_not_stacked(self, recorder, tmp_path):
+        results = param_sweep(recorder, {"width": (1.0, 3.0, 3)}, tmp_path)
+
+        assert results.freqs == pytest.approx(FREQS)
+
+    def test_missing_ports_stay_none(self, recorder, tmp_path):
+        results = param_sweep(recorder, {"width": (1.0, 3.0, 3)}, tmp_path)
+
+        assert results.s21 is None
+        assert results.s31 is None
+        assert results.s41 is None
+
+    def test_rows_follow_the_run_order(self, tmp_path):
+        """Row ``i`` must be the result of run ``i``, or the labels lie."""
+
+        def simulate(sweep_path, sweep, values):
+            s11 = np.full_like(FREQS, values[0], dtype=complex)
+            return SimData(
+                FREQS, s11, None, None, None, s11, s11.real, 1.0, s11, s11, 50.0
+            )
+
+        results = param_sweep(simulate, {"width": (1.0, 3.0, 3)}, tmp_path)
+
+        assert results.s11[:, 0].real == pytest.approx([1.0, 2.0, 3.0])
+
+    def test_labels_name_each_run(self, recorder, tmp_path):
+        results = param_sweep(
+            recorder, {"w": (1.0, 2.0, 2), "l": (10.0, 20.0, 2)}, tmp_path
+        )
+
+        assert results.labels == [
+            "w=1.0, l=10.0",
+            "w=1.0, l=20.0",
+            "w=2.0, l=10.0",
+            "w=2.0, l=20.0",
+        ]
+
+    def test_values_hold_the_swept_parameters(self, recorder, tmp_path):
+        results = param_sweep(recorder, {"width": (1.0, 2.0, 2)}, tmp_path)
+
+        assert results.values == [{"width": 1.0}, {"width": 2.0}]
+
+    def test_plots_nothing(self, recorder, tmp_path):
+        param_sweep(recorder, {"width": (1.0, 3.0, 3)}, tmp_path)
+
+        assert plt.get_fignums() == []
 
     def test_single_point_sweep(self, recorder, tmp_path):
         results = param_sweep(recorder, {"width": (2.0, 2.0, 1)}, tmp_path)
 
-        assert len(results) == 1
+        assert results.s11.shape == (1, len(FREQS))
+
+    def test_empty_sweep_is_an_error(self, recorder, tmp_path):
+        with pytest.raises(ValueError, match="no parameter combinations"):
+            param_sweep(recorder, {"width": (1.0, 3.0, 0)}, tmp_path)
+
+    def test_runs_with_different_frequencies_are_an_error(self, tmp_path):
+        def simulate(sweep_path, sweep, values):
+            freqs = FREQS * values[0]
+            s11 = np.ones_like(freqs, dtype=complex)
+            return SimData(
+                freqs, s11, None, None, None, s11, s11.real, 1.0, s11, s11, 50.0
+            )
+
+        with pytest.raises(ValueError, match="different frequency points"):
+            param_sweep(simulate, {"width": (1.0, 2.0, 2)}, tmp_path)
 
     def test_empty_sweep_definition_runs_nothing(self, recorder, tmp_path):
         """``product()`` of nothing yields one empty tuple, so this documents
         which of the two plausible behaviours actually happens."""
         results = param_sweep(recorder, {}, tmp_path)
 
-        assert len(recorder.calls) == len(results)
+        assert len(recorder.calls) == len(results.labels)
 
 
 # ---------------------------------------------------------------------

@@ -9,6 +9,7 @@ from simpleEMS import (
     minimize_s_param,
     optimize_s_params,
     param_sweep,
+    SimTools,
     setup_simulation,
 )
 
@@ -116,11 +117,22 @@ def main():
             "inset_length_mm": (0.533, 0.750, 3),
             "inset_width_mm": (0.148, 0.158, 3),
         }
-        param_sweep(
+        sweep_data = param_sweep(
             simulate_fn=simulate,
             sweep_vals=sweep_vals,
             output_path=output_path,
         )
+        SimTools.plot_s_param(
+            sweep_data.freqs, sweep_data.s11, label_s11=sweep_data.labels
+        )
+        SimTools.plot_smith_chart(
+            sweep_data.freqs, sweep_data.s11, label=sweep_data.labels
+        )
+        SimTools.plot_vswr(sweep_data.freqs, sweep_data.vswr, label=sweep_data.labels)
+        SimTools.plot_impedance(
+            sweep_data.freqs, sweep_data.z11, label=sweep_data.labels
+        )
+        SimTools.show_plots()
     if not (sweep or optimize):
         simulate(output_path=output_path)
 

@@ -202,6 +202,61 @@ class SimData(NamedTuple):
     ref_impedance: float = 50.0
 
 
+class SweepData(NamedTuple):
+    """Named tuple holding the results of a :func:`param_sweep`.
+
+    It has the same fields as :class:`SimData`, with every run stacked into
+    one array so the ``SimTools.plot_*`` functions overlay the whole sweep in
+    one call, e.g. ``plot_vswr(sweep_data.freqs, sweep_data.vswr,
+    label=sweep_data.labels)``. Row ``i`` of each array belongs to run ``i``.
+
+    Attributes
+    ----------
+    freqs : NDArray
+        Frequency points, shared by every run.
+    s11 : NDArray
+        Complex S11 values, shape ``(runs, freqs)``.
+    s21 : NDArray | None
+        Complex S21 values, shape ``(runs, freqs)`` (None if single-port).
+    s31 : NDArray | None
+        Complex S31 values, shape ``(runs, freqs)`` (None with fewer than
+        three ports).
+    s41 : NDArray | None
+        Complex S41 values, shape ``(runs, freqs)`` (None with fewer than
+        four ports).
+    z11 : NDArray
+        Complex Z11 values, shape ``(runs, freqs)``.
+    vswr : NDArray
+        VSWR values, shape ``(runs, freqs)``.
+    input_power : NDArray
+        Input power at the port, one value per run.
+    port_voltage : NDArray
+        Total complex voltage at the driven port, shape ``(runs, freqs)``.
+    port_current : NDArray
+        Total complex current at the driven port, shape ``(runs, freqs)``.
+    ref_impedance : NDArray
+        Reference impedance S11/Z11 were computed against, one value per run.
+    labels : list[str]
+        Legend label for each run, such as ``"width=1.0, length=20.0"``.
+    values : list[dict[str, float]]
+        The swept parameter values of each run, keyed by parameter name.
+    """
+
+    freqs: NDArray
+    s11: NDArray
+    s21: NDArray | None
+    s31: NDArray | None
+    s41: NDArray | None
+    z11: NDArray
+    vswr: NDArray
+    input_power: NDArray
+    port_voltage: NDArray
+    port_current: NDArray
+    ref_impedance: NDArray
+    labels: list[str]
+    values: list[dict[str, float]]
+
+
 class EfficiencyCurve(NamedTuple):
     """Named tuple holding an antenna's efficiency across its matched band.
 
@@ -688,33 +743,37 @@ class SimTools:
         x_label: str = "Frequency",
         y_label: str = "S-parameter (dB)",
         title: str = "S-parameters vs Frequency",
-        label_s11: str | None = None,
-        label_s21: str | None = None,
-        label_s31: str | None = None,
-        label_s41: str | None = None,
+        label_s11: str | list[str] | None = None,
+        label_s21: str | list[str] | None = None,
+        label_s31: str | list[str] | None = None,
+        label_s41: str | list[str] | None = None,
     ) -> None:
         """
         Plot S-parameters (S11 and optionally S21, S31, S41) against frequency.
 
-        Draws onto the current matplotlib axes (call ``plt.figure()``
-        beforehand to start a new figure). Every S-parameter is expected as
-        complex/linear values; each is converted to dB (``20*log10(|.|)``)
-        internally before plotting.
+        Opens a new figure. Every S-parameter is expected as complex/linear
+        values; each is converted to dB (``20*log10(|.|)``) internally before
+        plotting.
+
+        Each S-parameter may also be a 2D array with one row per run, such as
+        ``SweepData.s11`` from :func:`param_sweep`; every row then gets its
+        own trace, labelled by the matching entry of the label list.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) to plot on the x-axis.
         s11 : NDArray
-            A 1D array of complex (linear) S11 values.
+            A 1D array of complex (linear) S11 values, or a 2D array with one
+            row per run.
         s21 : NDArray, optional
-            A 1D array of complex (linear) S21 values. If ``None``
+            Complex (linear) S21 values, shaped like ``s11``. If ``None``
             (default), no S21 trace is drawn.
         s31 : NDArray, optional
-            A 1D array of complex (linear) S31 values. If ``None``
+            Complex (linear) S31 values, shaped like ``s11``. If ``None``
             (default), no S31 trace is drawn.
         s41 : NDArray, optional
-            A 1D array of complex (linear) S41 values. If ``None``
+            Complex (linear) S41 values, shaped like ``s11``. If ``None``
             (default), no S41 trace is drawn.
         x_label : str, optional
             Label for the x-axis. Default is ``"Frequency"``.
@@ -722,20 +781,23 @@ class SimTools:
             Label for the y-axis. Default is ``"S-parameter (dB)"``.
         title : str, optional
             Title of the plot. Default is ``"S-parameters vs Frequency"``.
-        label_s11 : str, optional
-            Legend label for the S11 trace. Defaults to ``"S11"``.
-        label_s21 : str, optional
-            Legend label for the S21 trace. Defaults to ``"S21"``.
-        label_s31 : str, optional
-            Legend label for the S31 trace. Defaults to ``"S31"``.
-        label_s41 : str, optional
-            Legend label for the S41 trace. Defaults to ``"S41"``.
+        label_s11 : str or list[str], optional
+            Legend label for the S11 trace, or one label per row of a 2D
+            ``s11``. Defaults to ``"S11"``.
+        label_s21 : str or list[str], optional
+            Legend label(s) for the S21 trace(s). Defaults to ``"S21"``.
+        label_s31 : str or list[str], optional
+            Legend label(s) for the S31 trace(s). Defaults to ``"S31"``.
+        label_s41 : str or list[str], optional
+            Legend label(s) for the S41 trace(s). Defaults to ``"S41"``.
 
         Returns
         -------
         None
-            Draws the plot on the current axes; does not return a value.
+            Displays the S-parameter plot in a new figure; does not return a
+            value.
         """
+        plt.figure()
         traces = [
             (s11, label_s11 or "S11", "S11"),
             (s21, label_s21 or "S21", "S21"),
@@ -745,16 +807,19 @@ class SimTools:
         for s_param, label, name in traces:
             if s_param is None:
                 continue
-            s_param_db = 20.0 * np.log10(np.abs(s_param))
-            lines = plt.plot(freqs, s_param_db, label=label)
-            cursor = themed_cursor(lines)
-            cursor.connect(
-                "add",
-                lambda sel, name=name: sel.annotation.set_text(
-                    f"Freq={freq_formatter(sel.target[0])}\n"
-                    f"{name}={sel.target[1]:.2f} dB"
-                ),
-            )
+            s_param_rows = np.atleast_2d(s_param)
+            labels = label if isinstance(label, list) else [label] * len(s_param_rows)
+            for s_param_row, row_label in zip(s_param_rows, labels, strict=True):
+                s_param_db = 20.0 * np.log10(np.abs(s_param_row))
+                lines = plt.plot(freqs, s_param_db, label=row_label)
+                cursor = themed_cursor(lines)
+                cursor.connect(
+                    "add",
+                    lambda sel, name=name: sel.annotation.set_text(
+                        f"Freq={freq_formatter(sel.target[0])}\n"
+                        f"{name}={sel.target[1]:.2f} dB"
+                    ),
+                )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
@@ -769,27 +834,30 @@ class SimTools:
         vswr: NDArray,
         x_label: str = "Frequency",
         y_label: str = "VSWR",
-        label: str = "VSWR",
+        label: str | list[str] = "VSWR",
         title: str = "VSWR vs Frequency",
     ) -> None:
         """
         Plot the voltage standing wave ratio (VSWR) as a function of frequency.
 
         Opens a new figure and plots VSWR over the given frequency range, to
-        evaluate impedance matching performance.
+        evaluate impedance matching performance. A 2D ``vswr``, such as
+        ``SweepData.vswr`` from :func:`param_sweep`, draws one trace per row.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) to plot on the x-axis.
         vswr : NDArray
-            A 1D array of VSWR values corresponding to each frequency.
+            A 1D array of VSWR values corresponding to each frequency, or a 2D
+            array with one row per run.
         x_label : str, optional
             Label for the x-axis. Default is ``"Frequency"``.
         y_label : str, optional
             Label for the y-axis. Default is ``"VSWR"``.
-        label : str, optional
-            Label used for the plot legend. Default is ``"VSWR"``.
+        label : str or list[str], optional
+            Label used for the plot legend, or one label per row of a 2D
+            ``vswr``. Default is ``"VSWR"``.
         title : str, optional
             Title of the plot. Default is ``"VSWR vs Frequency"``.
 
@@ -799,15 +867,18 @@ class SimTools:
             Displays the VSWR plot in a new figure; does not return a value.
         """
         plt.figure()
-        lines = plt.plot(freqs, vswr, label=label)
-        cursor = themed_cursor(lines)
+        vswr_rows = np.atleast_2d(vswr)
+        labels = label if isinstance(label, list) else [label] * len(vswr_rows)
+        for vswr_row, row_label in zip(vswr_rows, labels, strict=True):
+            lines = plt.plot(freqs, vswr_row, label=row_label)
+            cursor = themed_cursor(lines)
 
-        cursor.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"Freq={freq_formatter(sel.target[0])}\nVSWR={sel.target[1]:.2f}"
-            ),
-        )
+            cursor.connect(
+                "add",
+                lambda sel: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\nVSWR={sel.target[1]:.2f}"
+                ),
+            )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
@@ -825,31 +896,44 @@ class SimTools:
         x_label: str = "Frequency",
         y_label: str = "Phase (deg)",
         title: str = "Phase vs Frequency",
+        label_s21: str | list[str] | None = None,
+        label_s31: str | list[str] | None = None,
+        label_s41: str | list[str] | None = None,
     ) -> None:
         """
         Plot the transmission phase (angle of S21, S31, S41) against frequency.
 
         Opens a new figure and plots the phase, in degrees, of every
         transmission term given, one trace each, over the frequency range.
+        A 2D S-parameter, such as ``SweepData.s21`` from :func:`param_sweep`,
+        draws one trace per row.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) to plot on the x-axis.
         s21 : NDArray
-            A 1D array of complex S21 values corresponding to each frequency.
+            A 1D array of complex S21 values corresponding to each frequency,
+            or a 2D array with one row per run.
         s31 : NDArray, optional
-            A 1D array of complex S31 values. If ``None`` (default), no S31
-            trace is drawn.
+            Complex S31 values, shaped like ``s21``. If ``None`` (default), no
+            S31 trace is drawn.
         s41 : NDArray, optional
-            A 1D array of complex S41 values. If ``None`` (default), no S41
-            trace is drawn.
+            Complex S41 values, shaped like ``s21``. If ``None`` (default), no
+            S41 trace is drawn.
         x_label : str, optional
             Label for the x-axis. Default is ``"Frequency"``.
         y_label : str, optional
             Label for the y-axis. Default is ``"Phase (deg)"``.
         title : str, optional
             Title of the plot. Default is ``"Phase vs Frequency"``.
+        label_s21 : str or list[str], optional
+            Legend label for the S21 trace, or one label per row of a 2D
+            ``s21``. Defaults to ``"S21"``.
+        label_s31 : str or list[str], optional
+            Legend label(s) for the S31 trace(s). Defaults to ``"S31"``.
+        label_s41 : str or list[str], optional
+            Legend label(s) for the S41 trace(s). Defaults to ``"S41"``.
 
         Returns
         -------
@@ -857,18 +941,28 @@ class SimTools:
             Displays the phase plot in a new figure; does not return a value.
         """
         plt.figure()
-        for s_param, name in [(s21, "S21"), (s31, "S31"), (s41, "S41")]:
+        traces = [
+            (s21, label_s21 or "S21", "S21"),
+            (s31, label_s31 or "S31", "S31"),
+            (s41, label_s41 or "S41", "S41"),
+        ]
+        for s_param, label, name in traces:
             if s_param is None:
                 continue
-            lines = plt.plot(freqs, np.angle(s_param, deg=True), label=name)
-            cursor = themed_cursor(lines)
-            cursor.connect(
-                "add",
-                lambda sel, name=name: sel.annotation.set_text(
-                    f"Freq={freq_formatter(sel.target[0])}\n"
-                    f"{name} phase={sel.target[1]:.2f} Deg"
-                ),
-            )
+            s_param_rows = np.atleast_2d(s_param)
+            labels = label if isinstance(label, list) else [label] * len(s_param_rows)
+            for s_param_row, row_label in zip(s_param_rows, labels, strict=True):
+                lines = plt.plot(
+                    freqs, np.angle(s_param_row, deg=True), label=row_label
+                )
+                cursor = themed_cursor(lines)
+                cursor.connect(
+                    "add",
+                    lambda sel, name=name: sel.annotation.set_text(
+                        f"Freq={freq_formatter(sel.target[0])}\n"
+                        f"{name} phase={sel.target[1]:.2f} Deg"
+                    ),
+                )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
@@ -884,26 +978,32 @@ class SimTools:
         x_label: str = "Frequency",
         y_label: str = "Group Delay",
         title: str = "Group Delay vs Frequency",
+        label: str | list[str] = "group_delay",
     ) -> None:
         """
         Compute and plot the group delay as a function of frequency.
 
         The group delay is computed from the frequency derivative of the
         unwrapped phase of S21 and displayed in seconds (via an engineering
-        time-unit axis formatter).
+        time-unit axis formatter). A 2D ``s21``, such as ``SweepData.s21``
+        from :func:`param_sweep`, draws one trace per row.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) to plot on the x-axis.
         s21 : NDArray
-            A 1D array of complex S21 values corresponding to each frequency.
+            A 1D array of complex S21 values corresponding to each frequency,
+            or a 2D array with one row per run.
         x_label : str, optional
             Label for the x-axis. Default is ``"Frequency"``.
         y_label : str, optional
             Label for the y-axis. Default is ``"Group Delay"``.
         title : str, optional
             Title of the plot. Default is ``"Group Delay vs Frequency"``.
+        label : str or list[str], optional
+            Label used for the plot legend, or one label per row of a 2D
+            ``s21``. Default is ``"group_delay"``.
 
         Returns
         -------
@@ -911,19 +1011,22 @@ class SimTools:
             Displays the group delay plot in a new figure; does not return
             a value.
         """
-        delta_phi_df = np.gradient(np.unwrap(np.angle(s21)), freqs)
-        group_delay = -delta_phi_df / (2 * np.pi)
+        s21_rows = np.atleast_2d(s21)
+        delta_phi_df = np.gradient(np.unwrap(np.angle(s21_rows)), freqs, axis=-1)
+        group_delay_rows = -delta_phi_df / (2 * np.pi)
+        labels = label if isinstance(label, list) else [label] * len(s21_rows)
         plt.figure()
-        lines_group = plt.plot(freqs, group_delay, label="group_delay")
-        cursor_group = themed_cursor(lines_group)
+        for group_delay, row_label in zip(group_delay_rows, labels, strict=True):
+            lines_group = plt.plot(freqs, group_delay, label=row_label)
+            cursor_group = themed_cursor(lines_group)
 
-        cursor_group.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"Freq={freq_formatter(sel.target[0])}\n"
-                f"Group Delay={time_formatter(sel.target[1])}"
-            ),
-        )
+            cursor_group.connect(
+                "add",
+                lambda sel: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\n"
+                    f"Group Delay={time_formatter(sel.target[1])}"
+                ),
+            )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.gca().yaxis.set_major_formatter(time_formatter)
@@ -940,12 +1043,15 @@ class SimTools:
         x_label: str = "Frequency",
         y_label: str = "Z11",
         title: str = "Z11 vs Frequency",
+        label: str | list[str] = "Z11",
     ) -> None:
         """
         Plot the input impedance (Z11) as a function of frequency.
 
         Opens a new figure and plots the real and imaginary parts of Z11,
-        in ohms, as separate traces over the given frequency range.
+        in ohms, as separate traces over the given frequency range. A 2D
+        ``z11``, such as ``SweepData.z11`` from :func:`param_sweep`, draws a
+        real and an imaginary trace per row.
 
         Parameters
         ----------
@@ -953,13 +1059,17 @@ class SimTools:
             A 1D array of frequencies (in Hz) to plot on the x-axis.
         z11 : NDArray
             A 1D array of complex Z11 values (in ohms) corresponding to
-            each frequency.
+            each frequency, or a 2D array with one row per run.
         x_label : str, optional
             Label for the x-axis. Default is ``"Frequency"``.
         y_label : str, optional
             Label for the y-axis. Default is ``"Z11"``.
         title : str, optional
             Title of the plot. Default is ``"Z11 vs Frequency"``.
+        label : str or list[str], optional
+            Legend label, or one label per row of a 2D ``z11``. The traces
+            are named ``"Real <label>"`` and ``"Imag <label>"``. Default is
+            ``"Z11"``.
 
         Returns
         -------
@@ -967,28 +1077,29 @@ class SimTools:
             Displays the impedance plot in a new figure; does not return
             a value.
         """
-        z11_real = np.real(z11)
-        z11_imag = np.imag(z11)
+        z11_rows = np.atleast_2d(z11)
+        labels = label if isinstance(label, list) else [label] * len(z11_rows)
         plt.figure()
-        lines_real = plt.plot(freqs, z11_real, label="Real Z11")
-        cursor_real = themed_cursor(lines_real)
+        for z11_row, row_label in zip(z11_rows, labels, strict=True):
+            lines_real = plt.plot(freqs, np.real(z11_row), label=f"Real {row_label}")
+            cursor_real = themed_cursor(lines_real)
 
-        cursor_real.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
-            ),
-        )
+            cursor_real.connect(
+                "add",
+                lambda sel: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
+                ),
+            )
 
-        lines_imag = plt.plot(freqs, z11_imag, label="Imag Z11")
-        cursor_imag = themed_cursor(lines_imag)
+            lines_imag = plt.plot(freqs, np.imag(z11_row), label=f"Imag {row_label}")
+            cursor_imag = themed_cursor(lines_imag)
 
-        cursor_imag.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
-            ),
-        )
+            cursor_imag.connect(
+                "add",
+                lambda sel: sel.annotation.set_text(
+                    f"Freq={freq_formatter(sel.target[0])}\nZ11={sel.target[1]:.2f} Ω"
+                ),
+            )
 
         plt.gca().xaxis.set_major_formatter(freq_formatter)
         plt.xlabel(x_label)
@@ -1001,7 +1112,7 @@ class SimTools:
     def plot_smith_chart(
         freqs: NDArray,
         s11: NDArray,
-        label: str = "",
+        label: str | list[str] = "",
         charac_imp: float = 50.0,
     ) -> None:
         """
@@ -1009,16 +1120,20 @@ class SimTools:
 
         Opens a new figure with a Smith-chart projection and plots the
         complex reflection coefficient (S11) over the given frequency
-        range, marking the value at the midpoint frequency.
+        range, marking the value at the midpoint frequency. A 2D ``s11``,
+        such as ``SweepData.s11`` from :func:`param_sweep`, draws one trace
+        per row and leaves out the midpoint marker.
 
         Parameters
         ----------
         freqs : NDArray
             A 1D array of frequencies (in Hz) corresponding to the S11 data.
         s11 : NDArray
-            A 1D array of complex S11 (reflection coefficient) values.
-        label : str, optional
-            Label used for the plot legend. Default is an empty string.
+            A 1D array of complex S11 (reflection coefficient) values, or a 2D
+            array with one row per run.
+        label : str or list[str], optional
+            Label used for the plot legend, or one label per row of a 2D
+            ``s11``. Default is an empty string.
         charac_imp : float, optional
             Characteristic (normalizing) impedance of the chart, in ohms.
             Default is ``50.0``.
@@ -1058,23 +1173,33 @@ class SimTools:
                 "alpha": 1,
             },
         )
-        s11_lines = plt.plot(s11, datatype=S_PARAMETER, marker="", label=label)
-        tar_idx = len(freqs) // 2
-        plt.plot(
-            s11[tar_idx],
-            color=plt.rcParams["text.color"],
-            datatype=S_PARAMETER,
-            label=(f"S11 is {s11[tar_idx]:.2f} at {freq_formatter(freqs[tar_idx])}"),
-        )
+        s11_rows = np.atleast_2d(s11)
+        labels = label if isinstance(label, list) else [label] * len(s11_rows)
+        for s11_row, row_label in zip(s11_rows, labels, strict=True):
+            s11_lines = plt.plot(
+                s11_row, datatype=S_PARAMETER, marker="", label=row_label
+            )
+            cursor = themed_cursor(s11_lines)
+            cursor.connect(
+                "add",
+                lambda sel, s11_row=s11_row: sel.annotation.set_text(
+                    f"Freq={freq_formatter(freqs[int(round(sel.index))])}\n"
+                    f"S11={s11_row[int(round(sel.index))]:.2f}"
+                ),
+            )
 
-        cursor = themed_cursor(s11_lines)
-        cursor.connect(
-            "add",
-            lambda sel: sel.annotation.set_text(
-                f"Freq={freq_formatter(freqs[int(round(sel.index))])}\n"
-                f"S11={s11[int(round(sel.index))]:.2f}"
-            ),
-        )
+        # One midpoint marker per run would bury an overlay in legend entries,
+        # so only a single trace gets it.
+        if np.ndim(s11) == 1:
+            tar_idx = len(freqs) // 2
+            plt.plot(
+                s11[tar_idx],
+                color=plt.rcParams["text.color"],
+                datatype=S_PARAMETER,
+                label=(
+                    f"S11 is {s11[tar_idx]:.2f} at {freq_formatter(freqs[tar_idx])}"
+                ),
+            )
 
         plt.title("Smith Chart - S11")
         plt.legend(loc="lower right", bbox_to_anchor=(1.5, 1.0))
@@ -3258,10 +3383,15 @@ def param_sweep(
     sweep_vals: dict[str, tuple],
     output_path: Path,
     sweep: bool = True,
-) -> list[SimData]:
+) -> SweepData:
     """
     Run a simulation function over a Cartesian product of parameter values
-    and plot S11 for each combination.
+    and collect the results of every combination.
+
+    Nothing is plotted. Pass the returned :class:`SweepData` to the
+    ``SimTools.plot_*`` functions to overlay the runs, e.g.
+    ``SimTools.plot_s_param(sweep_data.freqs, sweep_data.s11,
+    label_s11=sweep_data.labels)``.
 
     Supports sweeping multiple parameters at once; the total number of
     simulations run is the Cartesian product of each parameter's
@@ -3276,8 +3406,8 @@ def param_sweep(
         is a per-combination output directory, ``sweep`` is the ``sweep``
         argument passed through unchanged, and ``values`` is the tuple of
         parameter values for that combination (in ``sweep_vals`` key
-        order). Must return a :class:`SimData` (or compatible object with
-        ``freqs``/``s11`` attributes).
+        order). Must return a :class:`SimData`, with the same frequency
+        points on every call.
     sweep_vals : dict[str, tuple]
         Dictionary defining the parameter sweep ranges. Keys are
         parameter names (for labeling only); values are
@@ -3291,10 +3421,16 @@ def param_sweep(
 
     Returns
     -------
-    list[SimData]
-        The simulation data from every parameter combination in the sweep,
-        in the same order as the Cartesian product of ``sweep_vals``. Empty
-        if ``sweep_vals`` has no combinations to run.
+    SweepData
+        The simulation data from every parameter combination, stacked one
+        row per run in the same order as the Cartesian product of
+        ``sweep_vals``, with a legend label and the swept values per run.
+
+    Raises
+    ------
+    ValueError
+        If ``sweep_vals`` has no combinations to run, or if a run returns
+        different frequency points from the first run.
     """
     console.print("-------------------------------------", style="info")
     console.print("Running Parameter Sweep", style="info")
@@ -3302,24 +3438,43 @@ def param_sweep(
 
     sweep_values = {key: np.linspace(*val).tolist() for key, val in sweep_vals.items()}
     cartesian_sweep = list(product(*sweep_values.values()))
+    if not cartesian_sweep:
+        raise ValueError("The sweep has no parameter combinations to run.")
+
     sim_data_list = []
+    labels = []
+    values_per_run = []
 
     for values in cartesian_sweep:
-        kv_pairs = list(zip(sweep_values.keys(), values, strict=True))
-        key_value = "_".join(f"{k}_{v}" for k, v in kv_pairs)
-        label = ", ".join(f"{k}={v}" for k, v in kv_pairs)
+        named_values = dict(zip(sweep_values.keys(), values, strict=True))
+        key_value = "_".join(f"{k}_{v}" for k, v in named_values.items())
         sweep_path = output_path / "sweep" / key_value
         sweep_path.mkdir(parents=True, exist_ok=True)
 
         sim_data = simulate_fn(sweep_path, sweep, values)
+        if sim_data_list and not np.array_equal(sim_data.freqs, sim_data_list[0].freqs):
+            raise ValueError(
+                f"The run with {key_value} returned different frequency points "
+                "from the first run; every run must share the same frequencies."
+            )
         sim_data_list.append(sim_data)
-        SimTools.plot_s_param(
-            sim_data.freqs,
-            sim_data.s11,
-            label_s11=label,
-        )
-    SimTools.show_plots()
-    return sim_data_list
+        labels.append(", ".join(f"{k}={v}" for k, v in named_values.items()))
+        values_per_run.append(named_values)
+
+    first_run = sim_data_list[0]
+    stacked_fields = {
+        field: None
+        if getattr(first_run, field) is None
+        else np.stack([getattr(sim_data, field) for sim_data in sim_data_list])
+        for field in SimData._fields
+        if field != "freqs"
+    }
+    return SweepData(
+        freqs=first_run.freqs,
+        labels=labels,
+        values=values_per_run,
+        **stacked_fields,
+    )
 
 
 def mm_to_m(mm: float) -> float:
