@@ -104,6 +104,14 @@ def generate_report(
     and, for an antenna, the radiation pattern and efficiency. Each page ends
     with a short note on how to read it.
 
+    The key results follow the kind of structure. A one-port structure, or
+    one passed with ``nf2ff_data``, reads as an antenna: match and -10 dB
+    bandwidth. A params object with ``filter_type`` reads as a band-pass or
+    band-stop filter: insertion loss, rejection and the 3 dB passband or
+    stopband. A four-port result reads as a coupler: through, coupled and
+    isolated ports, amplitude and phase balance. Any other two-port reads as
+    a transmission line: insertion and return loss.
+
     Parameters
     ----------
     params : SimParams
@@ -152,16 +160,72 @@ def generate_report(
     main_index = int(np.argmin(np.abs(freqs - main_freq)))
     with np.errstate(divide="ignore"):
         s11_db = 20.0 * np.log10(np.abs(sim_data.s11))
-    best_index = int(np.argmin(s11_db))
 
-    # Walk out from the best match for as long as S11 stays below -10 dB
-    lower_index = upper_index = best_index
-    while lower_index > 0 and s11_db[lower_index - 1] <= -10.0:
+    transmissions = []
+    for name, values in (
+        ("S21", sim_data.s21),
+        ("S31", sim_data.s31),
+        ("S41", sim_data.s41),
+    ):
+        if values is None:
+            continue
+        with np.errstate(divide="ignore"):
+            values_db = 20.0 * np.log10(np.abs(values))
+        transmissions.append((name, values, values_db))
+
+    # Judge each kind of structure by the figures its designer works to: an
+    # antenna by its match, a filter by its passband or stopband, a coupler by
+    # its split and isolation, and a line by its loss
+    filter_type = getattr(params, "filter_type", None)
+    if nf2ff_data is not None or not transmissions:
+        structure_kind = "antenna"
+    elif filter_type in ("bandpass", "bandstop"):
+        structure_kind = filter_type
+    elif sim_data.s41 is not None:
+        structure_kind = "coupler"
+    else:
+        structure_kind = "transmission"
+
+    if structure_kind == "bandpass":
+        s21_db = transmissions[0][2]
+        anchor_index = int(np.argmax(s21_db))
+        band_threshold_db = s21_db[anchor_index] - 3.0
+        in_band = s21_db >= band_threshold_db
+        band_name = "Passband (S21 within 3 dB of its peak)"
+        band_legend = "Passband"
+        threshold_label = "3 dB below the S21 peak"
+    elif structure_kind == "bandstop":
+        s21_db = transmissions[0][2]
+        anchor_index = int(np.argmin(s21_db))
+        band_threshold_db = -3.0
+        in_band = s21_db <= band_threshold_db
+        band_name = "Stopband (S21 below -3 dB)"
+        band_legend = "Stopband"
+        threshold_label = "-3 dB"
+    elif structure_kind == "coupler":
+        s41_db = transmissions[2][2]
+        anchor_index = main_index
+        band_threshold_db = -15.0
+        in_band = (s11_db <= band_threshold_db) & (s41_db <= band_threshold_db)
+        band_name = "Bandwidth (S11 and S41 below -15 dB)"
+        band_legend = "Operating band"
+        threshold_label = "-15 dB"
+    else:
+        anchor_index = int(np.argmin(s11_db))
+        band_threshold_db = -10.0
+        in_band = s11_db <= band_threshold_db
+        band_name = "Bandwidth (S11 below -10 dB)"
+        band_legend = "Matched band"
+        threshold_label = "-10 dB"
+
+    # Walk out from the anchor point for as long as the band criterion holds
+    lower_index = upper_index = anchor_index
+    while lower_index > 0 and in_band[lower_index - 1]:
         lower_index -= 1
-    while upper_index < len(freqs) - 1 and s11_db[upper_index + 1] <= -10.0:
+    while upper_index < len(freqs) - 1 and in_band[upper_index + 1]:
         upper_index += 1
-    is_matched = s11_db[best_index] <= -10.0
-    if is_matched:
+    has_band = bool(in_band[anchor_index])
+    if has_band:
         bandwidth = freqs[upper_index] - freqs[lower_index]
         band_centre = (freqs[upper_index] + freqs[lower_index]) / 2
         bandwidth_text = (
@@ -177,36 +241,118 @@ def generate_report(
     impedance = sim_data.z11[main_index]
     sign = "+" if impedance.imag >= 0 else "-"
     impedance_text = f"{impedance.real:.1f} {sign} j{abs(impedance.imag):.1f} Ω"
+    designed_bandwidth = getattr(params, "bandwidth_freq", None)
 
-    result_rows = [
-        [
-            "Best match",
-            f"{s11_db[best_index]:.1f} dB at {freq_formatter(freqs[best_index])}",
-        ],
-        ["Bandwidth (S11 below -10 dB)", bandwidth_text],
-        [f"Reflection S11 at {target}", f"{s11_db[main_index]:.1f} dB"],
-        [f"VSWR at {target}", f"{sim_data.vswr[main_index]:.2f}"],
-        [f"Input impedance at {target}", impedance_text],
-    ]
-
-    transmissions = []
-    for name, values in (
-        ("S21", sim_data.s21),
-        ("S31", sim_data.s31),
-        ("S41", sim_data.s41),
-    ):
-        if values is None:
-            continue
-        with np.errstate(divide="ignore"):
-            values_db = 20.0 * np.log10(np.abs(values))
-        transmissions.append((name, values, values_db))
+    if structure_kind == "antenna":
+        result_rows = [
+            [
+                "Best match",
+                f"{s11_db[anchor_index]:.1f} dB at "
+                f"{freq_formatter(freqs[anchor_index])}",
+            ],
+            [band_name, bandwidth_text],
+            [f"Reflection S11 at {target}", f"{s11_db[main_index]:.1f} dB"],
+            [f"VSWR at {target}", f"{sim_data.vswr[main_index]:.2f}"],
+            [f"Input impedance at {target}", impedance_text],
+        ]
+    elif structure_kind == "bandpass":
+        result_rows = [
+            [f"Insertion loss at {target}", f"{-s21_db[main_index]:.2f} dB"],
+            [
+                "Lowest insertion loss",
+                f"{-s21_db[anchor_index]:.2f} dB at "
+                f"{freq_formatter(freqs[anchor_index])}",
+            ],
+            [band_name, bandwidth_text],
+        ]
+        if designed_bandwidth is not None:
+            result_rows.append(
+                ["Designed bandwidth", freq_formatter(designed_bandwidth)]
+            )
+        result_rows += [
+            [f"Return loss at {target}", f"{-s11_db[main_index]:.1f} dB"],
+            [
+                f"Rejection at {freq_formatter(freqs[0])} / "
+                f"{freq_formatter(freqs[-1])}",
+                f"{-s21_db[0]:.1f} dB / {-s21_db[-1]:.1f} dB",
+            ],
+        ]
+    elif structure_kind == "bandstop":
+        result_rows = [
+            [f"Rejection at {target}", f"{-s21_db[main_index]:.1f} dB"],
+            [
+                "Deepest rejection",
+                f"{-s21_db[anchor_index]:.1f} dB at "
+                f"{freq_formatter(freqs[anchor_index])}",
+            ],
+            [band_name, bandwidth_text],
+        ]
+        if designed_bandwidth is not None:
+            result_rows.append(
+                ["Designed bandwidth", freq_formatter(designed_bandwidth)]
+            )
         result_rows.append(
             [
-                f"Transmission to port {name[1]} ({name}) at {target}",
-                f"{values_db[main_index]:.2f} dB, "
-                f"phase {np.angle(values[main_index], deg=True):.1f}°",
+                f"Insertion loss at {freq_formatter(freqs[0])} / "
+                f"{freq_formatter(freqs[-1])}",
+                f"{-s21_db[0]:.2f} dB / {-s21_db[-1]:.2f} dB",
             ]
         )
+    elif structure_kind == "coupler":
+        through, coupled, _isolated = (values for _name, values, _db in transmissions)
+        through_db, coupled_db = transmissions[0][2], transmissions[1][2]
+        result_rows = [
+            [f"Through (S21) at {target}", f"{through_db[main_index]:.2f} dB"],
+            [f"Coupled (S31) at {target}", f"{coupled_db[main_index]:.2f} dB"],
+            [f"Isolation (S41) at {target}", f"{-s41_db[main_index]:.1f} dB"],
+            [f"Return loss at {target}", f"{-s11_db[main_index]:.1f} dB"],
+            [
+                f"Amplitude imbalance at {target}",
+                f"{through_db[main_index] - coupled_db[main_index]:.2f} dB",
+            ],
+            [
+                f"Phase difference (S31 - S21) at {target}",
+                f"{np.angle(coupled[main_index] / through[main_index], deg=True):.1f}°",
+            ],
+            [band_name, bandwidth_text],
+        ]
+    else:
+        s21_db = transmissions[0][2]
+        worst_transmission_index = int(np.argmin(s21_db))
+        worst_match_index = int(np.argmax(s11_db))
+        result_rows = [
+            [f"Insertion loss at {target}", f"{-s21_db[main_index]:.2f} dB"],
+            [f"Return loss at {target}", f"{-s11_db[main_index]:.1f} dB"],
+            [
+                "Highest insertion loss",
+                f"{-s21_db[worst_transmission_index]:.2f} dB at "
+                f"{freq_formatter(freqs[worst_transmission_index])}",
+            ],
+            [
+                "Lowest return loss",
+                f"{-s11_db[worst_match_index]:.1f} dB at "
+                f"{freq_formatter(freqs[worst_match_index])}",
+            ],
+            [band_name, bandwidth_text],
+        ]
+        result_rows.append(
+            [
+                f"Transmission phase (S21) at {target}",
+                f"{np.angle(sim_data.s21[main_index], deg=True):.1f}°",
+            ]
+        )
+        for name, values, values_db in transmissions[1:]:
+            result_rows.append(
+                [
+                    f"Transmission to port {name[1]} ({name}) at {target}",
+                    f"{values_db[main_index]:.2f} dB, "
+                    f"phase {np.angle(values[main_index], deg=True):.1f}°",
+                ]
+            )
+        result_rows += [
+            [f"VSWR at {target}", f"{sim_data.vswr[main_index]:.2f}"],
+            [f"Input impedance at {target}", impedance_text],
+        ]
 
     if nf2ff_data is not None:
         sphere = nf2ff_data.sphere
@@ -293,7 +439,15 @@ def generate_report(
     with plt.style.context("default"):
         # ---- Summary --------------------------------------------------------
         summary_figure = Figure(figsize=PAGE_SIZE)
-        summary_figure.text(0.06, 0.88, report_title, fontsize=22, weight="bold")
+        # A long title wraps upwards, clear of the line beneath it
+        summary_figure.text(
+            0.06,
+            0.87,
+            textwrap.fill(report_title, width=38),
+            fontsize=22,
+            weight="bold",
+            va="bottom",
+        )
         summary_figure.text(
             0.06,
             0.85,
@@ -453,17 +607,27 @@ def generate_report(
         response_axes = response_figure.subplots(
             3 if transmissions else 2, 1, sharex=True, squeeze=False
         )[:, 0]
+        if structure_kind == "coupler":
+            port_roles = {"S21": "through", "S31": "coupled", "S41": "isolated"}
+        else:
+            port_roles = {}
         response_axes[0].plot(freqs, s11_db, label="S11 (reflection)")
         for name, _values, values_db in transmissions:
-            response_axes[0].plot(freqs, values_db, label=f"{name} (transmission)")
-        response_axes[0].axhline(-10.0, linestyle=":", color="0.4", label="-10 dB")
-        if is_matched:
+            response_axes[0].plot(
+                freqs,
+                values_db,
+                label=f"{name} ({port_roles.get(name, 'transmission')})",
+            )
+        response_axes[0].axhline(
+            band_threshold_db, linestyle=":", color="0.4", label=threshold_label
+        )
+        if has_band:
             response_axes[0].axvspan(
                 freqs[lower_index],
                 freqs[upper_index],
                 color="C2",
                 alpha=0.12,
-                label="Matched band",
+                label=band_legend,
             )
         response_axes[0].set_ylabel("Magnitude (dB)")
         response_axes[0].set_title("S-parameters")
@@ -477,6 +641,13 @@ def generate_report(
         if transmissions:
             for name, values, _values_db in transmissions:
                 response_axes[2].plot(freqs, np.angle(values, deg=True), label=name)
+            if structure_kind == "coupler":
+                response_axes[2].plot(
+                    freqs,
+                    np.angle(sim_data.s31 / sim_data.s21, deg=True),
+                    color="black",
+                    label="S31 - S21 (quadrature)",
+                )
             response_axes[2].set_ylabel("Phase (°)")
             response_axes[2].set_title("Transmission phase")
         for axes in response_axes:
@@ -488,15 +659,49 @@ def generate_report(
             axes.grid(True)
             axes.legend(fontsize=8)
         response_axes[-1].set_xlabel("Frequency")
+        if structure_kind == "bandpass":
+            response_caption = (
+                "S21 is the share of the signal that passes from port 1 to port 2. "
+                "The passband is where S21 stays within 3 dB of its peak; outside "
+                "it, the lower S21, the stronger the rejection. S11 shows how much "
+                "of the signal reflects back at port 1: inside the passband it "
+                "should sit low."
+            )
+        elif structure_kind == "bandstop":
+            response_caption = (
+                "S21 is the share of the signal that passes from port 1 to port 2. "
+                "The stopband is where S21 falls below -3 dB; the deeper the dip, "
+                "the stronger the rejection. Outside the stopband S21 should sit "
+                "close to 0 dB and S11 low."
+            )
+        elif structure_kind == "coupler":
+            response_caption = (
+                "Port 1 feeds the coupler. An ideal 3 dB quadrature hybrid splits "
+                "the power equally between the through (S21) and coupled (S31) "
+                "ports, about -3 dB each, 90° apart, while the isolated port (S41) "
+                "and the reflection (S11) stay low. The shaded band is where both "
+                "S11 and S41 stay below -15 dB."
+            )
+        elif structure_kind == "transmission":
+            response_caption = (
+                "S21 shows how much of the signal passes from port 1 to the other "
+                "port: the closer to 0 dB, the lower the loss. S11 is the share "
+                "reflected back at port 1: below -10 dB (VSWR below 2) less than "
+                "10 % of the power reflects. The transmission phase gives the "
+                "electrical length of the structure."
+            )
+        else:
+            response_caption = (
+                "S11 is the share of the signal reflected back at port 1: the "
+                "lower, the better the match. Below -10 dB (VSWR below 2) less "
+                "than 10 % of the power is reflected, and the antenna accepts the "
+                "rest."
+            )
         pages.append(
             (
                 response_figure,
                 "Matching and transmission",
-                "S11 is the share of the signal reflected back at port 1: the lower, "
-                "the better the match. Below -10 dB (VSWR below 2) less than 10 % of "
-                "the power is reflected. The transmission curves show how much of "
-                "the signal reaches the other ports. The dashed line marks the "
-                "design frequency.",
+                response_caption + " The dashed line marks the design frequency.",
             )
         )
 

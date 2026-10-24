@@ -9,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.needs_csxcad
 
 
-def _sim_data(sim, params, synthetic_resonator, *, two_port=False, s11=None):
+def _sim_data(sim, params, synthetic_resonator, *, port_count=1, s11=None):
     """A ``SimData`` built from the analytic resonator instead of a solve."""
     from simpleEMS.sim_tools import SimData
 
@@ -20,16 +20,20 @@ def _sim_data(sim, params, synthetic_resonator, *, two_port=False, s11=None):
             [synthetic_resonator(freq, f0=params.main_freq)[0, 0] for freq in freqs]
         )
         s11 = 0.98 * s11 + 0.01
-    s21 = (
-        np.sqrt(1.0 - np.abs(s11) ** 2) * np.exp(-1j * freqs / 1e9)
-        if two_port
-        else None
-    )
+    transmitted = np.sqrt(1.0 - np.abs(s11) ** 2) * np.exp(-1j * freqs / 1e9)
+    s21 = s31 = s41 = None
+    if port_count == 2:
+        s21 = transmitted
+    elif port_count == 4:
+        # An ideal quadrature split: equal halves 90 degrees apart, low isolation
+        s21 = transmitted / np.sqrt(2.0)
+        s31 = -1j * s21
+        s41 = np.full(len(freqs), 0.03 + 0.0j)
     z11 = sim.charac_imp * (1.0 + s11) / (1.0 - s11)
     s11_magnitude = np.clip(np.abs(s11), 0, 0.999)
     vswr = (1.0 + s11_magnitude) / (1.0 - s11_magnitude)
     return SimData(
-        freqs, s11, s21, None, None, z11, vswr, 1.0, z11, np.ones_like(z11), 50.0
+        freqs, s11, s21, s31, s41, z11, vswr, 1.0, z11, np.ones_like(z11), 50.0
     )
 
 
@@ -95,13 +99,23 @@ class TestGenerateReport:
         assert report_path == tmp_path / "report" / "design_report.pdf"
         assert _is_pdf(report_path)
 
-    def test_writes_a_two_port_filter_report(
-        self, built_bandpass, synthetic_resonator, tmp_path
+    @pytest.mark.parametrize(
+        ("built_fixture", "port_count"),
+        [
+            ("built_mline", 2),
+            ("built_bandpass", 2),
+            ("built_bandstop", 2),
+            ("built_coupler", 4),
+        ],
+        ids=["microstrip-line", "bandpass-filter", "bandstop-filter", "coupler"],
+    )
+    def test_writes_a_report_for_a_multiport_structure(
+        self, built_fixture, port_count, synthetic_resonator, tmp_path, request
     ):
         from simpleEMS.report import generate_report
 
-        _structure, sim, params, _ports = built_bandpass
-        sim_data = _sim_data(sim, params, synthetic_resonator, two_port=True)
+        _structure, sim, params, _ports = request.getfixturevalue(built_fixture)
+        sim_data = _sim_data(sim, params, synthetic_resonator, port_count=port_count)
 
         report_path = generate_report(params, sim, sim_data, output_path=tmp_path)
 
