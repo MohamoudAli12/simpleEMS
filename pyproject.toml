@@ -13,6 +13,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
 ]
 
@@ -26,7 +27,7 @@ dependencies = [
     "numpy==2.4.4",
     "pyqt6==6.10.1",
     "pysmithchart==0.4.1",
-    "pyvista==0.46.4",
+    "pyvista==0.48.4",
     "pyvistaqt==0.11.3",
     "rich==14.3.3",
     "scipy==1.16.3",
