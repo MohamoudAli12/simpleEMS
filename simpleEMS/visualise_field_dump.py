@@ -34,7 +34,10 @@ The viewer reads the openEMS VTK files in ``output_path / "field_dump"``:
   timestep, which the viewer plays in order.
 
 The structure comes from ``output_path / "structure.xml"``, so each body keeps
-its material: metal draws as copper, dielectric as translucent substrate.
+its material: metal draws as copper, dielectric as translucent substrate. The
+FEM backend writes no ``structure.xml``; the viewer then reads the region-tagged
+mesh ``structure.vtk`` that the FEM mesher writes, which carries the same
+materials.
 """
 
 from __future__ import annotations
@@ -54,6 +57,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 from pyvistaqt import QtInteractor
 from scipy import sparse
 
+from . import fem_materials
 from .console import console
 from .plot_theme import (
     PYVISTA_THEME_NAME,
@@ -89,6 +93,10 @@ _TIME_FILE = re.compile(r"^(?P<prefix>[A-Za-z]+)_(?P<timestep>\d+)\.vtr$")
 # Reading a time-domain frame takes about 20 ms, so long dumps are thinned to
 # this many evenly spaced frames to keep the window opening in a few seconds.
 _MAX_TIME_FRAMES = 200
+# The open viewers. Qt keeps an open window alive but not its Python side; once
+# the caller drops the viewer, the garbage collector would free the Python
+# slots the controls call, and the next slider move would crash.
+_OPEN_VIEWERS: set[FieldViewer] = set()
 
 PLOT_TYPES = [
     "Vector - plane",
@@ -499,6 +507,57 @@ def _load_structure(xml_path: Path) -> dict[str, list[pv.PolyData]]:
     return bodies
 
 
+def _load_mesh_structure(vtk_path: Path) -> dict[str, list[pv.PolyData]]:
+    """
+    Read the bodies of a FEM ``structure.vtk``, grouped by material, in mm.
+
+    The FEM mesher tags every cell with its region, so the dielectric volumes
+    and the conductor sheets come out of the mesh the solver used. The mesher
+    merges all conductors into one region; each connected piece becomes its
+    own body, and a piece that lies at or below the bottom of the dielectric
+    counts as ground.
+
+    Parameters
+    ----------
+    vtk_path : Path
+        The ``structure.vtk`` written next to the simulation results.
+
+    Returns
+    -------
+    dict[str, list[pyvista.PolyData]]
+        ``"copper"``, ``"ground"`` and ``"dielectric"`` bodies. Air, ports and
+        the absorbing boundary are left out.
+    """
+    mesh = pv.read(vtk_path)
+    mesh.points *= 1e3  # metres -> millimetres
+    region_ids = mesh.cell_data["CellEntityIds"]
+    is_dielectric = (region_ids >= fem_materials.dielectric_region(0)) & (
+        region_ids < fem_materials.AIR
+    )
+    is_conductor = (region_ids >= fem_materials.PEC) & (
+        region_ids < fem_materials.port_region(0)
+    )
+    bodies: dict[str, list[pv.PolyData]] = {
+        "copper": [],
+        "ground": [],
+        "dielectric": [],
+    }
+    for region_id in np.unique(region_ids[is_dielectric]):
+        volume = mesh.extract_cells(np.flatnonzero(region_ids == region_id))
+        bodies["dielectric"].append(volume.extract_surface(algorithm="dataset_surface"))
+    dielectric_bottom = min(
+        (body.bounds.z_min for body in bodies["dielectric"]), default=-np.inf
+    )
+    if np.any(is_conductor):
+        conductors = mesh.extract_cells(np.flatnonzero(is_conductor))
+        for piece in conductors.split_bodies():
+            piece = piece.extract_surface(algorithm="dataset_surface")
+            # Within a micrometre: the mesher leaves rounding noise in the heights.
+            is_ground = piece.bounds.z_max <= dielectric_bottom + 1e-3
+            bodies["ground" if is_ground else "copper"].append(piece)
+    return bodies
+
+
 def _interpolation_matrix(
     x_lines: NDArray, y_lines: NDArray, z_lines: NDArray, points: NDArray
 ) -> sparse.csr_matrix:
@@ -611,7 +670,11 @@ def _top_on_grid(body: pv.PolyData, x_lines: NDArray, y_lines: NDArray) -> pv.Po
         & (weight_one + weight_two <= 1 + 1e-9)
     ).any(axis=1)
     plane = pv.RectilinearGrid(cut_x, cut_y, [top]).cast_to_unstructured_grid()
-    return plane.extract_cells(inside).extract_surface().triangulate()
+    return (
+        plane.extract_cells(inside)
+        .extract_surface(algorithm="dataset_surface")
+        .triangulate()
+    )
 
 
 def _sides_and_bottom(body: pv.PolyData) -> pv.PolyData:
@@ -621,7 +684,7 @@ def _sides_and_bottom(body: pv.PolyData) -> pv.PolyData:
     on_top = np.all(
         np.isclose(body.points[triangles][:, :, 2], body.bounds.z_max), axis=1
     )
-    return body.extract_cells(~on_top).extract_surface()
+    return body.extract_cells(~on_top).extract_surface(algorithm="dataset_surface")
 
 
 def _without_shared_bottom(body: pv.PolyData, metal_heights: NDArray) -> pv.PolyData:
@@ -632,13 +695,17 @@ def _without_shared_bottom(body: pv.PolyData, metal_heights: NDArray) -> pv.Poly
     body = body.triangulate()
     triangles = body.faces.reshape(-1, 4)[:, 1:]
     on_bottom = np.all(np.isclose(body.points[triangles][:, :, 2], bottom), axis=1)
-    return body.extract_cells(~on_bottom).extract_surface()
+    return body.extract_cells(~on_bottom).extract_surface(algorithm="dataset_surface")
 
 
 def _merged(meshes: list[pv.PolyData]) -> pv.PolyData:
     """Merge surfaces into one, or return an empty surface."""
     meshes = [mesh for mesh in meshes if mesh.n_points]
-    return pv.merge(meshes).extract_surface() if meshes else pv.PolyData()
+    return (
+        pv.merge(meshes).extract_surface(algorithm="dataset_surface")
+        if meshes
+        else pv.PolyData()
+    )
 
 
 class FieldViewer(QtWidgets.QMainWindow):
@@ -1328,7 +1395,9 @@ class FieldViewer(QtWidgets.QMainWindow):
                 self.x_lines, self.y_lines, [self.z_lines[plane_index]]
             )
             plane[quantity] = values[plane_index].ravel()
-            plane = plane.cast_to_structured_grid().extract_surface()
+            plane = plane.cast_to_structured_grid().extract_surface(
+                algorithm="dataset_surface"
+            )
             if plot_type == "Height map - plane":
                 height = self.height_slider.value() * self.size_unit
                 plane = plane.warp_by_scalar(
@@ -1632,6 +1701,7 @@ def view_field_dump(
         The simulation directory passed to
         :meth:`~simpleEMS.sim_tools.SimTools.add_field_dump`; the dump is read
         from its ``field_dump`` subdirectory and the structure from its
+        ``structure.xml``, or from the FEM ``structure.vtk`` when there is no
         ``structure.xml``. Defaults to ``cwd / "Sim_Path"``.
     show : bool, optional
         Show the window now. Pass ``False`` to build it hidden and show it
@@ -1657,12 +1727,15 @@ def view_field_dump(
     prefix, dump_freq = dump_choices[0]
     dump = _load_field_dump(dump_directory, prefix, dump_freq)
     xml_path = output_path / "structure.xml"
+    vtk_path = output_path / "structure.vtk"
     if xml_path.exists():
         structure = _load_structure(xml_path)
+    elif vtk_path.exists():
+        structure = _load_mesh_structure(vtk_path)
     else:
         console.print(
-            f"[warning]No structure.xml in {output_path}; showing the field "
-            "without the structure.[/warning]"
+            f"[warning]No structure.xml or structure.vtk in {output_path}; "
+            "showing the field without the structure.[/warning]"
         )
         structure = {"copper": [], "ground": [], "dielectric": []}
 
@@ -1681,6 +1754,8 @@ def view_field_dump(
     # free it once it closes.
     sip.transferto(viewer, None)
     viewer.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+    _OPEN_VIEWERS.add(viewer)
+    viewer.destroyed.connect(lambda: _OPEN_VIEWERS.discard(viewer))
     if show:
         viewer.show()
         application.processEvents()

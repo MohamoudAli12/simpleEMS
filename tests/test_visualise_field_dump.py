@@ -5,11 +5,14 @@ the structure reader on a hand-written ``structure.xml``, so no solver is
 needed. The window itself is never created: it needs a display.
 """
 
+import gc
 import os
 
 import numpy as np
 import pytest
 import pyvista as pv
+
+from PyQt6 import QtCore, QtWidgets
 
 from simpleEMS import visualise_field_dump as viewer_module
 from simpleEMS.visualise_field_dump import (
@@ -17,6 +20,7 @@ from simpleEMS.visualise_field_dump import (
     _field_dump_choices,
     _interpolation_matrix,
     _load_field_dump,
+    _load_mesh_structure,
     _load_structure,
     _top_on_grid,
 )
@@ -353,6 +357,61 @@ class TestStructureLoading:
         assert "Sphere" in capsys.readouterr().out
 
 
+def write_tagged_mesh(path):
+    """
+    Write a FEM-style ``structure.vtk``: a substrate box (region 100) in air
+    (200), a ground sheet under it and a patch sheet on top (both PEC, 300),
+    and a port sheet (401), with coordinates in metres.
+    """
+    board = pv.Box(bounds=(0, 0.02, 0, 0.01, 0, 0.0016)).triangulate()
+    substrate = board.delaunay_3d()
+    air = pv.Box(bounds=(-0.01, 0.03, -0.01, 0.02, -0.01, 0.01)).delaunay_3d()
+    ground = pv.Plane(center=(0.01, 0.005, 0), i_size=0.02, j_size=0.01)
+    patch = pv.Plane(center=(0.01, 0.005, 0.0016), i_size=0.008, j_size=0.004)
+    port = pv.Plane(
+        center=(0, 0.005, 0.0008), direction=(1, 0, 0), i_size=0.0016, j_size=0.001
+    )
+    parts = []
+    for part, region_id in (
+        (substrate, 100),
+        (air, 200),
+        (ground.triangulate(), 300),
+        (patch.triangulate(), 300),
+        (port.triangulate(), 401),
+    ):
+        part = part.cast_to_unstructured_grid()
+        part.cell_data["CellEntityIds"] = np.full(part.n_cells, region_id)
+        parts.append(part)
+    pv.merge(parts, merge_points=False).save(path, binary=False)
+
+
+class TestMeshStructureLoading:
+    @pytest.fixture
+    def structure(self, tmp_path):
+        path = tmp_path / "structure.vtk"
+        write_tagged_mesh(path)
+        return _load_mesh_structure(path)
+
+    def test_groups_the_regions_by_material(self, structure):
+        counts = {group: len(bodies) for group, bodies in structure.items()}
+
+        assert counts == {"copper": 1, "ground": 1, "dielectric": 1}
+
+    def test_scales_metres_to_millimetres(self, structure):
+        board = structure["dielectric"][0]
+
+        np.testing.assert_allclose(
+            board.bounds, (0.0, 20.0, 0.0, 10.0, 0.0, 1.6), atol=1e-6
+        )
+
+    def test_keeps_the_patch_on_top_of_the_substrate(self, structure):
+        patch = structure["copper"][0]
+
+        np.testing.assert_allclose(
+            patch.bounds, (6.0, 14.0, 3.0, 7.0, 1.6, 1.6), atol=1e-6
+        )
+
+
 class TestInterpolationMatrix:
     lines = (
         np.array([0.0, 1.0, 3.0]),
@@ -383,3 +442,56 @@ class TestInterpolationMatrix:
         weights = _interpolation_matrix(*self.lines, points)
 
         np.testing.assert_array_equal(weights @ np.ones(weights.shape[1]), 0.0)
+
+
+class TestViewerLifetime:
+    """The window outlives the caller's reference, and Python must not free it."""
+
+    @pytest.fixture
+    def stand_in_viewer(self, tmp_path, rng, monkeypatch):
+        # A bare window in place of FieldViewer: only its lifetime is under test,
+        # and the offscreen platform needs no display.
+        monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+        dump_directory = tmp_path / "field_dump"
+        dump_directory.mkdir()
+        field = uniform_field(rng)
+        write_frequency_dump(dump_directory, "Ef", 2.45e9, field, field)
+
+        class StandInViewer(QtWidgets.QMainWindow):
+            def __init__(self, *args, **kwargs):
+                super().__init__()
+
+        monkeypatch.setattr(viewer_module, "FieldViewer", StandInViewer)
+        return StandInViewer
+
+    def open_and_drop(self, output_path):
+        viewer_module.view_field_dump(output_path=output_path, show=False)
+        gc.collect()
+
+    def test_keeps_the_viewer_after_the_caller_drops_it(
+        self, tmp_path, stand_in_viewer
+    ):
+        self.open_and_drop(tmp_path)
+
+        windows = [
+            window
+            for window in QtWidgets.QApplication.topLevelWidgets()
+            if isinstance(window, stand_in_viewer)
+        ]
+        assert len(windows) == 1
+        windows[0].close()
+
+    def test_releases_the_viewer_once_it_closes(self, tmp_path, stand_in_viewer):
+        self.open_and_drop(tmp_path)
+        (viewer,) = (
+            viewer
+            for viewer in viewer_module._OPEN_VIEWERS
+            if isinstance(viewer, stand_in_viewer)
+        )
+
+        viewer.close()
+        QtCore.QCoreApplication.sendPostedEvents(
+            None, QtCore.QEvent.Type.DeferredDelete
+        )
+
+        assert viewer not in viewer_module._OPEN_VIEWERS

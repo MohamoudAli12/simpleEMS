@@ -2474,6 +2474,7 @@ class SimTools:
         ----------
         output_path : Path, optional
             Simulation directory holding the ``field_dump`` subdirectory and
+            ``structure.xml``, or the FEM ``structure.vtk`` when there is no
             ``structure.xml``. Defaults to ``cwd / "Sim_Path"``.
 
         Returns
