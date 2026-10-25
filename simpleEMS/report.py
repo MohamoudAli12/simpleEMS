@@ -39,6 +39,7 @@ import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle, Polygon, Rectangle
+from matplotlib.textpath import TextPath
 from matplotlib.ticker import EngFormatter, MaxNLocator
 from pysmithchart import S_PARAMETER
 
@@ -424,7 +425,7 @@ def generate_report(
             name, name.removesuffix("_mm").replace("_", " ").capitalize()
         )
         if isinstance(value, bool) or not isinstance(value, int | float):
-            value_text = textwrap.shorten(str(value), width=48)
+            value_text = str(value)
         elif name.endswith("_mm"):
             value_text = f"{value:.{params.fp_precision}f} mm"
         elif "freq" in name:
@@ -820,11 +821,39 @@ def generate_report(
                 )
             )
 
+        table_font_size = 9
         for table in tables:
             table.auto_set_font_size(False)
-            table.set_fontsize(9)
+            table.set_fontsize(table_font_size)
             table.scale(1.0, 1.5)
+            # A table does not wrap its text, so wrap each cell to its column
+            # and make its row tall enough for the lines; a long value would
+            # otherwise run off the page. The layout has to settle first, for
+            # the width of the table's axes to be known.
+            table_figure = table.get_figure()
+            table_figure.draw_without_rendering()
+            axes_width_points = (
+                table.axes.get_position().width * table_figure.get_figwidth() * 72
+            )
+            row_line_counts: dict[int, int] = {}
             for (row, _column), cell in table.get_celld().items():
+                row_line_counts.setdefault(row, 1)
+                text = cell.get_text().get_text()
+                if not text.strip():
+                    continue
+                # The text starts a tenth of the cell width in from its left edge.
+                room_points = 0.85 * cell.get_width() * axes_width_points
+                text_points = (
+                    TextPath((0, 0), text, size=table_font_size).get_extents().width
+                )
+                characters_per_line = int(len(text) * room_points / text_points)
+                wrapped_text = textwrap.fill(text, width=max(characters_per_line, 1))
+                cell.get_text().set_text(wrapped_text)
+                row_line_counts[row] = max(
+                    row_line_counts[row], wrapped_text.count("\n") + 1
+                )
+            for (row, _column), cell in table.get_celld().items():
+                cell.set_height(cell.get_height() * row_line_counts[row])
                 cell.set_edgecolor("0.85")
                 if row == 0:
                     cell.set_text_props(weight="bold")
