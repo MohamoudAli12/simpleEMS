@@ -102,6 +102,8 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         )
         patch.export_stl(sim, output_path)
         patch.export_gerber(sim, output_path)
+        patch.export_dxf(sim, output_path)
+        patch.export_kicad_footprint(sim, port, output_path, name="InsetFedPatch_24GHz")
         patch.export_step(sim, output_path)
 
 
@@ -123,7 +125,7 @@ def main():
     if sweep:
         sweep_vals = {
             "inset_length_mm": (0.533, 0.750, 3),
-            # "inset_width_mm": (0.148, 0.158, 3),
+            "inset_width_mm": (0.148, 0.158, 3),
         }
         sweep_data = param_sweep(
             simulate_fn=simulate,

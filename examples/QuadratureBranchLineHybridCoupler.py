@@ -19,7 +19,6 @@ params = QuadratureBranchLineHybridCouplerParams(
     substrate_eps_r=4.4,
     substrate_tand=0.001,
     charac_imp=50,
-    # backend_engine="FEM",
 )
 # PARAMS
 
@@ -53,7 +52,9 @@ coupler.plot_s_param(
 coupler.plot_impedance(sim_data.freqs, sim_data.z11)
 coupler.plot_smith_chart(sim_data.freqs, sim_data.s11)
 coupler.plot_phase(sim_data.freqs, sim_data.s21, sim_data.s31)
+coupler.visualise_field_dump()
 coupler.show_plots()
+coupler.generate_report(params, sim, sim_data)
 coupler.export_gerber(sim)
 coupler.export_step(sim)
 # PPROCESS
