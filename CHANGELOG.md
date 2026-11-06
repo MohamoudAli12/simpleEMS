@@ -5,6 +5,144 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and follo
 
 ---
 
+## v0.5.0 - 06 Nov 2026
+
+A structures-and-reporting release. It adds a branch-line coupler and printed
+dipole and monopole antennas, returns S-parameters for up to four ports, and
+adds a PDF design report, CSV, DXF and KiCad exports and an interactive field
+viewer. The far field now solves once for every radiation plot, gain plots show
+realized gain, and FEM gains field dumps and a much closer match to FDTD.
+Several public names change, so check the breaking entries before you upgrade.
+
+### Added
+- `QuadratureBranchLineHybridCoupler` /
+  `QuadratureBranchLineHybridCouplerParams`: a 3 dB branch-line hybrid coupler
+  that sizes itself from the design frequency, with an example and a tutorial
+  (e95ee4e, cff5347, 5e8a005)
+- `PrintedDipoleAntenna` / `PrintedDipoleAntennaParams`: a centre-fed printed
+  half-wave dipole, with an example (6f26a4a, cff5347, f7c82b2, 9e15ef5)
+- `PrintedMonopoleAntenna` / `PrintedMonopoleAntennaParams`: a microstrip-fed
+  printed quarter-wave monopole over a partial ground plane, with an example.
+  Both printed antennas take `resonant_freq` and `span_freq`, like the other
+  antennas (e8cb077, f7c82b2, 9e15ef5)
+- `compute_sim_data` accepts up to four ports and returns S11 through S41 on
+  both backends. `plot_s_param` and `plot_phase` plot any of them in one call
+  (6f2acec)
+- `SimTools.generate_report()`: a printable PDF design report that gathers a
+  structure's target, layout and simulated performance, on both backends. The
+  summary, plots and notes follow the kind of structure: antenna, filter,
+  coupler or transmission line (fa08256, 8c3fbff, 4c9d2bc)
+- `SimTools.export_csv()` writes S-parameters, radiation patterns and antenna
+  efficiency to CSV files for Excel and other plotting tools (916d1f7)
+- `SimTools.export_dxf()` and `SimTools.export_kicad_footprint()` export the
+  layout to mechanical and PCB CAD (8d72918)
+- `SimTools.visualise_field_dump()` opens an interactive 3D window that animates
+  field dumps over the structure, with arrow, surface, cut-plane, iso-surface
+  and volume plots. It works with FDTD and FEM results (f23b4f4, e2b5269,
+  1feb5cb)
+- `SimTools.plot_efficiency()` plots the radiation and total efficiency across
+  the matched band, in percent, dB or both (6560eed, 9979db8)
+- `SimTools.plot_2d_gain()`, and a `style` argument on it and on
+  `plot_2d_directivity()` that picks a polar view, a cartesian view or both
+  (fb3a010, 49b6b4a)
+- The 2D radiation plots gain the yz-plane cut, handle the beamwidth of
+  omnidirectional patterns, and take an optional `floor_db` for a fixed axis
+  (285bc23, bf3cdd5)
+- The 3D directivity and gain windows show the plotted frequency, so it stays
+  visible in screenshots and saved images (500bdfc)
+- `run_simulation()` takes `openems_engine` to pick the openEMS engine, such as
+  `"multithreaded"` or `"gpu"`, when your build supports it (d93476f)
+- `optimize_s_params()` takes `algorithm` to choose a SciPy method instead of
+  always using Nelder-Mead. It accepts only methods that work with simulation
+  results (303eba1)
+- `maximize_s_param` gains the threshold mode `minimize_s_param` already had
+  (32e3e7e)
+- You can assign your own `substrate_width_mm` and `substrate_length_mm` on any
+  structure's params; otherwise the substrate keeps its usual size (ef380f4)
+- `feed_spacing_mm` on the inverted-F antenna params sets the feed spacing to
+  tune the match, with a range check (83d9d3f)
+- FEM: `add_field_dump` writes electric, magnetic and surface current fields in
+  the same ParaView format as FDTD (ca70e7d)
+- FEM: the mesh viewer draws each region in its own colour with a legend and a
+  checkbox to hide it, plus a table of mesh statistics (520a2c3)
+- FEM: the efficiency comes from the solves the sweep already makes, so the
+  plot costs no extra solves. Existing projects re-mesh once on their next run
+  (7f79caa)
+- Python 3.14 support (4665671, 0e8019a)
+
+### Changed
+- **Breaking:** `compute_nf2ff_data()` replaces `compute_nf2ff_3d()`. It solves
+  the far field and the efficiency once and returns an `NF2FFData`, which every
+  2D and 3D radiation plot and `plot_efficiency()` now take (49b6b4a, 3faf75e,
+  26a7973)
+- **Breaking:** removed `plot_3d_power()`. It showed the same pattern as
+  `plot_3d_directivity()`, only normalised to its peak (044b636)
+- **Breaking:** `param_sweep()` returns the results of every run instead of
+  plotting them. Pass them to the usual plot functions to draw every run on one
+  figure (9cfaa25)
+- **Breaking:** renamed `optimize_s11` and `optimize_s21` to `minimize_s_param`
+  and `maximize_s_param`. Either one works with any port pair (32e3e7e)
+- **Breaking:** renamed `backend_engine` on `SimParams` to `sim_method`
+  (d93476f)
+- **Breaking:** removed `FEMOptions`, `SimParams.fem_options` and
+  `SimSetup.FEM_options`. Set the `FEM_*` fields on `SimParams` and read them
+  from `SimSetup.params`. The standalone STEP path takes the same port settings,
+  so it can use wave ports throughout (e8e917e)
+- **Breaking:** `SimData` gains `s31` and `s41` after `s21`, and `plot_s_param`
+  takes them after `s21` too, so positional unpacking and arguments shift
+  (6f2acec)
+- **Breaking:** the `export_gerber` module is now `export_layout` (8d72918)
+- **Breaking:** removed the `mesh_style` option from the FEM mesh viewers; the
+  region view replaces it (520a2c3)
+- **Breaking:** the inverted-F antenna sizes its shorting leg from the
+  wavelength instead of a fixed height, and `feed_line_length_mm` is gone from
+  its params (83d9d3f)
+- The gain plots show realized gain, so they count the power the port mismatch
+  reflects (49b6b4a)
+- `num_points` defaults to 1001 instead of 1000, so a sweep includes its centre
+  frequency and lands on round steps (b6273db)
+- `plot_s_param` opens its own figure, like the other plots (9cfaa25)
+- 3D windows open with the matplotlib figures when `show_plots` runs, instead of
+  opening early and freezing, and `q` closes only the window it is pressed in
+  (f23b4f4)
+- Console output for exports, saved plots, the report, far field, optimization
+  and parameter sweeps uses titled rules instead of dashed banners (1571fd5)
+- The stub filter's board ends at its two ports and grows with the filter
+  (ef380f4)
+- Bumped `pyvista` to 0.48.4 (0e8019a)
+- Rewrote the README around the supported structures and features (a6f5d8f)
+
+### Fixed
+- The 3D directivity and gain plots showed every direction except the peak as
+  stronger than it is, so nulls looked shallower and the beam wider (299ba8a)
+- The 3D gain plot took the efficiency from the strongest input power in the
+  sweep instead of the frequency of the pattern, so gain came out wrong away
+  from that peak (3faf75e)
+- The 2D plots split a main lobe that points backward across both edges of the
+  cartesian view. They now centre it and report its direction as 180 degrees
+  (774291c)
+- FEM: the mesh coarsened too quickly below signal traces, so microstrip lines
+  on thin substrates came out with too low an impedance and too long an
+  electrical length compared with FDTD (5f7396d)
+- FEM: wave-port transmission terms came out wrong after re-referencing
+  (500efff)
+- FEM: the mesher mistook one dipole arm for a ground plane and meshed it
+  coarsely, and conductors with similar numbered names got mixed up when finding
+  the ground plane (9cb28ea, 3d9cdf0)
+- FDTD: the mesher could hang on steep gradings or very long intervals, and
+  short intervals got cells that changed size faster than the smoothing ratio
+  allows (bd2d200)
+- CLI: `simpleems install openems` installs the Python bindings into the
+  environment simpleEMS runs in and stops with guidance on externally managed
+  Pythons. The PATH setup, downloads, archive extraction and dry-run mode are
+  also more robust (ef56b6a)
+- CLI: the Windows installer exits with a clear error when GitHub responds
+  slowly or not at all (9cf4471)
+- The STEP FEM patch example meshes at its design frequency, so its radiation
+  plots no longer stop with an error (61c50ae)
+
+---
+
 ## v0.4.0 - 25 Sep 2026
 
 A structures-and-export release. It adds a printed inverted-F antenna, building
