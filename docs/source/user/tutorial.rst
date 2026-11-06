@@ -9,6 +9,7 @@ Tutorial
     inverted_f_antenna_simple
     quarterwave_bandstop_filter_simple
     quarterwave_bandpass_filter_simple
+    quadrature_branch_line_hybrid_coupler_simple
     microstrip_line
     generic_structure_simple
     standalone_model
