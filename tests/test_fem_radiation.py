@@ -1020,7 +1020,7 @@ class TestComputePatternEndToEnd:
             substrate_thickness_mm=1.6,
             charac_imp=50,
             num_points=5,
-            backend_engine="FEM",
+            sim_method="FEM",
             FEM_num_solve_points=4,
             FEM_elems_per_wavelength=4.0,
             FEM_min_layers=1,

@@ -1,7 +1,7 @@
 """Tests for how ``SimTools`` hands work to the FDTD or the FEM backend.
 
 ``run_simulation``, ``write_and_show_structure``, ``create_nf2ff`` and
-``compute_sim_data`` each branch on ``sim.backend_engine``. The solvers, the
+``compute_sim_data`` each branch on ``sim.sim_method``. The solvers, the
 mesher and the viewer window are stubbed out here, so these tests check the
 dispatch -- what is called, with what -- and never run a solve.
 """
@@ -32,7 +32,7 @@ def fem_sim(fr4):
     from simpleEMS.microstrip_line import MicrostripLine, MicrostripLineParams
 
     params = MicrostripLineParams(
-        min_freq=2e9, max_freq=3e9, target_freq=2.45e9, backend_engine="FEM", **fr4
+        min_freq=2e9, max_freq=3e9, target_freq=2.45e9, sim_method="FEM", **fr4
     )
     sim = setup_simulation(params)
     MicrostripLine(params, sim).build_microstrip_line()
@@ -44,10 +44,12 @@ class RecordingFDTD:
 
     def __init__(self, wander_to=None):
         self.runs = []
+        self.engines = []
         self.wander_to = wander_to
 
-    def Run(self, output_path):  # noqa: N802 - matches openEMS
+    def Run(self, output_path, engine="fastest"):  # noqa: N802 - matches openEMS
         self.runs.append(output_path)
+        self.engines.append(engine)
         if self.wander_to is not None:
             os.chdir(self.wander_to)
 
@@ -81,6 +83,22 @@ class TestRunSimulationFDTD:
         SimTools.run_simulation(sim._replace(FDTD=engine))
 
         assert engine.runs == [tmp_path / "Sim_Path"]
+
+    @pytest.mark.parametrize(
+        ("openems_engine", "expected"),
+        [(None, "fastest"), ("multithreaded", "multithreaded"), ("basic", "basic")],
+        ids=["default", "multithreaded", "basic"],
+    )
+    def test_passes_the_engine_to_openems(
+        self, built_mline, tmp_path, openems_engine, expected
+    ):
+        _line, sim, _params, _ports = built_mline
+        engine = RecordingFDTD()
+        options = {} if openems_engine is None else {"openems_engine": openems_engine}
+
+        SimTools.run_simulation(sim._replace(FDTD=engine), tmp_path / "run", **options)
+
+        assert engine.engines == [expected]
 
     def test_restores_the_working_directory(self, built_mline, tmp_path):
         _line, sim, _params, _ports = built_mline

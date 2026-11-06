@@ -44,7 +44,7 @@ COARSE_FDTD = {
 
 COARSE_FEM = {
     "num_points": 21,
-    "backend_engine": "FEM",
+    "sim_method": "FEM",
     "FEM_num_solve_points": 4,
     "FEM_air_pad_mm": 3.0,
     "FEM_elems_per_wavelength": 6.0,
@@ -390,7 +390,7 @@ class TestBackendAgreement:
             sim = setup_simulation(params)
             line = MicrostripLine(params, sim)
             ports = line.build_microstrip_line()
-            if params.backend_engine == "FDTD":
+            if params.sim_method == "FDTD":
                 line.create_mesh()
 
             out = tmp_path / label

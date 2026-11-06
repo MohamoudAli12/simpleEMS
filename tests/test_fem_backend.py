@@ -95,7 +95,7 @@ class TestFEMSettings:
         params = InsetFedPatchParams(
             resonant_freq=2.45e9,
             span_freq=2.0e9,  # a plot window far wider than the design point
-            backend_engine="FEM",
+            sim_method="FEM",
             **fr4,
         )
 
@@ -112,7 +112,7 @@ class TestFEMSettings:
         params = InsetFedPatchParams(
             resonant_freq=2.45e9,
             span_freq=2.0e9,
-            backend_engine="FEM",
+            sim_method="FEM",
             FEM_mesh_freq=4.45e9,
             **fr4,
         )
@@ -125,7 +125,7 @@ class TestFEMSettings:
         params = InsetFedPatchParams(
             resonant_freq=2.45e9,
             span_freq=0.5e9,
-            backend_engine="FEM",
+            sim_method="FEM",
             FEM_fe_order=2,
             FEM_boundary="pml",
             FEM_air_pad_mm=((5, 5), (5, 5), (2, 30)),

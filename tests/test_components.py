@@ -202,7 +202,7 @@ def via_board_mesh(tmp_path_factory):
         substrate_length_mm=12.0,
         substrate_cells=4,
         charac_imp=50,
-        backend_engine="FEM",
+        sim_method="FEM",
     )
     sim = setup_simulation(params)
     structure = GenericStructure(params, sim)

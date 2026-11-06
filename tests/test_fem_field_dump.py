@@ -471,7 +471,7 @@ def fem_line(fr4, **extra):
         min_freq=2e9,
         max_freq=3e9,
         target_freq=2.45e9,
-        backend_engine="FEM",
+        sim_method="FEM",
         **fr4,
         **extra,
     )

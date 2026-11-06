@@ -62,7 +62,7 @@ PORT_COLOR = "#d62728"
 HIDDEN_FIELDS = {
     "unit",
     "num_points",
-    "backend_engine",
+    "sim_method",
     "simulation_box",
     "substrate_cells",
     "substrate_kappa",
@@ -402,7 +402,7 @@ def generate_report(
         ],
         ["Copper thickness", f"{params.copper_thickness_mm * 1000.0:g} µm"],
         ["Board size", board_size_text],
-        ["Simulation method", SOLVER_NAMES.get(sim.backend_engine, sim.backend_engine)],
+        ["Simulation method", SOLVER_NAMES.get(sim.sim_method, sim.sim_method)],
     ]
 
     # Design dimensions: the dataclass fields plus any *_mm property a structure

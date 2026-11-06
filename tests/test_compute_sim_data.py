@@ -39,7 +39,7 @@ class StubPort:
 @pytest.fixture
 def sim():
     """The three ``SimSetup`` fields the FDTD branch reads."""
-    return SimpleNamespace(freqs=FREQS, charac_imp=50.0, backend_engine="FDTD")
+    return SimpleNamespace(freqs=FREQS, charac_imp=50.0, sim_method="FDTD")
 
 
 def make_ports(count):

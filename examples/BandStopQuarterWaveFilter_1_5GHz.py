@@ -27,7 +27,7 @@ def simulate(output_path, sweep=False, sweep_val=[], optimize=False, optimize_va
         filter_type="bandstop",
         filter_response="butterworth",
         filter_order=3,
-        backend_engine="FEM",
+        sim_method="FEM",
         FEM_air_pad_mm=50,
     )
 

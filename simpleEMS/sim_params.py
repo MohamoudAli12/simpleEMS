@@ -76,7 +76,7 @@ class SimParams:
         Number of frequency points for post-processing. Default is ``1001``.
         For the FEM backend this is the number of interpolated output points the
         smooth S-parameter curve is evaluated at (not the number of solves).
-    backend_engine : str, optional
+    sim_method : str, optional
         Solver backend to use: ``"FDTD"`` (openEMS, default) or ``"FEM"``
         (Gmsh + GetDP finite-element frequency-domain solver).
     simulation_box : array_like, optional
@@ -255,7 +255,7 @@ class SimParams:
     unit: float = 1e-3  # mm
     num_points: int = 1001
 
-    backend_engine: str = "FDTD"
+    sim_method: str = "FDTD"
     simulation_box: NDArray | None = None
 
     # The one place the FEM settings and their defaults are declared. The FEM
@@ -419,11 +419,11 @@ class SimParams:
         Raises
         ------
         ValueError
-            If ``backend_engine`` is not ``"FDTD"`` or ``"FEM"``.
+            If ``sim_method`` is not ``"FDTD"`` or ``"FEM"``.
         """
-        if self.backend_engine not in ("FDTD", "FEM"):
+        if self.sim_method not in ("FDTD", "FEM"):
             raise ValueError(
-                f"backend_engine must be 'FDTD' or 'FEM', got {self.backend_engine!r}"
+                f"sim_method must be 'FDTD' or 'FEM', got {self.sim_method!r}"
             )
 
     def _compute_common(self) -> None:

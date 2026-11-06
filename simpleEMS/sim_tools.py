@@ -342,7 +342,7 @@ class SimSetup(NamedTuple):
     freqs : NDArray
         Frequency points used in simulation and post-processing. For the FEM
         backend these are the interpolated output points, not the solve points.
-    backend_engine : str
+    sim_method : str
         Solver backend, either ``"FDTD"`` (default) or ``"FEM"``.
     params : SimParams | None
         The parameters the setup was built from. The FEM backend reads its
@@ -359,7 +359,7 @@ class SimSetup(NamedTuple):
     CSX: ContinuousStructure
     FDTD: openEMS
     freqs: NDArray
-    backend_engine: str = "FDTD"
+    sim_method: str = "FDTD"
     params: SimParams | None = None
     charac_imp: float = 50
     FEM_field_dumps: list[FieldDumpRequest] | None = None
@@ -383,7 +383,7 @@ def setup_simulation(
     params : SimParams
         Parameter object that holds all simulation parameters, including
         ``freq_range``, ``num_points``, ``FDTD_timestep``,
-        ``FDTD_end_criteria``, ``backend_engine``, the flat ``FEM_*``
+        ``FDTD_end_criteria``, ``sim_method``, the flat ``FEM_*``
         mesh/solver tuning fields (including ``FEM_num_solve_points``), and
         ``charac_imp``.
     FDTD_boundary : list[str], optional
@@ -395,7 +395,7 @@ def setup_simulation(
     -------
     SimSetup
         Named tuple with ``CSX`` (CSXCAD geometry), ``FDTD`` (openEMS FDTD
-        object), ``freqs`` (frequency array), ``backend_engine``,
+        object), ``freqs`` (frequency array), ``sim_method``,
         ``params``, ``charac_imp``, and
         ``FEM_field_dumps`` (an empty list for FEM, ``None`` for FDTD).
     """
@@ -426,10 +426,10 @@ def setup_simulation(
         CSX=CSX,
         FDTD=FDTD,
         freqs=freqs,
-        backend_engine=params.backend_engine,
+        sim_method=params.sim_method,
         params=params,
         charac_imp=params.charac_imp,
-        FEM_field_dumps=[] if params.backend_engine == "FEM" else None,
+        FEM_field_dumps=[] if params.sim_method == "FEM" else None,
     )
 
 
@@ -485,7 +485,7 @@ class SimTools:
             output_path = Path.cwd() / "Sim_Path"
             output_path.mkdir(parents=True, exist_ok=True)
 
-        if sim.backend_engine == "FEM":
+        if sim.sim_method == "FEM":
             from . import fem_backend
 
             if theme is not None:
@@ -535,7 +535,11 @@ class SimTools:
         export_stl(CSX=sim.CSX, output_path=stl_path)
 
     @staticmethod
-    def run_simulation(sim: SimSetup, output_path: Path | None = None) -> None:
+    def run_simulation(
+        sim: SimSetup,
+        output_path: Path | None = None,
+        openems_engine: str = "fastest",
+    ) -> None:
         """
         Run the simulation and write results to ``output_path``.
 
@@ -560,6 +564,11 @@ class SimTools:
         output_path : Path, optional
             Directory to write simulation results to. Defaults to
             ``cwd / "Sim_Path"``.
+        openems_engine : str, optional
+            FDTD backend only. The openEMS engine that runs the time steps:
+            ``"fastest"`` (default, lets openEMS pick), ``"basic"``,
+            ``"sse"``, ``"sse-compressed"``, ``"multithreaded"`` or
+            ``"gpu"``. The FEM backend ignores it.
         """
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
@@ -569,7 +578,7 @@ class SimTools:
         # trips its internal "this should never happen" check.
         output_path = Path(output_path).resolve()
 
-        if sim.backend_engine == "FEM":
+        if sim.sim_method == "FEM":
             from . import fem_backend
 
             fem_backend.run_sweep(
@@ -586,7 +595,7 @@ class SimTools:
 
         cwd = os.getcwd()
         try:
-            sim.FDTD.Run(output_path)
+            sim.FDTD.Run(output_path, engine=openems_engine)
         finally:
             os.chdir(cwd)
 
@@ -611,7 +620,7 @@ class SimTools:
             ``CalcNF2FF`` interface, so the radiation-plotting methods work
             identically for both backends.
         """
-        if sim is None or sim.backend_engine == "FEM":
+        if sim is None or sim.sim_method == "FEM":
             from .fem_radiation import FEMNF2FF
 
             return FEMNF2FF()
@@ -640,11 +649,11 @@ class SimTools:
         ----------
         sim : SimSetup
             Simulation setup named tuple returned by ``setup_simulation``;
-            supplies ``freqs``, ``backend_engine``, and ``charac_imp``.
+            supplies ``freqs``, ``sim_method``, and ``charac_imp``.
         port : LumpedPort or list of LumpedPort
             The openEMS port object of a single-port simulation, or a list
             of up to four ports ``[port1, ..., port4]``. The first port is
-            the driven one. Ignored when ``sim.backend_engine == "FEM"``.
+            the driven one. Ignored when ``sim.sim_method == "FEM"``.
         output_path : Path, optional
             Directory the simulation results were written to. Defaults to
             ``cwd`` (FDTD backend) or ``cwd / "Sim_Path"`` (FEM backend, to
@@ -691,7 +700,7 @@ class SimTools:
         if output_path is None:
             output_path = Path.cwd() / "Sim_Path"
 
-        if sim.backend_engine == "FEM":
+        if sim.sim_method == "FEM":
             from . import fem_backend
 
             return fem_backend.compute_sim_data(sim.freqs, sim.charac_imp, output_path)
@@ -2401,7 +2410,7 @@ class SimTools:
         if dump_freq is None:
             dump_freq = params.main_freq
 
-        if params.backend_engine == "FEM":
+        if params.sim_method == "FEM":
             if dump_type not in (
                 DumpType.efield_frequency,
                 DumpType.hfield_frequency,

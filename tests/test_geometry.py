@@ -115,7 +115,7 @@ class TestSetupSimulation:
     def test_carries_the_backend_and_reference_impedance(self, inset_params):
         sim = setup_simulation(inset_params)
 
-        assert sim.backend_engine == "FDTD"
+        assert sim.sim_method == "FDTD"
         assert sim.charac_imp == inset_params.charac_imp
 
     @pytest.mark.parametrize("backend", ["FDTD", "FEM"])
@@ -124,7 +124,7 @@ class TestSetupSimulation:
         params = InsetFedPatchParams(
             resonant_freq=2.45e9,
             span_freq=0.5e9,
-            backend_engine=backend,
+            sim_method=backend,
             FEM_fe_order=2,
             **fr4,
         )

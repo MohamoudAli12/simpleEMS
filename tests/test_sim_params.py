@@ -131,17 +131,17 @@ class TestDerivedQuantities:
 # ---------------------------------------------------------------------
 class TestBackendValidation:
     def test_fdtd_is_the_default_backend(self, params):
-        assert params.backend_engine == "FDTD"
+        assert params.sim_method == "FDTD"
 
     @pytest.mark.parametrize("backend", ["FDTD", "FEM"])
     def test_supported_backends_are_accepted(self, fr4, backend):
         from simpleEMS.patch_antenna import InsetFedPatchParams
 
         result = InsetFedPatchParams(
-            resonant_freq=2.45e9, span_freq=0.5e9, backend_engine=backend, **fr4
+            resonant_freq=2.45e9, span_freq=0.5e9, sim_method=backend, **fr4
         )
 
-        assert result.backend_engine == backend
+        assert result.sim_method == backend
 
     @pytest.mark.parametrize("backend", ["fdtd", "fem", "MoM", "", "FDTD "])
     def test_unknown_backend_raises(self, fr4, backend):
@@ -149,9 +149,9 @@ class TestBackendValidation:
         rather than silently falling through to the FEM branch elsewhere."""
         from simpleEMS.patch_antenna import InsetFedPatchParams
 
-        with pytest.raises(ValueError, match="backend_engine must be"):
+        with pytest.raises(ValueError, match="sim_method must be"):
             InsetFedPatchParams(
-                resonant_freq=2.45e9, span_freq=0.5e9, backend_engine=backend, **fr4
+                resonant_freq=2.45e9, span_freq=0.5e9, sim_method=backend, **fr4
             )
 
 
